@@ -1403,11 +1403,6 @@ fn paint_layout(
     }
     for paragraph in &layout.paragraphs {
         for line in &paragraph.lines {
-            paint_line_text(line, bounds.origin + line.origin, window, cx);
-        }
-    }
-    for paragraph in &layout.paragraphs {
-        for line in &paragraph.lines {
             for underline in &line.underlines {
                 let mut underline_bounds = underline.bounds.shift(bounds.origin + line.origin);
                 if layout.snap_underline_rules_to_pixels {
@@ -1416,6 +1411,11 @@ fn paint_layout(
                 }
                 window.paint_quad(fill(underline_bounds, Background::from(underline.color)));
             }
+        }
+    }
+    for paragraph in &layout.paragraphs {
+        for line in &paragraph.lines {
+            paint_line_text(line, bounds.origin + line.origin, window, cx);
         }
     }
     if let Some(selection) = selection
