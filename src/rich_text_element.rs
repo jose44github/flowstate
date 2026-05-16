@@ -388,7 +388,10 @@ impl RichTextEditor {
     let last_len = paragraph_text_len(&self.document.paragraphs[last]);
     self.selection = EditorSelection {
       anchor: DocumentOffset { paragraph: 0, byte: 0 },
-      head: DocumentOffset { paragraph: last, byte: last_len },
+      head: DocumentOffset {
+        paragraph: last,
+        byte: last_len,
+      },
     };
     self.goal_x = None;
     cx.notify();
@@ -473,7 +476,10 @@ impl RichTextEditor {
       if off.paragraph + 1 >= self.document.paragraphs.len() {
         return off;
       }
-      return DocumentOffset { paragraph: off.paragraph + 1, byte: 0 };
+      return DocumentOffset {
+        paragraph: off.paragraph + 1,
+        byte: 0,
+      };
     }
     let text = paragraph_text(&self.document.paragraphs[off.paragraph]);
     DocumentOffset {
@@ -494,7 +500,9 @@ impl RichTextEditor {
         return;
       };
       let cur_line = &layout.paragraphs[p_ix].lines[l_ix];
-      let cur_x = self.goal_x.unwrap_or_else(|| x_for_byte(cur_line, head.byte));
+      let cur_x = self
+        .goal_x
+        .unwrap_or_else(|| x_for_byte(cur_line, head.byte));
       let next = match dir {
         VDir::Up => find_line_above(layout, p_ix, l_ix),
         VDir::Down => find_line_below(layout, p_ix, l_ix),
@@ -534,7 +542,10 @@ impl RichTextEditor {
       let line = &layout.paragraphs[p_ix].lines[l_ix];
       if start { line.start_byte } else { line.end_byte }
     };
-    let new = DocumentOffset { paragraph: head.paragraph, byte: new_byte };
+    let new = DocumentOffset {
+      paragraph: head.paragraph,
+      byte: new_byte,
+    };
     let anchor = if extend { self.selection.anchor } else { new };
     self.selection = EditorSelection { anchor, head: new };
     self.goal_x = None;
@@ -581,24 +592,15 @@ impl RichTextEditor {
     }
     let range = self.selection.normalized();
     if range.start.paragraph == range.end.paragraph {
-      delete_range_in_paragraph(
-        &mut self.document.paragraphs[range.start.paragraph],
-        range.start.byte..range.end.byte,
-      );
+      delete_range_in_paragraph(&mut self.document.paragraphs[range.start.paragraph], range.start.byte..range.end.byte);
     } else {
       // Cross-paragraph selection: delete the tail of the start paragraph,
       // the head of the end paragraph, then merge the end paragraph's
       // remaining runs onto the end of the start paragraph. Intermediate
       // paragraphs are dropped wholesale.
       let start_para_len = paragraph_text_len(&self.document.paragraphs[range.start.paragraph]);
-      delete_range_in_paragraph(
-        &mut self.document.paragraphs[range.start.paragraph],
-        range.start.byte..start_para_len,
-      );
-      delete_range_in_paragraph(
-        &mut self.document.paragraphs[range.end.paragraph],
-        0..range.end.byte,
-      );
+      delete_range_in_paragraph(&mut self.document.paragraphs[range.start.paragraph], range.start.byte..start_para_len);
+      delete_range_in_paragraph(&mut self.document.paragraphs[range.end.paragraph], 0..range.end.byte);
       let end_runs = std::mem::take(&mut self.document.paragraphs[range.end.paragraph].runs);
       let start_para = &mut self.document.paragraphs[range.start.paragraph];
       start_para.runs.extend(end_runs);
@@ -609,7 +611,10 @@ impl RichTextEditor {
         .paragraphs
         .drain(range.start.paragraph + 1..=range.end.paragraph);
     }
-    self.selection = EditorSelection { anchor: range.start, head: range.start };
+    self.selection = EditorSelection {
+      anchor: range.start,
+      head: range.start,
+    };
     true
   }
 
@@ -634,13 +639,19 @@ impl RichTextEditor {
       let merged = merge_adjacent_runs(std::mem::take(&mut self.document.paragraphs[prev_ix].runs));
       self.document.paragraphs[prev_ix].runs = merged;
       self.document.paragraphs.remove(caret.paragraph);
-      let new = DocumentOffset { paragraph: prev_ix, byte: prev_len };
+      let new = DocumentOffset {
+        paragraph: prev_ix,
+        byte: prev_len,
+      };
       self.selection = EditorSelection { anchor: new, head: new };
     } else {
       let text = paragraph_text(&self.document.paragraphs[caret.paragraph]);
       let prev = prev_grapheme_boundary(&text, caret.byte);
       delete_range_in_paragraph(&mut self.document.paragraphs[caret.paragraph], prev..caret.byte);
-      let new = DocumentOffset { paragraph: caret.paragraph, byte: prev };
+      let new = DocumentOffset {
+        paragraph: caret.paragraph,
+        byte: prev,
+      };
       self.selection = EditorSelection { anchor: new, head: new };
     }
     self.goal_x = None;
@@ -663,7 +674,9 @@ impl RichTextEditor {
       }
       let next_ix = caret.paragraph + 1;
       let next_runs = std::mem::take(&mut self.document.paragraphs[next_ix].runs);
-      self.document.paragraphs[caret.paragraph].runs.extend(next_runs);
+      self.document.paragraphs[caret.paragraph]
+        .runs
+        .extend(next_runs);
       let merged = merge_adjacent_runs(std::mem::take(&mut self.document.paragraphs[caret.paragraph].runs));
       self.document.paragraphs[caret.paragraph].runs = merged;
       self.document.paragraphs.remove(next_ix);
@@ -716,7 +729,10 @@ impl RichTextEditor {
       runs: merge_adjacent_runs(right),
     };
     self.document.paragraphs.insert(para_ix + 1, new_para);
-    let new = DocumentOffset { paragraph: para_ix + 1, byte: 0 };
+    let new = DocumentOffset {
+      paragraph: para_ix + 1,
+      byte: 0,
+    };
     self.selection = EditorSelection { anchor: new, head: new };
     self.goal_x = None;
     cx.notify();
@@ -1973,7 +1989,10 @@ fn insert_text_at(paragraph: &mut Paragraph, byte: usize, text: &str, styles: Ru
     return;
   }
   if paragraph.runs.is_empty() {
-    paragraph.runs.push(TextRun { text: text.to_string(), styles });
+    paragraph.runs.push(TextRun {
+      text: text.to_string(),
+      styles,
+    });
     return;
   }
 
@@ -1994,7 +2013,13 @@ fn insert_text_at(paragraph: &mut Paragraph, byte: usize, text: &str, styles: Ru
         if i > 0 && paragraph.runs[i - 1].styles == styles {
           paragraph.runs[i - 1].text.push_str(text);
         } else {
-          paragraph.runs.insert(i, TextRun { text: text.to_string(), styles });
+          paragraph.runs.insert(
+            i,
+            TextRun {
+              text: text.to_string(),
+              styles,
+            },
+          );
         }
         return;
       }
@@ -2003,15 +2028,33 @@ fn insert_text_at(paragraph: &mut Paragraph, byte: usize, text: &str, styles: Ru
         if i + 1 < paragraph.runs.len() && paragraph.runs[i + 1].styles == styles {
           paragraph.runs[i + 1].text.insert_str(0, text);
         } else {
-          paragraph.runs.insert(i + 1, TextRun { text: text.to_string(), styles });
+          paragraph.runs.insert(
+            i + 1,
+            TextRun {
+              text: text.to_string(),
+              styles,
+            },
+          );
         }
         return;
       }
 
       let run_styles = paragraph.runs[i].styles;
       let right = paragraph.runs[i].text.split_off(local);
-      paragraph.runs.insert(i + 1, TextRun { text: text.to_string(), styles });
-      paragraph.runs.insert(i + 2, TextRun { text: right, styles: run_styles });
+      paragraph.runs.insert(
+        i + 1,
+        TextRun {
+          text: text.to_string(),
+          styles,
+        },
+      );
+      paragraph.runs.insert(
+        i + 2,
+        TextRun {
+          text: right,
+          styles: run_styles,
+        },
+      );
       return;
     }
     offset = run_end;
@@ -2021,7 +2064,10 @@ fn insert_text_at(paragraph: &mut Paragraph, byte: usize, text: &str, styles: Ru
     if last.styles == styles {
       last.text.push_str(text);
     } else {
-      paragraph.runs.push(TextRun { text: text.to_string(), styles });
+      paragraph.runs.push(TextRun {
+        text: text.to_string(),
+        styles,
+      });
     }
   }
 }
@@ -2049,7 +2095,10 @@ fn delete_range_in_paragraph(paragraph: &mut Paragraph, range: Range<usize>) {
     kept.push_str(&run.text[..local_start]);
     kept.push_str(&run.text[local_end..]);
     if !kept.is_empty() {
-      new_runs.push(TextRun { text: kept, styles: run.styles });
+      new_runs.push(TextRun {
+        text: kept,
+        styles: run.styles,
+      });
     }
   }
   paragraph.runs = merge_adjacent_runs(new_runs);
@@ -2061,15 +2110,15 @@ fn delete_range_in_paragraph(paragraph: &mut Paragraph, range: Range<usize>) {
 // to the next line — matching Word's "caret-at-start-of-next-line"
 // convention. This is exactly the disambiguation called out in the plan.
 fn locate_line(layout: &LayoutState, off: DocumentOffset) -> Option<(usize, usize)> {
-  let p_ix = layout.paragraphs.iter().position(|p| p.index == off.paragraph)?;
+  let p_ix = layout
+    .paragraphs
+    .iter()
+    .position(|p| p.index == off.paragraph)?;
   let para = &layout.paragraphs[p_ix];
   for (i, line) in para.lines.iter().enumerate() {
     if off.byte >= line.start_byte && off.byte <= line.end_byte {
       // Bias to next line at exact wrap seam.
-      if off.byte == line.end_byte
-        && i + 1 < para.lines.len()
-        && para.lines[i + 1].start_byte == off.byte
-      {
+      if off.byte == line.end_byte && i + 1 < para.lines.len() && para.lines[i + 1].start_byte == off.byte {
         return Some((p_ix, i + 1));
       }
       return Some((p_ix, i));
