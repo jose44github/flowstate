@@ -1,6 +1,8 @@
 mod rich_text_element;
 
-use gpui::{App, Application, Bounds, Context, IntoElement, KeyBinding, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size};
+use gpui::{
+  App, Application, Bounds, Context, IntoElement, KeyBinding, Render, Window, WindowBounds, WindowOptions, div, prelude::*, px, rgb, size,
+};
 
 use crate::rich_text_element::{
   Backspace, Delete, InsertNewline, MoveDown, MoveLeft, MoveLineEnd, MoveLineStart, MoveRight, MoveUp, RichTextEditor, SelectAll, SelectDown,

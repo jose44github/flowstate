@@ -1,5 +1,13 @@
-use std::{cell::RefCell, ops::Range, rc::Rc};
+use std::{
+  cell::RefCell,
+  collections::hash_map::DefaultHasher,
+  fmt,
+  hash::{Hash, Hasher},
+  ops::Range,
+  rc::Rc,
+};
 
+use crop::Rope;
 use gpui::{
   App, AvailableSpace, Background, Bounds, Context, CursorStyle, Element, ElementId, Entity, FocusHandle, Focusable, FontStyle, FontWeight,
   GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
@@ -58,7 +66,7 @@ pub struct Paragraph {
   pub runs: Vec<TextRun>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ParagraphStyle {
   Pocket,
   Hat,
@@ -69,13 +77,113 @@ pub enum ParagraphStyle {
   Undertag,
 }
 
+#[derive(Clone)]
+pub struct RunText {
+  // Crop is a UTF-8 B-tree rope. Keeping it behind this small wrapper lets the
+  // editor continue talking in byte offsets while avoiding large `String`
+  // memmoves when editing long same-style runs.
+  rope: Rope,
+}
+
+impl RunText {
+  pub fn len(&self) -> usize {
+    self.rope.byte_len()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.rope.is_empty()
+  }
+
+  fn push_str(&mut self, text: &str) {
+    if !text.is_empty() {
+      self.rope.insert(self.len(), text);
+    }
+  }
+
+  fn push_run_text(&mut self, text: &RunText) {
+    for chunk in text.rope.chunks() {
+      self.push_str(chunk);
+    }
+  }
+
+  fn insert_str(&mut self, byte: usize, text: &str) {
+    if !text.is_empty() {
+      self.rope.insert(byte, text);
+    }
+  }
+
+  fn delete(&mut self, range: Range<usize>) {
+    if range.start < range.end {
+      self.rope.delete(range);
+    }
+  }
+
+  fn split_off(&mut self, byte: usize) -> Self {
+    let right = self.slice(byte..self.len());
+    self.rope.delete(byte..self.len());
+    right
+  }
+
+  fn slice(&self, range: Range<usize>) -> Self {
+    Self {
+      rope: Rope::from(self.rope.byte_slice(range)),
+    }
+  }
+
+  fn push_to_string(&self, output: &mut String) {
+    for chunk in self.rope.chunks() {
+      output.push_str(chunk);
+    }
+  }
+
+  fn byte_at(&self, byte: usize) -> Option<u8> {
+    (byte < self.len()).then(|| self.rope.byte(byte))
+  }
+}
+
+impl fmt::Debug for RunText {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fmt::Debug::fmt(&self.rope, f)
+  }
+}
+
+impl fmt::Display for RunText {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    for chunk in self.rope.chunks() {
+      f.write_str(chunk)?;
+    }
+    Ok(())
+  }
+}
+
+impl From<&str> for RunText {
+  fn from(text: &str) -> Self {
+    Self { rope: Rope::from(text) }
+  }
+}
+
+impl From<String> for RunText {
+  fn from(text: String) -> Self {
+    Self { rope: Rope::from(text) }
+  }
+}
+
+impl Hash for RunText {
+  fn hash<H: Hasher>(&self, state: &mut H) {
+    state.write_usize(self.len());
+    for chunk in self.rope.chunks() {
+      state.write(chunk.as_bytes());
+    }
+  }
+}
+
 #[derive(Clone, Debug)]
 pub struct TextRun {
-  pub text: String,
+  pub text: RunText,
   pub styles: RunStyles,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub struct RunStyles {
   pub cite: bool,
   pub direct_underline: bool,
@@ -84,7 +192,7 @@ pub struct RunStyles {
   pub highlight: Option<HighlightStyle>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum HighlightStyle {
   Spoken,
   Insert,
@@ -258,7 +366,7 @@ pub struct DocumentOffset {
   pub byte: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EditorSelection {
   pub anchor: DocumentOffset,
   pub head: DocumentOffset,
@@ -284,7 +392,7 @@ pub struct RichTextEditor {
   document: Document,
   selection: EditorSelection,
   selecting: bool,
-  last_layout: Option<LayoutState>,
+  last_layout: Option<Rc<LayoutState>>,
   // Remembered horizontal pixel position for vertical caret motion. When the
   // user presses Up/Down repeatedly we want the caret to track a consistent
   // x even on lines whose contents are shorter than the previous one. The
@@ -386,13 +494,18 @@ impl RichTextEditor {
     }
     let last = self.document.paragraphs.len() - 1;
     let last_len = paragraph_text_len(&self.document.paragraphs[last]);
-    self.selection = EditorSelection {
+    let selection = EditorSelection {
       anchor: DocumentOffset { paragraph: 0, byte: 0 },
       head: DocumentOffset {
         paragraph: last,
         byte: last_len,
       },
     };
+    if self.selection == selection {
+      self.goal_x = None;
+      return;
+    }
+    self.selection = selection;
     self.goal_x = None;
     cx.notify();
   }
@@ -434,12 +547,20 @@ impl RichTextEditor {
       return;
     }
     #[cfg(target_os = "windows")]
-    let key_char = if window.capslock().on { windows_apply_capslock(key_char) } else { key_char.to_string() };
+    {
+      let key_char = if window.capslock().on {
+        windows_apply_capslock(key_char)
+      } else {
+        key_char.to_string()
+      };
+      self.insert_text(&key_char, cx);
+    }
 
     #[cfg(not(target_os = "windows"))]
-    let key_char = key_char.to_string();
-
-    self.insert_text(&key_char, cx);
+    {
+      let _ = window;
+      self.insert_text(key_char, cx);
+    }
   }
 
   // -------- Movement primitives ----------------------------------------
@@ -463,7 +584,12 @@ impl RichTextEditor {
       },
     };
     let anchor = if extend { self.selection.anchor } else { new_head };
-    self.selection = EditorSelection { anchor, head: new_head };
+    let selection = EditorSelection { anchor, head: new_head };
+    if self.selection == selection {
+      self.goal_x = None;
+      return;
+    }
+    self.selection = selection;
     self.goal_x = None;
     cx.notify();
   }
@@ -479,10 +605,9 @@ impl RichTextEditor {
       let byte = paragraph_text_len(&self.document.paragraphs[prev]);
       return DocumentOffset { paragraph: prev, byte };
     }
-    let text = paragraph_text(&self.document.paragraphs[off.paragraph]);
     DocumentOffset {
       paragraph: off.paragraph,
-      byte: prev_grapheme_boundary(&text, off.byte),
+      byte: prev_grapheme_boundary_in_paragraph(&self.document.paragraphs[off.paragraph], off.byte),
     }
   }
 
@@ -497,10 +622,9 @@ impl RichTextEditor {
         byte: 0,
       };
     }
-    let text = paragraph_text(&self.document.paragraphs[off.paragraph]);
     DocumentOffset {
       paragraph: off.paragraph,
-      byte: next_grapheme_boundary(&text, off.byte),
+      byte: next_grapheme_boundary_in_paragraph(&self.document.paragraphs[off.paragraph], off.byte),
     }
   }
 
@@ -535,7 +659,12 @@ impl RichTextEditor {
       (new_head, cur_x)
     };
     let anchor = if extend { self.selection.anchor } else { new_head };
-    self.selection = EditorSelection { anchor, head: new_head };
+    let selection = EditorSelection { anchor, head: new_head };
+    if self.selection == selection {
+      self.goal_x = Some(used_goal_x);
+      return;
+    }
+    self.selection = selection;
     // Preserve the goal x across the move so repeated Up/Down stays on a
     // straight column.
     self.goal_x = Some(used_goal_x);
@@ -563,7 +692,12 @@ impl RichTextEditor {
       byte: new_byte,
     };
     let anchor = if extend { self.selection.anchor } else { new };
-    self.selection = EditorSelection { anchor, head: new };
+    let selection = EditorSelection { anchor, head: new };
+    if self.selection == selection {
+      self.goal_x = None;
+      return;
+    }
+    self.selection = selection;
     self.goal_x = None;
     cx.notify();
   }
@@ -661,8 +795,7 @@ impl RichTextEditor {
       };
       self.selection = EditorSelection { anchor: new, head: new };
     } else {
-      let text = paragraph_text(&self.document.paragraphs[caret.paragraph]);
-      let prev = prev_grapheme_boundary(&text, caret.byte);
+      let prev = prev_grapheme_boundary_in_paragraph(&self.document.paragraphs[caret.paragraph], caret.byte);
       delete_range_in_paragraph(&mut self.document.paragraphs[caret.paragraph], prev..caret.byte);
       let new = DocumentOffset {
         paragraph: caret.paragraph,
@@ -697,8 +830,7 @@ impl RichTextEditor {
       self.document.paragraphs[caret.paragraph].runs = merged;
       self.document.paragraphs.remove(next_ix);
     } else {
-      let text = paragraph_text(&self.document.paragraphs[caret.paragraph]);
-      let next = next_grapheme_boundary(&text, caret.byte);
+      let next = next_grapheme_boundary_in_paragraph(&self.document.paragraphs[caret.paragraph], caret.byte);
       delete_range_in_paragraph(&mut self.document.paragraphs[caret.paragraph], caret.byte..next);
     }
     self.goal_x = None;
@@ -729,8 +861,8 @@ impl RichTextEditor {
         right.push(run);
       } else {
         let local = split - run_start;
-        let l = run.text[..local].to_string();
-        let r = run.text[local..].to_string();
+        let mut l = run.text;
+        let r = l.split_off(local);
         if !l.is_empty() {
           left.push(TextRun { text: l, styles: run.styles });
         }
@@ -782,8 +914,11 @@ impl RichTextEditor {
       return;
     }
     if let Some(layout) = &self.last_layout {
-      self.selection.head = layout.hit_test(event.position);
-      cx.notify();
+      let head = layout.hit_test(event.position);
+      if self.selection.head != head {
+        self.selection.head = head;
+        cx.notify();
+      }
     }
   }
 
@@ -898,13 +1033,14 @@ impl IntoElement for WordDocumentElement {
 }
 
 #[derive(Clone, Default)]
-struct WordElementLayout(Rc<RefCell<Option<LayoutState>>>);
+struct WordElementLayout(Rc<RefCell<Option<Rc<LayoutState>>>>);
 
 #[derive(Clone)]
 struct LayoutState {
   paragraphs: Vec<LaidOutParagraph>,
   bounds: Option<Bounds<Pixels>>,
   size: Size<Pixels>,
+  width: Pixels,
   snap_underline_rules_to_pixels: bool,
 }
 
@@ -938,6 +1074,7 @@ impl LayoutState {
 #[derive(Clone)]
 struct LaidOutParagraph {
   index: usize,
+  cache_key: ParagraphCacheKey,
   len: usize,
   top: Pixels,
   bottom: Pixels,
@@ -945,7 +1082,36 @@ struct LaidOutParagraph {
   borders: Vec<RunRect>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ParagraphCacheKey {
+  fingerprint: u64,
+}
+
+fn paragraph_cache_key(paragraph: &Paragraph) -> ParagraphCacheKey {
+  let mut hasher = DefaultHasher::new();
+  paragraph.style.hash(&mut hasher);
+  for run in &paragraph.runs {
+    run.text.hash(&mut hasher);
+    run.styles.hash(&mut hasher);
+  }
+  ParagraphCacheKey {
+    fingerprint: hasher.finish(),
+  }
+}
+
 impl LaidOutParagraph {
+  fn shift_y(&mut self, new_top: Pixels) {
+    let delta = new_top - self.top;
+    self.top += delta;
+    self.bottom += delta;
+    for line in &mut self.lines {
+      line.origin.y += delta;
+    }
+    for border in &mut self.borders {
+      border.bounds.origin.y += delta;
+    }
+  }
+
   fn hit_test(&self, position: Point<Pixels>) -> DocumentOffset {
     for line in &self.lines {
       if position.y <= line.origin.y + line.line_height {
@@ -1056,7 +1222,7 @@ impl Element for RichTextDocumentElement {
     _cx: &mut App,
   ) {
     if let Some(layout) = self.layout.0.borrow_mut().as_mut() {
-      layout.bounds = Some(bounds);
+      Rc::make_mut(layout).bounds = Some(bounds);
     }
   }
 
@@ -1071,7 +1237,7 @@ impl Element for RichTextDocumentElement {
     cx: &mut App,
   ) {
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(&layout, None, window, cx);
+      paint_layout(layout.as_ref(), None, window, cx);
     }
   }
 }
@@ -1093,9 +1259,9 @@ impl Element for WordDocumentElement {
     _id: Option<&GlobalElementId>,
     _inspector_id: Option<&InspectorElementId>,
     window: &mut Window,
-    cx: &mut App,
+    _cx: &mut App,
   ) -> (LayoutId, Self::RequestLayoutState) {
-    request_word_layout(self.editor.read(cx).document.clone(), self.layout.clone(), window)
+    request_word_layout_for_editor(self.editor.clone(), self.layout.clone(), window)
   }
 
   fn prepaint(
@@ -1108,7 +1274,7 @@ impl Element for WordDocumentElement {
     _cx: &mut App,
   ) {
     if let Some(layout) = self.layout.0.borrow_mut().as_mut() {
-      layout.bounds = Some(bounds);
+      Rc::make_mut(layout).bounds = Some(bounds);
     }
   }
 
@@ -1124,9 +1290,15 @@ impl Element for WordDocumentElement {
   ) {
     let selection = self.editor.read(cx).selection.clone();
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(&layout, Some(&selection), window, cx);
+      paint_layout(layout.as_ref(), Some(&selection), window, cx);
       self.editor.update(cx, |editor, _| {
-        editor.last_layout = Some(layout);
+        if editor
+          .last_layout
+          .as_ref()
+          .map_or(true, |last_layout| !Rc::ptr_eq(last_layout, &layout))
+        {
+          editor.last_layout = Some(layout);
+        }
       });
     }
   }
@@ -1141,9 +1313,29 @@ fn request_word_layout(document: Document, layout_cell: WordElementLayout, windo
         _ => Some(px(900.0)),
       })
       .unwrap_or(px(900.0));
-    let layout = build_layout(&document, width, window, cx);
+    let previous_layout = layout_cell.0.borrow().clone();
+    let layout = build_layout(&document, width, previous_layout.as_deref(), window, cx);
     let size = layout.size;
-    layout_cell.0.borrow_mut().replace(layout);
+    layout_cell.0.borrow_mut().replace(Rc::new(layout));
+    size
+  });
+  (layout_id, ())
+}
+
+fn request_word_layout_for_editor(editor: Entity<RichTextEditor>, layout_cell: WordElementLayout, window: &mut Window) -> (LayoutId, ()) {
+  let layout_id = window.request_measured_layout(Style::default(), move |known, available, window, cx| {
+    let width = known
+      .width
+      .or(match available.width {
+        AvailableSpace::Definite(width) => Some(width),
+        _ => Some(px(900.0)),
+      })
+      .unwrap_or(px(900.0));
+    let layout = editor.update(cx, |editor, cx| {
+      build_layout(&editor.document, width, editor.last_layout.as_deref(), window, cx)
+    });
+    let size = layout.size;
+    layout_cell.0.borrow_mut().replace(Rc::new(layout));
     size
   });
   (layout_id, ())
@@ -1313,16 +1505,32 @@ fn run_format(document: &Document, paragraph: EffectiveParagraphFormat, styles: 
   format
 }
 
-fn build_layout(document: &Document, width: Pixels, window: &mut Window, cx: &mut App) -> LayoutState {
+fn build_layout(document: &Document, width: Pixels, previous_layout: Option<&LayoutState>, window: &mut Window, cx: &mut App) -> LayoutState {
   let pageless_left = document.theme.pageless_inset_x;
   let pageless_width = (width - document.theme.pageless_inset_x * 2.0).max(px(1.0));
   let mut y = document.theme.pageless_inset_top;
-  let mut paragraphs = Vec::new();
+  let mut paragraphs = Vec::with_capacity(document.paragraphs.len());
   let mut max_width = width;
+  let previous_layout = previous_layout.filter(|layout| layout.width == width);
 
   for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
     let p_format = paragraph_format(document, paragraph.style);
     y += p_format.spacing_before;
+    let cache_key = paragraph_cache_key(paragraph);
+
+    if let Some(cached) = previous_layout
+      .and_then(|layout| layout.paragraphs.get(paragraph_ix))
+      .filter(|cached| cached.cache_key == cache_key)
+    {
+      let mut laid_out_paragraph = cached.clone();
+      laid_out_paragraph.shift_y(y);
+      for line in &laid_out_paragraph.lines {
+        max_width = max_width.max(line.origin.x + line.width);
+      }
+      y = laid_out_paragraph.bottom + p_format.spacing_after;
+      paragraphs.push(laid_out_paragraph);
+      continue;
+    }
 
     let border = p_format.border;
     let border_inset = border.map_or(px(0.0), |border| border.width + border.space_x);
@@ -1332,7 +1540,7 @@ fn build_layout(document: &Document, width: Pixels, window: &mut Window, cx: &mu
     let paragraph_text = paragraph_text(paragraph);
     let lines = wrap_lines(document, paragraph, p_format.clone(), &paragraph_text, content_width, window, cx);
 
-    let mut laid_out_lines = Vec::new();
+    let mut laid_out_lines = Vec::with_capacity(lines.len());
     let mut line_y = y + content_top;
     for mut line in lines {
       line.origin.x = content_left
@@ -1359,6 +1567,7 @@ fn build_layout(document: &Document, width: Pixels, window: &mut Window, cx: &mu
 
     paragraphs.push(LaidOutParagraph {
       index: paragraph_ix,
+      cache_key,
       len: paragraph_text.len(),
       top: y,
       bottom,
@@ -1372,6 +1581,7 @@ fn build_layout(document: &Document, width: Pixels, window: &mut Window, cx: &mu
     paragraphs,
     bounds: None,
     size: size(max_width, y + document.theme.pageless_inset_bottom),
+    width,
     snap_underline_rules_to_pixels: document.theme.snap_underline_rules_to_pixels,
   }
 }
@@ -1391,46 +1601,154 @@ fn wrap_lines(
 
   let mut lines = Vec::new();
   let mut start = 0;
-  let mut best_break = None;
+  let break_ends = wrap_break_ends(text);
+  let mut break_cursor = 0;
 
-  for (byte_ix, ch) in text.char_indices() {
-    let end = byte_ix + ch.len_utf8();
-    if ch.is_whitespace() || matches!(ch, '-' | '/' | ',' | ';' | ':') {
-      best_break = Some(end);
+  while start < text.len() {
+    while break_cursor < break_ends.len() && break_ends[break_cursor] <= start {
+      break_cursor += 1;
     }
-    let candidate = shape_line(document, paragraph, p_format.clone(), &text[start..end], start..end, window, cx);
-    if candidate.width > max_width && end > start {
-      let break_at = best_break
-        .filter(|break_at| *break_at > start)
-        .unwrap_or(byte_ix);
-      let line_end = if break_at == start { end } else { break_at };
-      lines.push(shape_line(
-        document,
-        paragraph,
-        p_format.clone(),
-        text[start..line_end].trim_end(),
-        start..line_end,
-        window,
-        cx,
-      ));
-      start = line_end;
-      while start < text.len()
-        && text[start..]
-          .chars()
-          .next()
-          .is_some_and(char::is_whitespace)
-      {
-        start += text[start..].chars().next().unwrap().len_utf8();
+    let mut last_break = None;
+    let mut wrapped = false;
+    let mut scan_ix = break_cursor;
+
+    while scan_ix < break_ends.len() {
+      let break_at = break_ends[scan_ix];
+      let candidate_width = measure_line_width(document, paragraph, &p_format, text, start..break_at, break_at - start, window);
+      if candidate_width > max_width {
+        let line_end = last_break
+          .filter(|break_at| *break_at > start)
+          .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, break_at, max_width, window));
+        lines.push(shape_line(
+          document,
+          paragraph,
+          p_format.clone(),
+          text[start..line_end].trim_end(),
+          start..line_end,
+          window,
+          cx,
+        ));
+        start = skip_leading_whitespace(text, line_end);
+        wrapped = true;
+        break;
       }
-      best_break = None;
+      last_break = Some(break_at);
+      scan_ix += 1;
     }
-  }
 
-  if start < text.len() {
-    lines.push(shape_line(document, paragraph, p_format, &text[start..], start..text.len(), window, cx));
+    if wrapped {
+      continue;
+    }
+
+    let remaining_width = measure_line_width(document, paragraph, &p_format, text, start..text.len(), text.len() - start, window);
+    if remaining_width <= max_width {
+      lines.push(shape_line(document, paragraph, p_format, &text[start..], start..text.len(), window, cx));
+      break;
+    }
+
+    let line_end = last_break
+      .filter(|break_at| *break_at > start)
+      .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, text.len(), max_width, window));
+    lines.push(shape_line(
+      document,
+      paragraph,
+      p_format.clone(),
+      text[start..line_end].trim_end(),
+      start..line_end,
+      window,
+      cx,
+    ));
+    start = skip_leading_whitespace(text, line_end);
   }
 
   lines
+}
+
+fn wrap_break_ends(text: &str) -> Vec<usize> {
+  text
+    .char_indices()
+    .filter_map(|(byte_ix, ch)| is_wrap_break(ch).then_some(byte_ix + ch.len_utf8()))
+    .collect()
+}
+
+fn is_wrap_break(ch: char) -> bool {
+  ch.is_whitespace() || matches!(ch, '-' | '/' | ',' | ';' | ':')
+}
+
+fn skip_leading_whitespace(text: &str, mut byte: usize) -> usize {
+  while byte < text.len() && text[byte..].chars().next().is_some_and(char::is_whitespace) {
+    byte += text[byte..].chars().next().unwrap().len_utf8();
+  }
+  byte
+}
+
+fn first_overflow_line_end(
+  document: &Document,
+  paragraph: &Paragraph,
+  p_format: &EffectiveParagraphFormat,
+  text: &str,
+  start: usize,
+  limit: usize,
+  max_width: Pixels,
+  window: &mut Window,
+) -> usize {
+  let chars: Vec<_> = text[start..limit]
+    .char_indices()
+    .map(|(relative_byte, ch)| {
+      let byte_ix = start + relative_byte;
+      (byte_ix, byte_ix + ch.len_utf8(), ch)
+    })
+    .collect();
+  if chars.is_empty() {
+    return limit;
+  }
+
+  let mut low = 0;
+  let mut high = chars.len();
+  while low < high {
+    let mid = (low + high) / 2;
+    let end = chars[mid].1;
+    let width = measure_line_width(document, paragraph, p_format, text, start..end, end - start, window);
+    if width > max_width {
+      high = mid;
+    } else {
+      low = mid + 1;
+    }
+  }
+
+  let Some((byte_ix, end, ch)) = chars.get(low).copied() else {
+    return limit;
+  };
+  if is_wrap_break(ch) || byte_ix == start { end } else { byte_ix }
+}
+
+fn measure_line_width(
+  document: &Document,
+  paragraph: &Paragraph,
+  p_format: &EffectiveParagraphFormat,
+  paragraph_text: &str,
+  source_range: Range<usize>,
+  rendered_len: usize,
+  window: &mut Window,
+) -> Pixels {
+  let mut width = px(0.0);
+  let rendered_text = &paragraph_text[source_range.start..source_range.start + rendered_len];
+  for fragment in fragments_for_range(paragraph, &source_range, rendered_len) {
+    let text = &rendered_text[fragment.line_range.clone()];
+    if text.is_empty() {
+      continue;
+    }
+    let format = run_format(document, p_format.clone(), fragment.styles);
+    let shaped = shape_fragment(window, text, format.clone());
+    if format.border_width > px(0.0) {
+      width += document.theme.box_padding_left;
+    }
+    width += shaped.width;
+    if format.border_width > px(0.0) {
+      width += document.theme.box_padding_right;
+    }
+  }
+  width
 }
 
 fn shape_line(
@@ -1444,7 +1762,7 @@ fn shape_line(
 ) -> LaidOutLine {
   let fragments = fragments_for_range(paragraph, &source_range, line_text.len());
   let mut x = px(0.0);
-  let mut segments = Vec::new();
+  let mut segments = Vec::with_capacity(fragments.len().max(1));
   let mut ascent = px(0.0);
   let mut descent = px(0.0);
 
@@ -1547,7 +1865,7 @@ fn shape_fragment(window: &mut Window, text: &str, format: EffectiveRunFormat) -
   };
   window
     .text_system()
-    .shape_line(SharedString::new(text.to_string()), format.font_size, &[run], None)
+    .shape_line(SharedString::new(text), format.font_size, &[run], None)
 }
 
 #[derive(Clone)]
@@ -1561,7 +1879,7 @@ fn fragments_for_range(paragraph: &Paragraph, range: &Range<usize>, rendered_len
   let mut byte_offset = 0;
   let mut line_offset = 0;
   let mut remaining = rendered_len;
-  let mut fragments = Vec::new();
+  let mut fragments = Vec::with_capacity(paragraph.runs.len());
   for run in &paragraph.runs {
     let run_start = byte_offset;
     let run_end = byte_offset + run.text.len();
@@ -1754,17 +2072,27 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, windo
   let Some(bounds) = layout.bounds else {
     return;
   };
+  let content_mask = window.content_mask().bounds;
   for paragraph in &layout.paragraphs {
+    if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
+      continue;
+    }
     for border in &paragraph.borders {
       let border_bounds = snap_rule_bounds(border.bounds.shift(bounds.origin), border.snap, window);
       window.paint_quad(fill(border_bounds, Background::from(border.color)));
     }
   }
   if let Some(selection) = selection {
-    paint_selection(layout, selection, bounds.origin, window);
+    paint_selection(layout, selection, bounds.origin, content_mask, window);
   }
   for paragraph in &layout.paragraphs {
+    if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
+      continue;
+    }
     for line in &paragraph.lines {
+      if !line_intersects_mask(line, bounds.origin, content_mask) {
+        continue;
+      }
       for rect in &line.rects {
         let rect_bounds = snap_rule_bounds(rect.bounds.shift(bounds.origin + line.origin), rect.snap, window);
         window.paint_quad(fill(rect_bounds, Background::from(rect.color)));
@@ -1772,12 +2100,23 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, windo
     }
   }
   for paragraph in &layout.paragraphs {
+    if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
+      continue;
+    }
     for line in &paragraph.lines {
-      paint_line_text(line, bounds.origin + line.origin, window, cx);
+      if line_intersects_mask(line, bounds.origin, content_mask) {
+        paint_line_text(line, bounds.origin + line.origin, content_mask, window, cx);
+      }
     }
   }
   for paragraph in &layout.paragraphs {
+    if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
+      continue;
+    }
     for line in &paragraph.lines {
+      if !line_intersects_mask(line, bounds.origin, content_mask) {
+        continue;
+      }
       for underline in &line.underlines {
         let mut underline_bounds = underline.bounds.shift(bounds.origin + line.origin);
         if layout.snap_underline_rules_to_pixels {
@@ -1790,9 +2129,24 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, windo
   if let Some(selection) = selection
     && selection.is_caret()
     && let Some(caret) = caret_bounds(layout, selection.head, bounds.origin)
+    && caret.intersects(&content_mask)
   {
     window.paint_quad(fill(caret, black()));
   }
+}
+
+fn paragraph_intersects_mask(paragraph: &LaidOutParagraph, origin: Point<Pixels>, mask: Bounds<Pixels>) -> bool {
+  vertical_range_intersects(origin.y + paragraph.top, origin.y + paragraph.bottom, mask)
+}
+
+fn line_intersects_mask(line: &LaidOutLine, origin: Point<Pixels>, mask: Bounds<Pixels>) -> bool {
+  vertical_range_intersects(origin.y + line.origin.y, origin.y + line.origin.y + line.line_height, mask)
+}
+
+fn vertical_range_intersects(top: Pixels, bottom: Pixels, mask: Bounds<Pixels>) -> bool {
+  let mask_top = mask.origin.y;
+  let mask_bottom = mask.origin.y + mask.size.height;
+  bottom >= mask_top && top <= mask_bottom
 }
 
 fn snap_horizontal_rule_to_device_pixels(mut bounds: Bounds<Pixels>, window: &Window) -> Bounds<Pixels> {
@@ -1827,13 +2181,16 @@ fn snap_rule_thickness_to_device_grid(value: Pixels, scale: f32) -> Pixels {
   px(((value * scale).round().max(1.0)) / scale)
 }
 
-fn paint_selection(layout: &LayoutState, selection: &EditorSelection, origin: Point<Pixels>, window: &mut Window) {
+fn paint_selection(layout: &LayoutState, selection: &EditorSelection, origin: Point<Pixels>, content_mask: Bounds<Pixels>, window: &mut Window) {
   if selection.is_caret() {
     return;
   }
   let range = selection.normalized();
   for paragraph in &layout.paragraphs {
     if paragraph.index < range.start.paragraph || paragraph.index > range.end.paragraph {
+      continue;
+    }
+    if !paragraph_intersects_mask(paragraph, origin, content_mask) {
       continue;
     }
     let start = if paragraph.index == range.start.paragraph { range.start.byte } else { 0 };
@@ -1843,6 +2200,9 @@ fn paint_selection(layout: &LayoutState, selection: &EditorSelection, origin: Po
       paragraph.len
     };
     for line in &paragraph.lines {
+      if !line_intersects_mask(line, origin, content_mask) {
+        continue;
+      }
       let line_start = start.max(line.start_byte);
       let line_end = end.min(line.end_byte);
       if line_start >= line_end {
@@ -1859,10 +2219,7 @@ fn paint_selection(layout: &LayoutState, selection: &EditorSelection, origin: Po
 }
 
 fn caret_bounds(layout: &LayoutState, offset: DocumentOffset, origin: Point<Pixels>) -> Option<Bounds<Pixels>> {
-  let paragraph = layout
-    .paragraphs
-    .iter()
-    .find(|p| p.index == offset.paragraph)?;
+  let paragraph = paragraph_layout(layout, offset.paragraph)?;
   let line = paragraph
     .lines
     .iter()
@@ -1885,7 +2242,7 @@ fn x_for_byte(line: &LaidOutLine, byte: usize) -> Pixels {
   line.width
 }
 
-fn paint_line_text(line: &LaidOutLine, origin: Point<Pixels>, window: &mut Window, cx: &mut App) {
+fn paint_line_text(line: &LaidOutLine, origin: Point<Pixels>, content_mask: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
   let text_system = cx.text_system().clone();
   let baseline = line.baseline_y();
   for segment in &line.segments {
@@ -1896,7 +2253,7 @@ fn paint_line_text(line: &LaidOutLine, origin: Point<Pixels>, window: &mut Windo
         .size;
       for glyph in &run.glyphs {
         let glyph_origin = segment_origin + point(glyph.position.x, px(0.0));
-        if !Bounds::new(glyph_origin, glyph_bounds).intersects(&window.content_mask().bounds) {
+        if !Bounds::new(glyph_origin, glyph_bounds).intersects(&content_mask) {
           continue;
         }
         let result = if glyph.is_emoji {
@@ -1916,7 +2273,7 @@ fn apply_style_to_paragraph_range(paragraph: &mut Paragraph, range: Range<usize>
   if range.start >= range.end {
     return;
   }
-  let mut output = Vec::new();
+  let mut output = Vec::with_capacity(paragraph.runs.len() + 2);
   let mut offset = 0;
   for run in paragraph.runs.drain(..) {
     let run_start = offset;
@@ -1930,19 +2287,19 @@ fn apply_style_to_paragraph_range(paragraph: &mut Paragraph, range: Range<usize>
     let local_end = (range.end.saturating_sub(run_start)).min(run.text.len());
     if local_start > 0 {
       output.push(TextRun {
-        text: run.text[..local_start].to_string(),
+        text: run.text.slice(0..local_start),
         styles: run.styles,
       });
     }
     let mut styles = run.styles;
     styles.apply(style);
     output.push(TextRun {
-      text: run.text[local_start..local_end].to_string(),
+      text: run.text.slice(local_start..local_end),
       styles,
     });
     if local_end < run.text.len() {
       output.push(TextRun {
-        text: run.text[local_end..].to_string(),
+        text: run.text.slice(local_end..run.text.len()),
         styles: run.styles,
       });
     }
@@ -1951,7 +2308,7 @@ fn apply_style_to_paragraph_range(paragraph: &mut Paragraph, range: Range<usize>
 }
 
 fn merge_adjacent_runs(runs: Vec<TextRun>) -> Vec<TextRun> {
-  let mut merged: Vec<TextRun> = Vec::new();
+  let mut merged: Vec<TextRun> = Vec::with_capacity(runs.len());
   for run in runs {
     if run.text.is_empty() {
       continue;
@@ -1959,7 +2316,7 @@ fn merge_adjacent_runs(runs: Vec<TextRun>) -> Vec<TextRun> {
     if let Some(last) = merged.last_mut()
       && last.styles == run.styles
     {
-      last.text.push_str(&run.text);
+      last.text.push_run_text(&run.text);
       continue;
     }
     merged.push(run);
@@ -1968,7 +2325,11 @@ fn merge_adjacent_runs(runs: Vec<TextRun>) -> Vec<TextRun> {
 }
 
 fn paragraph_text(paragraph: &Paragraph) -> String {
-  paragraph.runs.iter().map(|run| run.text.as_str()).collect()
+  let mut text = String::with_capacity(paragraph_text_len(paragraph));
+  for run in &paragraph.runs {
+    run.text.push_to_string(&mut text);
+  }
+  text
 }
 
 fn paragraph_text_len(paragraph: &Paragraph) -> usize {
@@ -2025,10 +2386,7 @@ fn insert_text_at(paragraph: &mut Paragraph, byte: usize, text: &str, styles: Ru
     return;
   }
   if paragraph.runs.is_empty() {
-    paragraph.runs.push(TextRun {
-      text: text.to_string(),
-      styles,
-    });
+    paragraph.runs.push(TextRun { text: text.into(), styles });
     return;
   }
 
@@ -2049,13 +2407,9 @@ fn insert_text_at(paragraph: &mut Paragraph, byte: usize, text: &str, styles: Ru
         if i > 0 && paragraph.runs[i - 1].styles == styles {
           paragraph.runs[i - 1].text.push_str(text);
         } else {
-          paragraph.runs.insert(
-            i,
-            TextRun {
-              text: text.to_string(),
-              styles,
-            },
-          );
+          paragraph
+            .runs
+            .insert(i, TextRun { text: text.into(), styles });
         }
         return;
       }
@@ -2064,26 +2418,18 @@ fn insert_text_at(paragraph: &mut Paragraph, byte: usize, text: &str, styles: Ru
         if i + 1 < paragraph.runs.len() && paragraph.runs[i + 1].styles == styles {
           paragraph.runs[i + 1].text.insert_str(0, text);
         } else {
-          paragraph.runs.insert(
-            i + 1,
-            TextRun {
-              text: text.to_string(),
-              styles,
-            },
-          );
+          paragraph
+            .runs
+            .insert(i + 1, TextRun { text: text.into(), styles });
         }
         return;
       }
 
       let run_styles = paragraph.runs[i].styles;
       let right = paragraph.runs[i].text.split_off(local);
-      paragraph.runs.insert(
-        i + 1,
-        TextRun {
-          text: text.to_string(),
-          styles,
-        },
-      );
+      paragraph
+        .runs
+        .insert(i + 1, TextRun { text: text.into(), styles });
       paragraph.runs.insert(
         i + 2,
         TextRun {
@@ -2100,10 +2446,7 @@ fn insert_text_at(paragraph: &mut Paragraph, byte: usize, text: &str, styles: Ru
     if last.styles == styles {
       last.text.push_str(text);
     } else {
-      paragraph.runs.push(TextRun {
-        text: text.to_string(),
-        styles,
-      });
+      paragraph.runs.push(TextRun { text: text.into(), styles });
     }
   }
 }
@@ -2116,7 +2459,7 @@ fn delete_range_in_paragraph(paragraph: &mut Paragraph, range: Range<usize>) {
     return;
   }
   let mut offset = 0;
-  let mut new_runs: Vec<TextRun> = Vec::new();
+  let mut new_runs: Vec<TextRun> = Vec::with_capacity(paragraph.runs.len());
   for run in paragraph.runs.drain(..) {
     let run_start = offset;
     let run_end = offset + run.text.len();
@@ -2127,14 +2470,10 @@ fn delete_range_in_paragraph(paragraph: &mut Paragraph, range: Range<usize>) {
     }
     let local_start = range.start.saturating_sub(run_start).min(run.text.len());
     let local_end = range.end.saturating_sub(run_start).min(run.text.len());
-    let mut kept = String::new();
-    kept.push_str(&run.text[..local_start]);
-    kept.push_str(&run.text[local_end..]);
-    if !kept.is_empty() {
-      new_runs.push(TextRun {
-        text: kept,
-        styles: run.styles,
-      });
+    let mut run = run;
+    run.text.delete(local_start..local_end);
+    if !run.text.is_empty() {
+      new_runs.push(run);
     }
   }
   paragraph.runs = merge_adjacent_runs(new_runs);
@@ -2146,10 +2485,7 @@ fn delete_range_in_paragraph(paragraph: &mut Paragraph, range: Range<usize>) {
 // to the next line — matching Word's "caret-at-start-of-next-line"
 // convention. This is exactly the disambiguation called out in the plan.
 fn locate_line(layout: &LayoutState, off: DocumentOffset) -> Option<(usize, usize)> {
-  let p_ix = layout
-    .paragraphs
-    .iter()
-    .position(|p| p.index == off.paragraph)?;
+  let p_ix = paragraph_layout_index(layout, off.paragraph)?;
   let para = &layout.paragraphs[p_ix];
   for (i, line) in para.lines.iter().enumerate() {
     if off.byte >= line.start_byte && off.byte <= line.end_byte {
@@ -2164,6 +2500,34 @@ fn locate_line(layout: &LayoutState, off: DocumentOffset) -> Option<(usize, usiz
   // soft-wrapped trailing whitespace strip).
   let last = para.lines.len().checked_sub(1)?;
   Some((p_ix, last))
+}
+
+fn paragraph_layout(layout: &LayoutState, paragraph: usize) -> Option<&LaidOutParagraph> {
+  layout
+    .paragraphs
+    .get(paragraph)
+    .filter(|layout_paragraph| layout_paragraph.index == paragraph)
+    .or_else(|| {
+      layout
+        .paragraphs
+        .iter()
+        .find(|layout_paragraph| layout_paragraph.index == paragraph)
+    })
+}
+
+fn paragraph_layout_index(layout: &LayoutState, paragraph: usize) -> Option<usize> {
+  if layout
+    .paragraphs
+    .get(paragraph)
+    .is_some_and(|layout_paragraph| layout_paragraph.index == paragraph)
+  {
+    Some(paragraph)
+  } else {
+    layout
+      .paragraphs
+      .iter()
+      .position(|layout_paragraph| layout_paragraph.index == paragraph)
+  }
 }
 
 // Step to the previous visual line. If we're already on the first line of a
@@ -2192,6 +2556,44 @@ fn find_line_below(layout: &LayoutState, p_ix: usize, line_ix: usize) -> Option<
 
 // Grapheme-cluster-aware step backwards. Handles combining marks and
 // compound emoji correctly, so one keystroke deletes one visible character.
+fn prev_grapheme_boundary_in_paragraph(paragraph: &Paragraph, byte: usize) -> usize {
+  if byte == 0 {
+    return 0;
+  }
+  // Fast path for the common ASCII case. ASCII bytes are always single-byte
+  // grapheme clusters, so we can avoid allocating the paragraph text while
+  // someone is holding an arrow/delete key down through ordinary prose.
+  if paragraph_byte_at(paragraph, byte - 1).is_some_and(|byte| byte.is_ascii()) {
+    return byte - 1;
+  }
+  let text = paragraph_text(paragraph);
+  prev_grapheme_boundary(&text, byte)
+}
+
+fn next_grapheme_boundary_in_paragraph(paragraph: &Paragraph, byte: usize) -> usize {
+  let len = paragraph_text_len(paragraph);
+  if byte >= len {
+    return len;
+  }
+  if paragraph_byte_at(paragraph, byte).is_some_and(|byte| byte.is_ascii()) {
+    return byte + 1;
+  }
+  let text = paragraph_text(paragraph);
+  next_grapheme_boundary(&text, byte)
+}
+
+fn paragraph_byte_at(paragraph: &Paragraph, byte: usize) -> Option<u8> {
+  let mut offset = 0;
+  for run in &paragraph.runs {
+    let run_end = offset + run.text.len();
+    if byte < run_end {
+      return run.text.byte_at(byte - offset);
+    }
+    offset = run_end;
+  }
+  None
+}
+
 fn prev_grapheme_boundary(s: &str, byte: usize) -> usize {
   let mut cursor = GraphemeCursor::new(byte, s.len(), true);
   cursor.prev_boundary(s, 0).ok().flatten().unwrap_or(0)
@@ -2410,8 +2812,50 @@ fn plain(text: &str) -> TextRun {
 }
 
 fn run(text: &str, styles: RunStyles) -> TextRun {
-  TextRun {
-    text: text.to_string(),
-    styles,
+  TextRun { text: text.into(), styles }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn run_text_edits_keep_utf8_byte_offsets() {
+    let mut text = RunText::from("abé🚀cd");
+    text.insert_str("abé".len(), "Z");
+    assert_eq!(text.to_string(), "abéZ🚀cd");
+
+    let right = text.split_off("abéZ".len());
+    assert_eq!(text.to_string(), "abéZ");
+    assert_eq!(right.to_string(), "🚀cd");
+
+    text.push_run_text(&right);
+    assert_eq!(text.to_string(), "abéZ🚀cd");
+
+    text.delete("abé".len().."abéZ🚀".len());
+    assert_eq!(text.to_string(), "abécd");
+  }
+
+  #[test]
+  fn paragraph_edit_helpers_preserve_text_and_styles() {
+    let emphasized = RunStyles::default().with(RunStyle::Emphasis);
+    let mut paragraph = Paragraph {
+      style: ParagraphStyle::Normal,
+      runs: vec![run("hello", RunStyles::default())],
+    };
+
+    insert_text_at(&mut paragraph, "he".len(), "y", RunStyles::default());
+    assert_eq!(paragraph_text(&paragraph), "heyllo");
+    assert_eq!(paragraph.runs.len(), 1);
+
+    apply_style_to_paragraph_range(&mut paragraph, "hey".len().."heyll".len(), RunStyle::Emphasis);
+    assert_eq!(paragraph_text(&paragraph), "heyllo");
+    assert_eq!(paragraph.runs.len(), 3);
+    assert_eq!(paragraph.runs[1].styles, emphasized);
+
+    delete_range_in_paragraph(&mut paragraph, "he".len().."heyll".len());
+    assert_eq!(paragraph_text(&paragraph), "heo");
+    assert_eq!(paragraph.runs.len(), 1);
+    assert_eq!(paragraph.runs[0].styles, RunStyles::default());
   }
 }

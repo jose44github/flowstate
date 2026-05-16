@@ -1173,6 +1173,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crop"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2fa28d21af9044d49bcfb1eceddeeb9fadc6a17207c6a1bf0d841ef0bd9ad36e"
+dependencies = [
+ "str_indices",
+]
+
+[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1250,10 +1259,10 @@ name = "debateprocessor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crop",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
- "ropey 1.6.1",
  "serde",
  "unicode-segmentation",
  "uuid",
@@ -2215,7 +2224,7 @@ dependencies = [
  "once_cell",
  "paste",
  "regex",
- "ropey 2.0.0-beta.1",
+ "ropey",
  "rust-i18n",
  "schemars",
  "serde",
@@ -4621,16 +4630,6 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "ropey"
-version = "1.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93411e420bcd1a75ddd1dc3caf18c23155eda2c090631a85af21ba19e97093b5"
-dependencies = [
- "smallvec",
- "str_indices",
 ]
 
 [[package]]
