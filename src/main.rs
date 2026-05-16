@@ -24,6 +24,8 @@ impl Render for DemoApp {
 
 fn main() {
   Application::new().run(|cx: &mut App| {
+    gpui_component::init(cx);
+
     // Register editing keybindings. Each binding fires its action only when
     // a `RichTextEditor`-contexted element has focus.
     let ctx = Some("RichTextEditor");

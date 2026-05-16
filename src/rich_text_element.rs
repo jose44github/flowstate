@@ -5,15 +5,17 @@ use std::{
   hash::{Hash, Hasher},
   ops::Range,
   rc::Rc,
+  time::Duration,
 };
 
 use crop::Rope;
 use gpui::{
   App, AvailableSpace, Background, Bounds, Context, CursorStyle, Element, ElementId, Entity, FocusHandle, Focusable, FontStyle, FontWeight,
   GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-  Pixels, Point, Render, ShapedLine, SharedString, Size, Style, TextRun as GpuiTextRun, Window, actions, black, div, fill, font, hsla, point,
-  prelude::*, px, rgb, size,
+  Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Size, StatefulInteractiveElement, Style, TextRun as GpuiTextRun, Timer, Window,
+  actions, black, div, fill, font, hsla, point, prelude::*, px, rgb, size,
 };
+use gpui_component::scroll::Scrollbar;
 use unicode_segmentation::GraphemeCursor;
 
 // All editing-action types live in the `rich_text_editor` namespace so the
@@ -389,9 +391,12 @@ impl EditorSelection {
 
 pub struct RichTextEditor {
   focus_handle: FocusHandle,
+  scroll_handle: ScrollHandle,
   document: Document,
   selection: EditorSelection,
   selecting: bool,
+  last_drag_position: Option<Point<Pixels>>,
+  autoscroll_active: bool,
   last_layout: Option<Rc<LayoutState>>,
   // Remembered horizontal pixel position for vertical caret motion. When the
   // user presses Up/Down repeatedly we want the caret to track a consistent
@@ -405,9 +410,12 @@ impl RichTextEditor {
   pub fn new(document: Document, cx: &mut Context<Self>) -> Self {
     Self {
       focus_handle: cx.focus_handle(),
+      scroll_handle: ScrollHandle::new(),
       document,
       selection: EditorSelection::caret(),
       selecting: false,
+      last_drag_position: None,
+      autoscroll_active: false,
       last_layout: None,
       goal_x: None,
     }
@@ -507,6 +515,7 @@ impl RichTextEditor {
     }
     self.selection = selection;
     self.goal_x = None;
+    self.scroll_head_into_view();
     cx.notify();
   }
   fn on_backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
@@ -591,6 +600,7 @@ impl RichTextEditor {
     }
     self.selection = selection;
     self.goal_x = None;
+    self.scroll_head_into_view();
     cx.notify();
   }
 
@@ -668,6 +678,7 @@ impl RichTextEditor {
     // Preserve the goal x across the move so repeated Up/Down stays on a
     // straight column.
     self.goal_x = Some(used_goal_x);
+    self.scroll_head_into_view();
     cx.notify();
   }
 
@@ -699,6 +710,7 @@ impl RichTextEditor {
     }
     self.selection = selection;
     self.goal_x = None;
+    self.scroll_head_into_view();
     cx.notify();
   }
 
@@ -732,6 +744,7 @@ impl RichTextEditor {
     };
     self.selection = EditorSelection { anchor: new, head: new };
     self.goal_x = None;
+    self.scroll_head_into_view();
     cx.notify();
   }
 
@@ -772,6 +785,7 @@ impl RichTextEditor {
     if !self.selection.is_caret() {
       self.delete_selection_internal();
       self.goal_x = None;
+      self.scroll_head_into_view();
       cx.notify();
       return;
     }
@@ -804,6 +818,7 @@ impl RichTextEditor {
       self.selection = EditorSelection { anchor: new, head: new };
     }
     self.goal_x = None;
+    self.scroll_head_into_view();
     cx.notify();
   }
 
@@ -811,6 +826,7 @@ impl RichTextEditor {
     if !self.selection.is_caret() {
       self.delete_selection_internal();
       self.goal_x = None;
+      self.scroll_head_into_view();
       cx.notify();
       return;
     }
@@ -834,6 +850,7 @@ impl RichTextEditor {
       delete_range_in_paragraph(&mut self.document.paragraphs[caret.paragraph], caret.byte..next);
     }
     self.goal_x = None;
+    self.scroll_head_into_view();
     cx.notify();
   }
 
@@ -883,12 +900,14 @@ impl RichTextEditor {
     };
     self.selection = EditorSelection { anchor: new, head: new };
     self.goal_x = None;
+    self.scroll_head_into_view();
     cx.notify();
   }
 
   fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
     window.focus(&self.focus_handle);
     self.selecting = true;
+    self.last_drag_position = Some(event.position);
     self.goal_x = None;
     let offset = self
       .last_layout
@@ -913,10 +932,16 @@ impl RichTextEditor {
     if !self.selecting {
       return;
     }
+    self.last_drag_position = Some(event.position);
+    self.autoscroll_for_drag(event.position);
+    self.ensure_drag_autoscroll_task(cx);
     if let Some(layout) = &self.last_layout {
       let head = layout.hit_test(event.position);
       if self.selection.head != head {
         self.selection.head = head;
+        self.scroll_head_into_view();
+        cx.notify();
+      } else {
         cx.notify();
       }
     }
@@ -924,6 +949,76 @@ impl RichTextEditor {
 
   fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
     self.selecting = false;
+    self.last_drag_position = None;
+    self.autoscroll_active = false;
+  }
+
+  fn scroll_head_into_view(&self) {
+    let Some(layout) = self.last_layout.as_ref() else {
+      return;
+    };
+    let Some(bounds) = layout.bounds else {
+      return;
+    };
+    let Some(caret) = caret_bounds(layout, self.selection.head, bounds.origin) else {
+      return;
+    };
+    scroll_rect_into_view(&self.scroll_handle, caret, px(4.0));
+  }
+
+  fn autoscroll_for_drag(&self, position: Point<Pixels>) -> bool {
+    let viewport = self.scroll_handle.bounds();
+    let step = drag_autoscroll_step(viewport, position);
+    step != px(0.0) && scroll_by(&self.scroll_handle, step)
+  }
+
+  fn ensure_drag_autoscroll_task(&mut self, cx: &mut Context<Self>) {
+    if self.autoscroll_active || !self.selecting {
+      return;
+    }
+    let Some(position) = self.last_drag_position else {
+      return;
+    };
+    if drag_autoscroll_step(self.scroll_handle.bounds(), position) == px(0.0) {
+      return;
+    }
+
+    self.autoscroll_active = true;
+    cx.spawn(async move |editor, cx| {
+      loop {
+        Timer::after(Duration::from_millis(16)).await;
+        let keep_running = editor
+          .update(cx, |editor, cx| {
+            let Some(position) = editor.last_drag_position else {
+              editor.autoscroll_active = false;
+              return false;
+            };
+            if !editor.selecting {
+              editor.autoscroll_active = false;
+              return false;
+            }
+
+            if !editor.autoscroll_for_drag(position) {
+              editor.autoscroll_active = false;
+              return false;
+            }
+
+            if let Some(layout) = &editor.last_layout {
+              let head = layout.hit_test(position);
+              if editor.selection.head != head {
+                editor.selection.head = head;
+              }
+            }
+            cx.notify();
+            true
+          })
+          .unwrap_or(false);
+        if !keep_running {
+          break;
+        }
+      }
+    })
+    .detach();
   }
 }
 
@@ -937,6 +1032,8 @@ impl Render for RichTextEditor {
   fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
       .size_full()
+      .id("rich-text-editor")
+      .relative()
       .track_focus(&self.focus_handle(cx))
       .key_context("RichTextEditor")
       .cursor(CursorStyle::IBeam)
@@ -966,10 +1063,25 @@ impl Render for RichTextEditor {
       .on_mouse_move(cx.listener(Self::on_mouse_move))
       .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
       .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
-      .child(WordDocumentElement {
-        editor: cx.entity(),
-        layout: WordElementLayout::default(),
-      })
+      .child(
+        div()
+          .id("rich-text-scroll-area")
+          .size_full()
+          .overflow_y_scroll()
+          .track_scroll(&self.scroll_handle)
+          .child(WordDocumentElement {
+            editor: cx.entity(),
+            layout: WordElementLayout::default(),
+          }),
+      )
+      .child(
+        div()
+          .absolute()
+          .top_0()
+          .right_0()
+          .bottom_0()
+          .child(Scrollbar::vertical(&self.scroll_handle)),
+      )
   }
 }
 
@@ -2082,9 +2194,6 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, windo
       window.paint_quad(fill(border_bounds, Background::from(border.color)));
     }
   }
-  if let Some(selection) = selection {
-    paint_selection(layout, selection, bounds.origin, content_mask, window);
-  }
   for paragraph in &layout.paragraphs {
     if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
       continue;
@@ -2126,12 +2235,76 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, windo
       }
     }
   }
+  if let Some(selection) = selection {
+    paint_selection(layout, selection, bounds.origin, content_mask, window);
+  }
   if let Some(selection) = selection
     && selection.is_caret()
     && let Some(caret) = caret_bounds(layout, selection.head, bounds.origin)
     && caret.intersects(&content_mask)
   {
     window.paint_quad(fill(caret, black()));
+  }
+}
+
+fn scroll_rect_into_view(scroll_handle: &ScrollHandle, rect: Bounds<Pixels>, margin: Pixels) {
+  let viewport = scroll_handle.bounds();
+  if viewport.size.height <= px(0.0) {
+    return;
+  }
+
+  let top = rect.top() - margin;
+  let bottom = rect.bottom() + margin;
+  let mut offset = scroll_handle.offset();
+  if top < viewport.top() {
+    offset.y += viewport.top() - top;
+  } else if bottom > viewport.bottom() {
+    offset.y -= bottom - viewport.bottom();
+  } else {
+    return;
+  }
+  scroll_handle.set_offset(clamp_scroll_offset(scroll_handle, offset));
+}
+
+fn scroll_by(scroll_handle: &ScrollHandle, delta_y: Pixels) -> bool {
+  if delta_y == px(0.0) {
+    return false;
+  }
+  let old_offset = scroll_handle.offset();
+  let mut offset = old_offset;
+  offset.y -= delta_y;
+  let offset = clamp_scroll_offset(scroll_handle, offset);
+  if offset == old_offset {
+    return false;
+  }
+  scroll_handle.set_offset(offset);
+  true
+}
+
+fn clamp_scroll_offset(scroll_handle: &ScrollHandle, mut offset: Point<Pixels>) -> Point<Pixels> {
+  let max = scroll_handle.max_offset();
+  offset.x = offset.x.min(px(0.0)).max(-max.width);
+  offset.y = offset.y.min(px(0.0)).max(-max.height);
+  offset
+}
+
+fn drag_autoscroll_step(viewport: Bounds<Pixels>, position: Point<Pixels>) -> Pixels {
+  if viewport.size.height <= px(0.0) {
+    return px(0.0);
+  }
+
+  let edge = px(36.0);
+  let max_step = px(28.0);
+  if position.y < viewport.top() {
+    -(edge + viewport.top() - position.y).min(max_step)
+  } else if position.y < viewport.top() + edge {
+    -(viewport.top() + edge - position.y).min(max_step)
+  } else if position.y > viewport.bottom() {
+    (edge + position.y - viewport.bottom()).min(max_step)
+  } else if position.y > viewport.bottom() - edge {
+    (position.y - (viewport.bottom() - edge)).min(max_step)
+  } else {
+    px(0.0)
   }
 }
 
@@ -2212,7 +2385,7 @@ fn paint_selection(layout: &LayoutState, selection: &EditorSelection, origin: Po
       let x2 = x_for_byte(line, line_end);
       window.paint_quad(fill(
         Bounds::new(origin + line.origin + point(x1, px(0.0)), size((x2 - x1).max(px(1.0)), line.line_height)),
-        hsla(220.0 / 360.0, 0.75, 0.65, 0.35),
+        hsla(0.0, 0.0, 0.0, 0.22),
       ));
     }
   }
@@ -2605,7 +2778,7 @@ fn next_grapheme_boundary(s: &str, byte: usize) -> usize {
 }
 
 pub fn demo_document() -> Document {
-  Document {
+  let mut document = Document {
     theme: DocumentTheme::default(),
     paragraphs: vec![
       Paragraph {
@@ -2804,7 +2977,43 @@ pub fn demo_document() -> Document {
         ],
       },
     ],
+  };
+
+  for ix in 1..=48 {
+    let style = match ix % 9 {
+      0 => ParagraphStyle::Tag,
+      1 => ParagraphStyle::Normal,
+      2 => ParagraphStyle::Normal,
+      3 => ParagraphStyle::Undertag,
+      4 => ParagraphStyle::Normal,
+      5 => ParagraphStyle::Normal,
+      6 => ParagraphStyle::Analytic,
+      7 => ParagraphStyle::Normal,
+      _ => ParagraphStyle::Normal,
+    };
+    let spoken = RunStyles::default()
+      .with(RunStyle::Underline)
+      .with(RunStyle::HighlightSpoken);
+    let insert = RunStyles::default().with(RunStyle::HighlightInsert);
+    let alternative = RunStyles::default().with(RunStyle::HighlightAlternative);
+    let emphasis = RunStyles::default().with(RunStyle::Emphasis);
+
+    document.paragraphs.push(Paragraph {
+      style,
+      runs: vec![
+        plain(&format!("Scrollable test paragraph {ix}. ")),
+        run("This line is intentionally long enough to wrap at narrower window sizes, ", spoken),
+        run(
+          "so resizing the window should recompute layout width while preserving scrollable overflow. ",
+          insert,
+        ),
+        run("It also keeps mixed rich-text spans active for paint and layout coverage. ", emphasis),
+        run("Alternative highlight segment.", alternative),
+      ],
+    });
   }
+
+  document
 }
 
 fn plain(text: &str) -> TextRun {
