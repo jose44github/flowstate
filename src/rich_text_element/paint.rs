@@ -35,6 +35,11 @@ pub(super) fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelect
       }
     }
   }
+  // Selection is painted before text so the semi-transparent highlight sits
+  // behind glyphs rather than covering them.
+  if let Some(selection) = selection {
+    paint_selection(layout, selection, bounds.origin, content_mask, visible_range.clone(), window);
+  }
   for paragraph in &layout.paragraphs[visible_range.clone()] {
     if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
       continue;
@@ -61,9 +66,6 @@ pub(super) fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelect
         window.paint_quad(fill(underline_bounds, Background::from(underline.color)));
       }
     }
-  }
-  if let Some(selection) = selection {
-    paint_selection(layout, selection, bounds.origin, content_mask, visible_range, window);
   }
   if let Some(selection) = selection
     && selection.is_caret()

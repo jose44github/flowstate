@@ -24,7 +24,10 @@ pub fn load_or_create_document(path: impl AsRef<Path>) -> io::Result<Document> {
     Ok(document) => Ok(document),
     Err(error) if error.kind() == io::ErrorKind::NotFound => {
       let document = demo_document();
-      write_db8(path, &document)?;
+      // Best-effort write: if the path is in a read-only directory (e.g. the
+      // default data/demo.db8 when the CWD is not writable) we still open the
+      // demo in memory rather than crashing.
+      let _ = write_db8(path, &document);
       Ok(document)
     },
     Err(error) => Err(error),
@@ -45,21 +48,39 @@ pub fn read_db8(path: impl AsRef<Path>) -> io::Result<Document> {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported DB8 version"));
   }
 
-  let text_len = read_u64(&mut cursor)? as usize;
+  let text_len = {
+    let raw = read_u64(&mut cursor)?;
+    usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 text length overflows usize"))?
+  };
   let mut text_bytes = vec![0; text_len];
   cursor.read_exact(&mut text_bytes)?;
   let text = String::from_utf8(text_bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 text is not UTF-8"))?;
 
-  let paragraph_count = read_u64(&mut cursor)? as usize;
-  let mut paragraphs = Vec::with_capacity(paragraph_count);
+  let paragraph_count = {
+    let raw = read_u64(&mut cursor)?;
+    usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 paragraph count overflows usize"))?
+  };
+  let mut paragraphs = Vec::with_capacity(paragraph_count.min(4096));
   for _ in 0..paragraph_count {
     let style = decode_paragraph_style(read_u8(&mut cursor)?)?;
-    let start = read_u64(&mut cursor)? as usize;
-    let end = read_u64(&mut cursor)? as usize;
-    let run_count = read_u64(&mut cursor)? as usize;
-    let mut runs = Vec::with_capacity(run_count);
+    let start = {
+      let raw = read_u64(&mut cursor)?;
+      usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 paragraph start overflows usize"))?
+    };
+    let end = {
+      let raw = read_u64(&mut cursor)?;
+      usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 paragraph end overflows usize"))?
+    };
+    let run_count = {
+      let raw = read_u64(&mut cursor)?;
+      usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 run count overflows usize"))?
+    };
+    let mut runs = Vec::with_capacity(run_count.min(4096));
     for _ in 0..run_count {
-      let len = read_u64(&mut cursor)? as usize;
+      let len = {
+        let raw = read_u64(&mut cursor)?;
+        usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 run length overflows usize"))?
+      };
       let styles = decode_run_styles(read_u8(&mut cursor)?)?;
       runs.push(TextRun { len, styles });
     }
@@ -89,7 +110,10 @@ pub fn read_db8(path: impl AsRef<Path>) -> io::Result<Document> {
 
 pub fn write_db8(path: impl AsRef<Path>, document: &Document) -> io::Result<()> {
   let path = path.as_ref();
-  if let Some(parent) = path.parent() {
+  // Skip directory creation when the parent component is empty (e.g. a bare
+  // filename like "doc.db8" with no directory prefix), as create_dir_all("")
+  // fails on most platforms. write_bytes_atomic handles it identically.
+  if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
     fs::create_dir_all(parent)?;
   }
   validate_document(document)?;
@@ -120,7 +144,12 @@ fn serialize_db8(document: &Document) -> io::Result<Vec<u8>> {
 }
 
 fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
-  let parent = path.parent().unwrap_or_else(|| Path::new("."));
+  // Use "." as fallback when the path has no directory component (e.g. a bare
+  // filename) so NamedTempFile::new_in doesn't receive an empty path.
+  let parent = path
+    .parent()
+    .filter(|p| !p.as_os_str().is_empty())
+    .unwrap_or_else(|| Path::new("."));
   fs::create_dir_all(parent)?;
   let mut temp = NamedTempFile::new_in(parent)?;
   temp.write_all(bytes)?;
@@ -171,6 +200,20 @@ fn validate_document(document: &Document) -> io::Result<()> {
         io::ErrorKind::InvalidData,
         "paragraph run lengths do not match paragraph text",
       ));
+    }
+    // Verify every run boundary falls on a valid UTF-8 char boundary. A
+    // corrupt DB8 could declare correct total run lengths but split a
+    // multibyte character mid-codepoint, which would panic when layout
+    // later slices the rope at those offsets.
+    {
+      let p_text = document_text_slice(document, range.clone());
+      let mut run_end = 0;
+      for run in &paragraph.runs {
+        run_end += run.len;
+        if run_end < p_text.len() && !p_text.is_char_boundary(run_end) {
+          return Err(io::Error::new(io::ErrorKind::InvalidData, "run boundary splits a UTF-8 character"));
+        }
+      }
     }
     if ix > 0 {
       let previous_range = paragraph_byte_range(document, ix - 1);

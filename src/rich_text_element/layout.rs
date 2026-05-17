@@ -1110,12 +1110,13 @@ pub(super) fn first_line_with_bottom_at_or_after(lines: &[LaidOutLine], y: Pixel
 }
 
 pub(super) fn caret_bounds(layout: &LayoutState, offset: DocumentOffset, origin: Point<Pixels>) -> Option<Bounds<Pixels>> {
-  let paragraph = paragraph_layout(layout, offset.paragraph)?;
-  let line = paragraph
-    .lines
-    .iter()
-    .find(|line| offset.byte >= line.start_byte && offset.byte <= line.end_byte)
-    .or_else(|| paragraph.lines.last())?;
+  // Use locate_line so the caret is drawn on the same visual line that
+  // Up/Down/Home/End navigate from — in particular the wrap-seam bias
+  // (byte at end of line k == start of line k+1 → paint on k+1) must be
+  // identical in both paths, otherwise the caret appears at the wrong
+  // position after the cursor reaches a soft-wrap boundary.
+  let (p_ix, l_ix) = locate_line(layout, offset)?;
+  let line = layout.paragraphs[p_ix].lines.get(l_ix)?;
   let x = x_for_byte(line, offset.byte);
   Some(Bounds::new(origin + line.origin + point(x, px(0.0)), size(px(1.0), line.line_height)))
 }

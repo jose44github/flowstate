@@ -58,5 +58,9 @@ fn db8_round_trip_preserves_text_structure_and_styles() {
     document_text_slice(&loaded, 0..loaded.text.byte_len())
   );
   assert_eq!(document.paragraphs.len(), loaded.paragraphs.len());
-  assert_eq!(document.paragraphs[0].runs, loaded.paragraphs[0].runs);
+  // Verify styles and run structure for every paragraph, not just the first.
+  for (ix, (orig, loaded_para)) in document.paragraphs.iter().zip(loaded.paragraphs.iter()).enumerate() {
+    assert_eq!(orig.style, loaded_para.style, "paragraph {ix} style mismatch");
+    assert_eq!(orig.runs, loaded_para.runs, "paragraph {ix} runs mismatch");
+  }
 }
