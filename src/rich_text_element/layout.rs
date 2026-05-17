@@ -771,8 +771,13 @@ pub(super) fn shape_line(
   if segments.is_empty() {
     let format = run_format(document, p_format.clone(), RunStyles::default());
     let shaped = shape_fragment(window, "", format.clone());
-    ascent = shaped.ascent;
-    descent = shaped.descent;
+    #[cfg(target_os = "linux")]
+    let (ascent, descent) = {
+      let (font_ascent, font_descent) = font_metrics_for_format(&format, cx);
+      (shaped.ascent.max(font_ascent), shaped.descent.max(font_descent))
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (ascent, descent) = (shaped.ascent, shaped.descent);
     segments.push(LaidOutSegment {
       shaped,
       format: format.clone(),
@@ -865,6 +870,18 @@ pub(super) fn shape_fragment(window: &mut Window, text: &str, format: EffectiveR
   window
     .text_system()
     .shape_line(SharedString::new(text), format.font_size, &[run], None)
+}
+
+#[cfg(target_os = "linux")]
+fn font_metrics_for_format(format: &EffectiveRunFormat, cx: &mut App) -> (Pixels, Pixels) {
+  let mut run_font = font(format.font_family.clone());
+  run_font.weight = if format.bold { FontWeight::BOLD } else { FontWeight::NORMAL };
+  run_font.style = if format.italic { FontStyle::Italic } else { FontStyle::Normal };
+  let font_id = cx.text_system().resolve_font(&run_font);
+  (
+    cx.text_system().ascent(font_id, format.font_size),
+    cx.text_system().descent(font_id, format.font_size),
+  )
 }
 
 #[derive(Clone)]
