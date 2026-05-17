@@ -13,6 +13,7 @@ mod word_boundary;
 
 pub use demo::demo_document;
 pub use document::{Document, DocumentOffset, DocumentTheme, HighlightStyle, Paragraph, ParagraphStyle, RunStyle, RunStyles, TextRun};
+pub use element::RichTextDocumentElement;
 pub use editor::*;
 // `read_db8` is part of the public persistence API even though only tests
 // consume it inside this crate today; allow the unused-import lint so the
@@ -23,7 +24,7 @@ pub use persistence::{load_or_create_document, read_db8, write_db8};
 // Internal imports used by sibling modules via `use super::*;`.
 use document::{InputParagraph, InputRun, ParagraphOffsetIndex, RichClipboardFragment};
 use edit_ops::*;
-use editor::{DocumentSpan, EditorSelection, SelectionGranularity};
+use editor::{DocumentSpan, SelectionGranularity};
 use element::*;
 use layout::*;
 use paint::*;

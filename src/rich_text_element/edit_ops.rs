@@ -126,6 +126,7 @@ pub(super) fn paragraph_span_byte_range(document: &Document, start_paragraph: us
   paragraph_byte_range(document, start_paragraph).start..paragraph_byte_range(document, end_paragraph).end
 }
 
+#[allow(dead_code)]
 pub(super) fn full_document_text(document: &Document) -> String {
   document_text_slice(document, 0..document.text.byte_len())
 }
@@ -142,10 +143,12 @@ pub(super) fn document_end(document: &Document) -> DocumentOffset {
   }
 }
 
+#[allow(dead_code)]
 pub(super) fn global_byte(document: &Document, offset: DocumentOffset) -> usize {
   paragraph_byte_range(document, offset.paragraph).start + offset.byte
 }
 
+#[allow(dead_code)]
 pub(super) fn global_to_document_offset(document: &Document, byte: usize) -> DocumentOffset {
   let byte = byte.min(document.text.byte_len());
   let mut low = 0;
