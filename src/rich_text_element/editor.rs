@@ -70,6 +70,12 @@ actions!(
   ]
 );
 
+// If you add a user-triggerable editor action here, also add it to
+// `crate::commands::CommandId`, `COMMAND_SPECS`, and
+// `register_default_keybindings` when it has a default shortcut. This keeps
+// keyboard rebinding, command-palette/menu labels, and "show shortcut" UI from
+// drifting away from the editor's action surface.
+
 // Direction enums used internally by the movement helpers.
 #[derive(Clone, Copy)]
 enum HDir {
@@ -505,6 +511,10 @@ impl RichTextEditor {
     self.edit_generation != self.saved_generation
   }
 
+  pub fn edit_generation(&self) -> u64 {
+    self.edit_generation
+  }
+
   pub fn save(&mut self, cx: &mut Context<Self>) -> io::Result<()> {
     let Some(path) = self.document_path.clone() else {
       return Ok(());
@@ -533,6 +543,19 @@ impl RichTextEditor {
   pub fn discard_recovery_file(&mut self) {
     if let Some(path) = &self.recovery_path {
       let _ = fs::remove_file(path);
+    }
+  }
+
+  pub fn scroll_to_paragraph(&mut self, paragraph_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
+    if paragraph_ix < self.document.paragraphs.len() {
+      let width = self.current_layout_width();
+      let end = (paragraph_ix + 40).min(self.document.paragraphs.len());
+      for ix in paragraph_ix..end {
+        self.ensure_exact_paragraph_height(ix, width, window, cx);
+      }
+      self.item_sizes_cache = None;
+      self.scroll_handle.scroll_to_item(paragraph_ix, ScrollStrategy::Top);
+      cx.notify();
     }
   }
 
@@ -789,6 +812,14 @@ impl RichTextEditor {
 
   pub fn toggle_cite(&mut self, cx: &mut Context<Self>) {
     self.toggle_semantic_style(RunSemanticStyle::Cite, cx);
+  }
+
+  pub fn toggle_condensed(&mut self, cx: &mut Context<Self>) {
+    self.toggle_semantic_style(RunSemanticStyle::Condensed, cx);
+  }
+
+  pub fn toggle_ultracondensed(&mut self, cx: &mut Context<Self>) {
+    self.toggle_semantic_style(RunSemanticStyle::Ultracondensed, cx);
   }
 
   pub fn set_highlight(&mut self, highlight: HighlightStyle, cx: &mut Context<Self>) {
@@ -1598,7 +1629,7 @@ impl RichTextEditor {
     if self.selection.is_caret() {
       let paragraph_style = self.document.paragraphs[self.selection.head.paragraph].style;
       let direct =
-        explicit_direct.unwrap_or_else(|| matches!(paragraph_style, ParagraphStyle::Tag | ParagraphStyle::Analytic | ParagraphStyle::Undertag));
+        explicit_direct.unwrap_or_else(|| matches!(paragraph_style, ParagraphStyle::Tag | ParagraphStyle::Analytic));
       let mut styles = self.styles_at_caret();
       if direct {
         styles.direct_underline = !styles.direct_underline;

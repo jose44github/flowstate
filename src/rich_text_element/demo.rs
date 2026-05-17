@@ -225,7 +225,7 @@ pub fn demo_document() -> Document {
             .with(RunStyle::Emphasis)
             .with(RunStyle::HighlightSpoken),
         ),
-        plain(", or sometimes the next other header if the evidence was the end of a section."),
+        plain(", or sometimes the next heading if the evidence was the end of a section."),
       ],
     },
     InputParagraph {

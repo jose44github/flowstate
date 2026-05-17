@@ -561,7 +561,7 @@ pub(super) fn selection_prefers_direct_underline(document: &Document, range: Ran
   (range.start.paragraph..=range.end.paragraph).any(|paragraph_ix| {
     matches!(
       document.paragraphs[paragraph_ix].style,
-      ParagraphStyle::Tag | ParagraphStyle::Analytic | ParagraphStyle::Undertag
+      ParagraphStyle::Tag | ParagraphStyle::Analytic
     )
   })
 }
