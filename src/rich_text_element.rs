@@ -1211,12 +1211,13 @@ impl RichTextEditor {
     cx.notify();
   }
 
-  fn paragraph_item_sizes(&mut self) -> Rc<Vec<Size<Pixels>>> {
+  fn paragraph_item_sizes(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Rc<Vec<Size<Pixels>>> {
     self
       .paragraph_height_cache
       .resize(self.document.paragraphs.len(), None);
     let viewport_width = self.scroll_handle.bounds().size.width;
     let width = if viewport_width > px(1.0) { viewport_width } else { px(900.0) };
+    self.ensure_exact_active_paragraph_heights(width, window, cx);
     Rc::new(
       self
         .document
@@ -1236,6 +1237,42 @@ impl RichTextEditor {
         })
         .collect(),
     )
+  }
+
+  fn ensure_exact_active_paragraph_heights(&mut self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) {
+    for paragraph_ix in self.active_height_range() {
+      let Some(paragraph) = self.document.paragraphs.get(paragraph_ix) else {
+        continue;
+      };
+      let key = paragraph_cache_key(&self.document, paragraph);
+      let cache_is_current = self
+        .paragraph_height_cache
+        .get(paragraph_ix)
+        .and_then(|entry| *entry)
+        .is_some_and(|entry| entry.key == key && entry.width == width);
+      if cache_is_current {
+        continue;
+      }
+      let layout = build_single_paragraph_layout(&self.document, paragraph_ix, width, None, window, cx);
+      self.paragraph_height_cache[paragraph_ix] = Some(ParagraphHeightCacheEntry {
+        key,
+        width,
+        height: layout.size.height,
+      });
+    }
+  }
+
+  fn active_height_range(&self) -> Range<usize> {
+    let paragraph_count = self.document.paragraphs.len();
+    if paragraph_count == 0 {
+      return 0..0;
+    }
+    let selection = self.selection.normalized();
+    let start = selection.start.paragraph.saturating_sub(1);
+    let end = (selection.end.paragraph + 2)
+      .min(paragraph_count)
+      .max(start + 1);
+    start..end
   }
 
   fn update_paragraph_height_cache(
@@ -2022,7 +2059,7 @@ impl Focusable for RichTextEditor {
 impl Render for RichTextEditor {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.ensure_focus_subscriptions(window, cx);
-    let item_sizes = self.paragraph_item_sizes();
+    let item_sizes = self.paragraph_item_sizes(window, cx);
     let scroll_handle = self.scroll_handle.clone();
     div()
       .size_full()
