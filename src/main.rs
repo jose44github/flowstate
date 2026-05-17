@@ -124,7 +124,8 @@ fn main() {
         ..Default::default()
       },
       |window, cx| {
-        let document = load_or_create_document(&document_path).unwrap_or_else(|error| panic!("failed to open {}: {error}", document_path.display()));
+        let document =
+          load_or_create_document(&document_path).unwrap_or_else(|error| panic!("failed to open {}: {error}", document_path.display()));
         let editor = cx.new(|cx| RichTextEditor::new_with_path(document, Some(document_path), cx));
         let prompt_open = Rc::new(Cell::new(false));
         let allow_close = Rc::new(Cell::new(false));

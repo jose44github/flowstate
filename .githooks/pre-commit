@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run `cargo fmt` on staged Rust files and re-stage them.
+set -euo pipefail
+
+# Collect staged .rs files (Added/Copied/Modified/Renamed).
+staged_rs_files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.rs$' || true)
+
+if [ -z "$staged_rs_files" ]; then
+    exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found in PATH; skipping cargo fmt." >&2
+    exit 0
+fi
+
+echo "pre-commit: running cargo fmt..."
+cargo fmt --all
+
+# Re-stage any files that fmt may have modified.
+echo "$staged_rs_files" | while IFS= read -r file; do
+    [ -n "$file" ] && git add -- "$file"
+done
+
+exit 0
