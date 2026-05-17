@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crop::Rope;
 
 use super::*;
@@ -35,7 +37,7 @@ pub(super) fn document_from_input(theme: DocumentTheme, paragraphs: Vec<InputPar
   let offset_index = ParagraphOffsetIndex::new(&stored_paragraphs);
   Document {
     text: Rope::from(text),
-    paragraphs: stored_paragraphs,
+    paragraphs: Arc::new(stored_paragraphs),
     offset_index,
     theme,
   }

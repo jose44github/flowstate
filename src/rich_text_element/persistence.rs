@@ -4,6 +4,7 @@ use std::{
   hash::{Hash, Hasher},
   io::{self, Cursor, Read, Write},
   path::{Path, PathBuf},
+  sync::Arc,
   time::Instant,
 };
 
@@ -95,7 +96,7 @@ pub fn read_db8(path: impl AsRef<Path>) -> io::Result<Document> {
   let offset_index = ParagraphOffsetIndex::new(&paragraphs);
   let document = Document {
     text: Rope::from(text),
-    paragraphs,
+    paragraphs: Arc::new(paragraphs),
     offset_index,
     theme: DocumentTheme::default(),
   };

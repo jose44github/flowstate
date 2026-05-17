@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use crop::Rope;
 use gpui::{Hsla, Pixels, SharedString, black, px, rgb};
@@ -24,12 +24,16 @@ pub(super) struct RichClipboardFragment {
 #[derive(Clone, Debug)]
 pub struct Document {
   pub text: Rope,
-  pub paragraphs: Vec<Paragraph>,
+  pub paragraphs: Arc<Vec<Paragraph>>,
   // Auxiliary Fenwick-tree index over per-paragraph byte widths. Kept in sync
   // with `paragraphs` by the edit helpers in `edit_ops`. Not part of the
   // public API.
   pub(super) offset_index: ParagraphOffsetIndex,
   pub theme: DocumentTheme,
+}
+
+pub(super) fn paragraphs_mut(document: &mut Document) -> &mut Vec<Paragraph> {
+  Arc::make_mut(&mut document.paragraphs)
 }
 
 /// Fenwick-tree (binary indexed tree) over the byte widths of each paragraph,

@@ -149,7 +149,7 @@ fn selection_across_empty_paragraphs_and_clear_formatting_policy() {
     clear_whole_paragraph_formatting(&mut document, paragraph_ix);
   }
 
-  for paragraph in &document.paragraphs {
+  for paragraph in document.paragraphs.iter() {
     assert_eq!(paragraph.style, ParagraphStyle::Normal);
     assert!(paragraph.runs.iter().all(|run| run.styles == RunStyles::default()));
   }
@@ -182,4 +182,82 @@ fn run_style_full_selection_toggle_policy() {
     },
     |styles| styles.emphasis,
   ));
+}
+
+#[test]
+fn span_patch_undo_redo_round_trip_for_text_and_paragraph_split() {
+  let mut document = document_from_input(
+    DocumentTheme::default(),
+    vec![InputParagraph {
+      style: ParagraphStyle::Normal,
+      runs: vec![plain("alpha beta")],
+    }],
+  );
+  let before = capture_document_span(&document, 0..1);
+  split_paragraph_at(&mut document, 0, "alpha".len());
+  insert_text_at(&mut document, 1, 0, "NEW ", RunStyles::default().with(RunStyle::Emphasis));
+  let after = capture_document_span(&document, 0..2);
+  assert_eq!(document.paragraphs.len(), 2);
+
+  apply_document_span_replacement(&mut document, &after, &before);
+  assert_eq!(document.paragraphs.len(), 1);
+  assert_eq!(paragraph_text(&document, 0), "alpha beta");
+
+  apply_document_span_replacement(&mut document, &before, &after);
+  assert_eq!(document.paragraphs.len(), 2);
+  assert_eq!(paragraph_text(&document, 0), "alpha");
+  assert_eq!(paragraph_text(&document, 1), "NEW  beta");
+  assert!(document.paragraphs[1].runs[0].styles.emphasis);
+}
+
+#[test]
+fn find_text_ranges_returns_document_offsets_across_paragraphs() {
+  let document = document_from_input(
+    DocumentTheme::default(),
+    vec![
+      InputParagraph {
+        style: ParagraphStyle::Normal,
+        runs: vec![plain("alpha")],
+      },
+      InputParagraph {
+        style: ParagraphStyle::Normal,
+        runs: vec![plain("beta alpha")],
+      },
+    ],
+  );
+  let matches = find_text_ranges(&document, "alpha");
+  assert_eq!(matches.len(), 2);
+  assert_eq!(matches[0].start, DocumentOffset { paragraph: 0, byte: 0 });
+  assert_eq!(matches[0].end, DocumentOffset { paragraph: 0, byte: "alpha".len() });
+  assert_eq!(matches[1].start, DocumentOffset { paragraph: 1, byte: "beta ".len() });
+  assert_eq!(matches[1].end, DocumentOffset { paragraph: 1, byte: "beta alpha".len() });
+}
+
+#[test]
+fn cross_paragraph_style_mutation_keeps_runs_and_unselected_text_intact() {
+  let mut document = document_from_input(
+    DocumentTheme::default(),
+    vec![
+      InputParagraph {
+        style: ParagraphStyle::Normal,
+        runs: vec![plain("abc")],
+      },
+      InputParagraph {
+        style: ParagraphStyle::Normal,
+        runs: vec![plain("def")],
+      },
+    ],
+  );
+  mutate_runs_in_range(
+    &mut document,
+    DocumentOffset { paragraph: 0, byte: 1 }..DocumentOffset { paragraph: 1, byte: 2 },
+    |styles| styles.cite = true,
+  );
+
+  assert_eq!(paragraph_text(&document, 0), "abc");
+  assert_eq!(paragraph_text(&document, 1), "def");
+  assert!(!document.paragraphs[0].runs[0].styles.cite);
+  assert!(document.paragraphs[0].runs[1].styles.cite);
+  assert!(document.paragraphs[1].runs[0].styles.cite);
+  assert!(!document.paragraphs[1].runs[1].styles.cite);
 }

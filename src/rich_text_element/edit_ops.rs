@@ -6,7 +6,7 @@ pub(super) fn apply_style_to_paragraph_range(document: &mut Document, paragraph_
   if range.start >= range.end {
     return;
   }
-  let Some(paragraph) = document.paragraphs.get_mut(paragraph_ix) else {
+  let Some(paragraph) = paragraphs_mut(document).get_mut(paragraph_ix) else {
     return;
   };
   let mut output = Vec::with_capacity(paragraph.runs.len() + 2);
@@ -107,9 +107,7 @@ pub(super) fn apply_document_span_replacement(document: &mut Document, current: 
     .start_paragraph
     .saturating_add(current.paragraphs.len())
     .min(document.paragraphs.len());
-  document
-    .paragraphs
-    .splice(current.start_paragraph..paragraph_end, replacement.paragraphs.clone());
+  paragraphs_mut(document).splice(current.start_paragraph..paragraph_end, replacement.paragraphs.clone());
   rebuild_document_offset_index(document);
 }
 
@@ -170,6 +168,17 @@ pub(super) fn global_to_document_offset(document: &Document, byte: usize) -> Doc
       .saturating_sub(paragraph_byte_range(document, low).start)
       .min(paragraph_text_len(paragraph)),
   }
+}
+
+pub(super) fn find_text_ranges(document: &Document, query: &str) -> Vec<Range<DocumentOffset>> {
+  if query.is_empty() {
+    return Vec::new();
+  }
+  let text = full_document_text(document);
+  text
+    .match_indices(query)
+    .map(|(start, matched)| global_to_document_offset(document, start)..global_to_document_offset(document, start + matched.len()))
+    .collect()
 }
 
 pub(super) fn selected_plain_text(document: &Document, range: Range<DocumentOffset>) -> String {
@@ -276,10 +285,11 @@ pub(super) fn split_paragraph_at(document: &mut Document, paragraph_ix: usize, b
   document.text.insert(global, "\n");
   let (left_runs, right_runs) = split_runs_at(&paragraph.runs, byte);
   let old_end = paragraph_range.end;
-  document.paragraphs[paragraph_ix].byte_range = paragraph_range.start..global;
-  document.paragraphs[paragraph_ix].runs = left_runs;
-  bump_paragraph_version(&mut document.paragraphs[paragraph_ix]);
-  document.paragraphs.insert(
+  let paragraphs = paragraphs_mut(document);
+  paragraphs[paragraph_ix].byte_range = paragraph_range.start..global;
+  paragraphs[paragraph_ix].runs = left_runs;
+  bump_paragraph_version(&mut paragraphs[paragraph_ix]);
+  paragraphs.insert(
     paragraph_ix + 1,
     Paragraph {
       style: paragraph.style,
@@ -313,10 +323,11 @@ pub(super) fn delete_cross_paragraph_range(document: &mut Document, range: Range
 
   let mut merged_runs = left_runs;
   merged_runs.extend(right_runs);
-  document.paragraphs[start_ix].runs = merge_adjacent_runs(merged_runs);
-  document.paragraphs[start_ix].byte_range = start_para_range.start..start_para_range.start + paragraph_runs_len(&document.paragraphs[start_ix]);
-  bump_paragraph_version(&mut document.paragraphs[start_ix]);
-  document.paragraphs.drain(start_ix + 1..=end_ix);
+  let paragraphs = paragraphs_mut(document);
+  paragraphs[start_ix].runs = merge_adjacent_runs(merged_runs);
+  paragraphs[start_ix].byte_range = start_para_range.start..start_para_range.start + paragraph_runs_len(&paragraphs[start_ix]);
+  bump_paragraph_version(&mut paragraphs[start_ix]);
+  paragraphs.drain(start_ix + 1..=end_ix);
   let _ = delete_len;
   rebuild_document_offset_index(document);
 }
@@ -346,7 +357,7 @@ pub(super) fn paragraph_byte_range(document: &Document, paragraph_ix: usize) -> 
 
 pub(super) fn refresh_paragraph_range(document: &mut Document, paragraph_ix: usize) {
   let range = paragraph_byte_range(document, paragraph_ix);
-  document.paragraphs[paragraph_ix].byte_range = range;
+  paragraphs_mut(document)[paragraph_ix].byte_range = range;
 }
 
 pub(super) fn refresh_paragraph_ranges(document: &mut Document) {
@@ -399,77 +410,77 @@ pub(super) fn insert_text_at(document: &mut Document, paragraph_ix: usize, byte:
   let insert_len = text.len();
   let paragraph_start = paragraph_byte_range(document, paragraph_ix).start;
   document.text.insert(paragraph_start + byte, text);
-  let paragraph = &mut document.paragraphs[paragraph_ix];
-  bump_paragraph_version(paragraph);
-  if paragraph.runs.is_empty() {
-    paragraph.runs.push(TextRun { len: insert_len, styles });
-    update_paragraph_offsets_after_len_change(document, paragraph_ix);
-    return;
-  }
-
-  let mut offset = 0;
-  let mut inserted = false;
-  for i in 0..paragraph.runs.len() {
-    let run_start = offset;
-    let run_len = paragraph.runs[i].len;
-    let run_end = run_start + run_len;
-    if byte <= run_end {
-      let local = byte - run_start;
-
-      if paragraph.runs[i].styles == styles {
-        paragraph.runs[i].len += insert_len;
-        inserted = true;
-        break;
-      }
-
-      if local == 0 {
-        if i > 0 && paragraph.runs[i - 1].styles == styles {
-          paragraph.runs[i - 1].len += insert_len;
-        } else {
-          paragraph
-            .runs
-            .insert(i, TextRun { len: insert_len, styles });
-        }
-        inserted = true;
-        break;
-      }
-
-      if local == run_len {
-        if i + 1 < paragraph.runs.len() && paragraph.runs[i + 1].styles == styles {
-          paragraph.runs[i + 1].len += insert_len;
-        } else {
-          paragraph
-            .runs
-            .insert(i + 1, TextRun { len: insert_len, styles });
-        }
-        inserted = true;
-        break;
-      }
-
-      let run_styles = paragraph.runs[i].styles;
-      let right_len = run_len - local;
-      paragraph.runs[i].len = local;
-      paragraph
-        .runs
-        .insert(i + 1, TextRun { len: insert_len, styles });
-      paragraph.runs.insert(
-        i + 2,
-        TextRun {
-          len: right_len,
-          styles: run_styles,
-        },
-      );
-      inserted = true;
-      break;
-    }
-    offset = run_end;
-  }
-
-  if !inserted && let Some(last) = paragraph.runs.last_mut() {
-    if last.styles == styles {
-      last.len += insert_len;
-    } else {
+  {
+    let paragraph = &mut paragraphs_mut(document)[paragraph_ix];
+    bump_paragraph_version(paragraph);
+    if paragraph.runs.is_empty() {
       paragraph.runs.push(TextRun { len: insert_len, styles });
+      update_paragraph_offsets_after_len_change(document, paragraph_ix);
+      return;
+    }
+
+    let mut offset = 0;
+    let mut inserted = false;
+    for i in 0..paragraph.runs.len() {
+      let run_start = offset;
+      let run_len = paragraph.runs[i].len;
+      let run_end = run_start + run_len;
+      if byte <= run_end {
+        let local = byte - run_start;
+
+        if paragraph.runs[i].styles == styles {
+          paragraph.runs[i].len += insert_len;
+          inserted = true;
+          break;
+        }
+
+        if local == 0 {
+          if i > 0 && paragraph.runs[i - 1].styles == styles {
+            paragraph.runs[i - 1].len += insert_len;
+          } else {
+            paragraph.runs.insert(i, TextRun { len: insert_len, styles });
+          }
+          inserted = true;
+          break;
+        }
+
+        if local == run_len {
+          if i + 1 < paragraph.runs.len() && paragraph.runs[i + 1].styles == styles {
+            paragraph.runs[i + 1].len += insert_len;
+          } else {
+            paragraph
+              .runs
+              .insert(i + 1, TextRun { len: insert_len, styles });
+          }
+          inserted = true;
+          break;
+        }
+
+        let run_styles = paragraph.runs[i].styles;
+        let right_len = run_len - local;
+        paragraph.runs[i].len = local;
+        paragraph
+          .runs
+          .insert(i + 1, TextRun { len: insert_len, styles });
+        paragraph.runs.insert(
+          i + 2,
+          TextRun {
+            len: right_len,
+            styles: run_styles,
+          },
+        );
+        inserted = true;
+        break;
+      }
+      offset = run_end;
+    }
+
+    if !inserted && let Some(last) = paragraph.runs.last_mut() {
+      if last.styles == styles {
+        last.len += insert_len;
+      } else {
+        paragraph.runs.push(TextRun { len: insert_len, styles });
+      }
     }
   }
   update_paragraph_offsets_after_len_change(document, paragraph_ix);
@@ -486,30 +497,32 @@ pub(super) fn delete_range_in_paragraph(document: &mut Document, paragraph_ix: u
   document
     .text
     .delete(paragraph_start + range.start..paragraph_start + range.end);
-  let paragraph = &mut document.paragraphs[paragraph_ix];
-  bump_paragraph_version(paragraph);
-  let mut offset = 0;
-  let mut new_runs: Vec<TextRun> = Vec::with_capacity(paragraph.runs.len());
-  for run in paragraph.runs.drain(..) {
-    let run_start = offset;
-    let run_end = offset + run.len;
-    offset = run_end;
-    if run_end <= range.start || run_start >= range.end {
-      new_runs.push(run);
-      continue;
+  {
+    let paragraph = &mut paragraphs_mut(document)[paragraph_ix];
+    bump_paragraph_version(paragraph);
+    let mut offset = 0;
+    let mut new_runs: Vec<TextRun> = Vec::with_capacity(paragraph.runs.len());
+    for run in paragraph.runs.drain(..) {
+      let run_start = offset;
+      let run_end = offset + run.len;
+      offset = run_end;
+      if run_end <= range.start || run_start >= range.end {
+        new_runs.push(run);
+        continue;
+      }
+      let local_start = range.start.saturating_sub(run_start).min(run.len);
+      let local_end = range.end.saturating_sub(run_start).min(run.len);
+      let removed = local_end - local_start;
+      let remaining = run.len - removed;
+      if remaining > 0 {
+        new_runs.push(TextRun {
+          len: remaining,
+          styles: run.styles,
+        });
+      }
     }
-    let local_start = range.start.saturating_sub(run_start).min(run.len);
-    let local_end = range.end.saturating_sub(run_start).min(run.len);
-    let removed = local_end - local_start;
-    let remaining = run.len - removed;
-    if remaining > 0 {
-      new_runs.push(TextRun {
-        len: remaining,
-        styles: run.styles,
-      });
-    }
+    paragraph.runs = merge_adjacent_runs(new_runs);
   }
-  paragraph.runs = merge_adjacent_runs(new_runs);
   update_paragraph_offsets_after_len_change(document, paragraph_ix);
 }
 
@@ -573,7 +586,7 @@ pub(super) fn selection_contains_whole_paragraph(document: &Document, range: Ran
 }
 
 pub(super) fn clear_whole_paragraph_formatting(document: &mut Document, paragraph_ix: usize) {
-  let Some(paragraph) = document.paragraphs.get_mut(paragraph_ix) else {
+  let Some(paragraph) = paragraphs_mut(document).get_mut(paragraph_ix) else {
     return;
   };
   let old_style = paragraph.style;
@@ -590,7 +603,7 @@ pub(super) fn clear_whole_paragraph_formatting(document: &mut Document, paragrap
 
 pub(super) fn mutate_runs_in_range(document: &mut Document, range: Range<DocumentOffset>, mut mutate: impl FnMut(&mut RunStyles)) {
   for paragraph_ix in range.start.paragraph..=range.end.paragraph {
-    let paragraph = &mut document.paragraphs[paragraph_ix];
+    let paragraph = &mut paragraphs_mut(document)[paragraph_ix];
     let start = if paragraph_ix == range.start.paragraph { range.start.byte } else { 0 };
     let end = if paragraph_ix == range.end.paragraph {
       range.end.byte

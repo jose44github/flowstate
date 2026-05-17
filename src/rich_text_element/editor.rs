@@ -186,8 +186,14 @@ struct ItemSizesCache {
   width: Pixels,
   paragraph_count: usize,
   height_revision: u64,
-  edit_generation: u64,
   sizes: Rc<Vec<Size<Pixels>>>,
+}
+
+#[derive(Clone)]
+struct ParagraphLayoutCacheEntry {
+  key: ParagraphCacheKey,
+  width: Pixels,
+  layout: Rc<LayoutState>,
 }
 
 #[derive(Clone)]
@@ -285,6 +291,7 @@ pub struct RichTextEditor {
   redo_stack: Vec<EditRecord>,
   recovery_write_in_progress: bool,
   recovery_write_pending: bool,
+  last_recovery_generation: u64,
   paste_cache: Option<PasteCache>,
   pending_styles: Option<RunStyles>,
   selecting: bool,
@@ -294,6 +301,7 @@ pub struct RichTextEditor {
   pub(super) caret_visible: bool,
   caret_blink_active: bool,
   last_layout: Option<Rc<LayoutState>>,
+  paragraph_layout_cache: Vec<Option<ParagraphLayoutCacheEntry>>,
   paragraph_height_cache: Vec<Option<ParagraphHeightCacheEntry>>,
   paragraph_height_cache_revision: u64,
   item_sizes_cache: Option<ItemSizesCache>,
@@ -328,6 +336,7 @@ impl RichTextEditor {
       redo_stack: Vec::new(),
       recovery_write_in_progress: false,
       recovery_write_pending: false,
+      last_recovery_generation: 0,
       paste_cache: None,
       pending_styles: None,
       selecting: false,
@@ -337,6 +346,7 @@ impl RichTextEditor {
       caret_visible: true,
       caret_blink_active: false,
       last_layout: None,
+      paragraph_layout_cache: vec![None; paragraph_count],
       paragraph_height_cache: vec![None; paragraph_count],
       paragraph_height_cache_revision: 0,
       item_sizes_cache: None,
@@ -358,6 +368,10 @@ impl RichTextEditor {
 
   pub fn selection(&self) -> &EditorSelection {
     &self.selection
+  }
+
+  pub fn find_text(&self, query: &str) -> Vec<Range<DocumentOffset>> {
+    find_text_ranges(&self.document, query)
   }
 
   pub fn style_state(&self) -> RichTextEditorStyleState {
@@ -717,7 +731,7 @@ impl RichTextEditor {
     self.apply_document_edit(cx, |editor, _| {
       let range = editor.selection.normalized();
       for paragraph_ix in range.start.paragraph..=range.end.paragraph {
-        if let Some(paragraph) = editor.document.paragraphs.get_mut(paragraph_ix) {
+        if let Some(paragraph) = paragraphs_mut(&mut editor.document).get_mut(paragraph_ix) {
           if paragraph.style != style {
             paragraph.style = style;
             bump_paragraph_version(paragraph);
@@ -1006,6 +1020,9 @@ impl RichTextEditor {
     self
       .paragraph_height_cache
       .resize(self.document.paragraphs.len(), None);
+    self
+      .paragraph_layout_cache
+      .resize(self.document.paragraphs.len(), None);
     let viewport_width = self.scroll_handle.bounds().size.width;
     let width = if viewport_width > px(1.0) { viewport_width } else { px(900.0) };
     self.ensure_exact_interaction_paragraph_heights(width, window, cx);
@@ -1013,7 +1030,6 @@ impl RichTextEditor {
       && cache.width == width
       && cache.paragraph_count == self.document.paragraphs.len()
       && cache.height_revision == self.paragraph_height_cache_revision
-      && cache.edit_generation == self.edit_generation
     {
       return cache.sizes.clone();
     }
@@ -1041,7 +1057,6 @@ impl RichTextEditor {
       width,
       paragraph_count: self.document.paragraphs.len(),
       height_revision: self.paragraph_height_cache_revision,
-      edit_generation: self.edit_generation,
       sizes: sizes.clone(),
     });
     sizes
@@ -1078,12 +1093,89 @@ impl RichTextEditor {
       return;
     }
     let layout = build_single_paragraph_layout(&self.document, paragraph_ix, width, None, window, cx);
+    self.cache_paragraph_layout(paragraph_ix, width, Rc::new(layout.clone()));
     self.paragraph_height_cache[paragraph_ix] = Some(ParagraphHeightCacheEntry {
       key,
       width,
       height: layout.size.height,
     });
     self.paragraph_height_cache_revision = self.paragraph_height_cache_revision.wrapping_add(1);
+  }
+
+  fn cache_paragraph_layout(&mut self, paragraph_ix: usize, width: Pixels, layout: Rc<LayoutState>) {
+    self
+      .paragraph_layout_cache
+      .resize(self.document.paragraphs.len(), None);
+    let Some(paragraph) = layout.paragraphs.first() else {
+      return;
+    };
+    self.paragraph_layout_cache[paragraph_ix] = Some(ParagraphLayoutCacheEntry {
+      key: paragraph.cache_key,
+      width,
+      layout,
+    });
+  }
+
+  fn cached_paragraph_layout(&self, paragraph_ix: usize, width: Pixels) -> Option<Rc<LayoutState>> {
+    let paragraph = self.document.paragraphs.get(paragraph_ix)?;
+    let key = paragraph_cache_key(&self.document, paragraph);
+    self
+      .paragraph_layout_cache
+      .get(paragraph_ix)
+      .and_then(|entry| entry.as_ref())
+      .filter(|entry| entry.key == key && entry.width == width)
+      .map(|entry| entry.layout.clone())
+  }
+
+  fn document_layout_for_paragraph(&self, paragraph_ix: usize, width: Pixels) -> Option<LayoutState> {
+    let mut layout = self.cached_paragraph_layout(paragraph_ix, width)?.as_ref().clone();
+    let viewport = self.scroll_handle.bounds();
+    let row_top = if self.height_prefix_index.len() == self.document.paragraphs.len() {
+      self.height_prefix_index.item_top(paragraph_ix)
+    } else {
+      px(0.0)
+    };
+    layout.bounds = Some(Bounds::new(
+      point(viewport.left(), viewport.top() + self.scroll_handle.offset().y + row_top),
+      size(width, layout.size.height),
+    ));
+    Some(layout)
+  }
+
+  fn layout_for_offset(&self, offset: DocumentOffset) -> Option<LayoutState> {
+    let width = self.current_layout_width();
+    self.document_layout_for_paragraph(offset.paragraph, width).or_else(|| {
+      self
+        .last_layout
+        .as_ref()
+        .filter(|layout| paragraph_layout(layout, offset.paragraph).is_some())
+        .map(|layout| layout.as_ref().clone())
+    })
+  }
+
+  fn hit_test_cached_position(&self, position: Point<Pixels>) -> Option<DocumentOffset> {
+    if let Some(layout) = self.last_layout.as_ref()
+      && let (Some(first), Some(last)) = (layout.paragraphs.first(), layout.paragraphs.last())
+      && position.y >= first.top
+      && position.y <= last.bottom
+    {
+      return Some(layout.hit_test(position));
+    }
+    let paragraph_count = self.document.paragraphs.len();
+    if paragraph_count == 0 || self.height_prefix_index.len() != paragraph_count {
+      return None;
+    }
+    let viewport = self.scroll_handle.bounds();
+    let content_y = (position.y - viewport.top() - self.scroll_handle.offset().y).max(px(0.0));
+    let paragraph_ix = self.height_prefix_index.lower_bound(content_y);
+    self
+      .document_layout_for_paragraph(paragraph_ix, self.current_layout_width())
+      .map(|layout| layout.hit_test(position))
+  }
+
+  fn current_layout_width(&self) -> Pixels {
+    let viewport_width = self.scroll_handle.bounds().size.width;
+    if viewport_width > px(1.0) { viewport_width } else { px(900.0) }
   }
 
   fn predicted_visible_height_range(&self, width: Pixels) -> Range<usize> {
@@ -1185,6 +1277,7 @@ impl RichTextEditor {
     if generation != self.visible_layout_generation || !self.visible_layout_range.contains(&paragraph_ix) {
       return;
     }
+    self.cache_paragraph_layout(paragraph_ix, layout.width, Rc::new(layout.clone()));
     let Some(source) = layout.paragraphs.first() else {
       return;
     };
@@ -1227,6 +1320,9 @@ impl RichTextEditor {
     if !self.has_unsaved_changes() {
       return;
     }
+    if self.last_recovery_generation == self.edit_generation {
+      return;
+    }
     if self.recovery_write_in_progress {
       self.recovery_write_pending = true;
       return;
@@ -1239,11 +1335,15 @@ impl RichTextEditor {
       let snapshot = editor
         .update(cx, |editor, _| {
           editor.recovery_write_pending = false;
-          editor.document.clone()
+          if !editor.has_unsaved_changes() || editor.last_recovery_generation == editor.edit_generation {
+            None
+          } else {
+            Some((editor.edit_generation, editor.document.clone()))
+          }
         })
         .ok();
       log_timing("recovery snapshot", snapshot_timing, "");
-      if let Some(document) = snapshot {
+      if let Some(Some((generation, document))) = snapshot {
         let write_timing = Instant::now();
         let paragraph_count = document.paragraphs.len();
         let write_result = cx
@@ -1251,8 +1351,15 @@ impl RichTextEditor {
           .spawn(async move { write_db8(path, &document) })
           .await;
         log_timing("recovery write", write_timing, format!("paragraphs={paragraph_count}"));
-        if let Err(error) = write_result {
-          eprintln!("failed to write recovery file: {error}");
+        match write_result {
+          Ok(()) => {
+            let _ = editor.update(cx, |editor, _| {
+              editor.last_recovery_generation = editor.last_recovery_generation.max(generation);
+            });
+          },
+          Err(error) => {
+            eprintln!("failed to write recovery file: {error}");
+          },
         }
       }
       let _ = editor.update(cx, |editor, cx| {
@@ -1288,7 +1395,8 @@ impl RichTextEditor {
   }
 
   fn page_move(&mut self, dir: VDir, extend: bool, cx: &mut Context<Self>) {
-    let Some(layout) = self.last_layout.as_ref() else {
+    let head = self.selection.head;
+    let Some(layout) = self.layout_for_offset(head) else {
       return;
     };
     let Some(bounds) = layout.bounds else {
@@ -1303,8 +1411,7 @@ impl RichTextEditor {
     let new_offset = clamp_scroll_offset(&self.scroll_handle, point(old_offset.x, old_offset.y + signed_delta));
     self.scroll_handle.set_offset(new_offset);
 
-    let head = self.selection.head;
-    let Some(caret) = caret_bounds(layout, head, bounds.origin) else {
+    let Some(caret) = caret_bounds(&layout, head, bounds.origin) else {
       cx.notify();
       return;
     };
@@ -1312,7 +1419,9 @@ impl RichTextEditor {
       VDir::Up => (caret.origin.y - delta).max(bounds.top()),
       VDir::Down => (caret.origin.y + delta).min(bounds.bottom()),
     };
-    let target = layout.hit_test(point(caret.origin.x, target_y));
+    let target = self
+      .hit_test_cached_position(point(caret.origin.x, target_y))
+      .unwrap_or_else(|| layout.hit_test(point(caret.origin.x, target_y)));
     self.move_to_offset(target, extend, cx);
   }
 
@@ -1339,7 +1448,7 @@ impl RichTextEditor {
           paragraph: caret.paragraph + 1,
           byte: 0,
         };
-        if let Some(target) = self.document.paragraphs.get_mut(caret.paragraph) {
+        if let Some(target) = paragraphs_mut(&mut self.document).get_mut(caret.paragraph) {
           target.style = paragraph.style;
           bump_paragraph_version(target);
         }
@@ -1549,13 +1658,13 @@ impl RichTextEditor {
 
   fn move_vertical(&mut self, dir: VDir, extend: bool, cx: &mut Context<Self>) {
     let head = self.selection.head;
-    // Compute the new head while only reading from `self.last_layout`. Use a
-    // local scope so we can mutate other fields afterwards without conflict.
+    // Compute the new head while only reading layout snapshots. Use a local
+    // scope so we can mutate selection afterwards without borrow conflicts.
     let (new_head, used_goal_x) = {
-      let Some(layout) = self.last_layout.as_ref() else {
+      let Some(layout) = self.layout_for_offset(head) else {
         return;
       };
-      let Some((p_ix, l_ix)) = locate_line(layout, head) else {
+      let Some((p_ix, l_ix)) = locate_line(&layout, head) else {
         // The caret can briefly point at a paragraph that the virtual list has
         // not mounted yet. Keep the paragraph moving into view so the next
         // layout frame can restore normal visual-line navigation.
@@ -1568,14 +1677,10 @@ impl RichTextEditor {
         .goal_x
         .unwrap_or_else(|| x_for_byte(cur_line, head.byte));
       let next = match dir {
-        VDir::Up => find_line_above(layout, p_ix, l_ix),
-        VDir::Down => find_line_below(layout, p_ix, l_ix),
+        VDir::Up => find_line_above(&layout, p_ix, l_ix),
+        VDir::Down => find_line_below(&layout, p_ix, l_ix),
       };
       let Some((np, nl)) = next else {
-        // `last_layout` only contains mounted virtual-list rows. At the top or
-        // bottom edge of that mounted slice, move through the document model
-        // and reveal the adjacent paragraph instead of treating the edge as
-        // the start/end of the file.
         return self.move_to_adjacent_unmounted_paragraph(dir, extend, cur_x, cx);
       };
       let target_line = &layout.paragraphs[np].lines[nl];
@@ -1606,9 +1711,29 @@ impl RichTextEditor {
     let Some(target_paragraph) = self.adjacent_document_paragraph(head.paragraph, dir) else {
       return;
     };
-    let target_byte = match dir {
-      VDir::Up => paragraph_text_len(&self.document.paragraphs[target_paragraph]),
-      VDir::Down => 0,
+    let target_byte = match self.layout_for_offset(DocumentOffset {
+      paragraph: target_paragraph,
+      byte: 0,
+    }) {
+      Some(layout) => {
+        let Some(paragraph) = paragraph_layout(&layout, target_paragraph) else {
+          return;
+        };
+        let line = match dir {
+          VDir::Up => paragraph.lines.last(),
+          VDir::Down => paragraph.lines.first(),
+        };
+        line
+          .map(|line| line.hit_test_x(goal_x))
+          .unwrap_or_else(|| match dir {
+            VDir::Up => paragraph_text_len(&self.document.paragraphs[target_paragraph]),
+            VDir::Down => 0,
+          })
+      },
+      None => match dir {
+        VDir::Up => paragraph_text_len(&self.document.paragraphs[target_paragraph]),
+        VDir::Down => 0,
+      },
     };
     let new_head = DocumentOffset {
       paragraph: target_paragraph,
@@ -1670,7 +1795,12 @@ impl RichTextEditor {
     } else {
       self.selection.head.paragraph.min(paragraph_count - 1)
     };
-    let mut layout = build_single_paragraph_layout(&self.document, paragraph_ix, width, None, window, cx);
+    if let Some(layout) = self.document_layout_for_paragraph(paragraph_ix, width) {
+      return layout.hit_test(position);
+    }
+    let layout = Rc::new(build_single_paragraph_layout(&self.document, paragraph_ix, width, None, window, cx));
+    self.cache_paragraph_layout(paragraph_ix, width, layout.clone());
+    let mut layout = layout.as_ref().clone();
     let row_top = if self.height_prefix_index.len() == paragraph_count {
       self.height_prefix_index.item_top(paragraph_ix)
     } else {
@@ -1690,10 +1820,10 @@ impl RichTextEditor {
   fn move_line_edge(&mut self, start: bool, extend: bool, cx: &mut Context<Self>) {
     let head = self.selection.head;
     let new_byte = {
-      let Some(layout) = self.last_layout.as_ref() else {
+      let Some(layout) = self.layout_for_offset(head) else {
         return;
       };
-      let Some((p_ix, l_ix)) = locate_line(layout, head) else {
+      let Some((p_ix, l_ix)) = locate_line(&layout, head) else {
         return;
       };
       let line = &layout.paragraphs[p_ix].lines[l_ix];
@@ -1957,13 +2087,13 @@ impl RichTextEditor {
   }
 
   fn scroll_head_into_view(&self) {
-    let Some(layout) = self.last_layout.as_ref() else {
+    let Some(layout) = self.layout_for_offset(self.selection.head) else {
       return;
     };
     let Some(bounds) = layout.bounds else {
       return;
     };
-    let Some(caret) = caret_bounds(layout, self.selection.head, bounds.origin) else {
+    let Some(caret) = caret_bounds(&layout, self.selection.head, bounds.origin) else {
       return;
     };
     scroll_rect_into_view(&self.scroll_handle, caret, px(4.0));
