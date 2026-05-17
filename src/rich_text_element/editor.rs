@@ -131,6 +131,48 @@ pub enum SaveStatus {
   SaveFailed(String),
 }
 
+/// Describes whether a toolbar-visible style is consistently applied across
+/// the current selection. `Mixed` lets UI controls show an indeterminate state
+/// when the selection spans differently styled text or paragraphs.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SelectionState<T> {
+  None,
+  Uniform(T),
+  Mixed,
+}
+
+impl<T> SelectionState<T> {
+  pub fn is_mixed(&self) -> bool {
+    matches!(self, Self::Mixed)
+  }
+}
+
+fn selection_state_from_values<T: Eq>(values: impl IntoIterator<Item = T>) -> SelectionState<T> {
+  let mut values = values.into_iter();
+  let Some(first) = values.next() else {
+    return SelectionState::None;
+  };
+  if values.any(|value| value != first) {
+    SelectionState::Mixed
+  } else {
+    SelectionState::Uniform(first)
+  }
+}
+
+/// Formatting state for the current caret or selection.
+///
+/// This is intentionally a read-only snapshot. Toolbars can render buttons,
+/// menus, or segmented controls from this, then call the existing mutation
+/// methods on `RichTextEditor` when the user chooses a style.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RichTextEditorStyleState {
+  pub paragraph_style: SelectionState<ParagraphStyle>,
+  pub cite: SelectionState<bool>,
+  pub underline: SelectionState<bool>,
+  pub emphasis: SelectionState<bool>,
+  pub highlight: SelectionState<Option<HighlightStyle>>,
+}
+
 pub struct RichTextEditor {
   pub(super) focus_handle: FocusHandle,
   focus_subscriptions: Vec<Subscription>,
@@ -208,6 +250,31 @@ impl RichTextEditor {
 
   pub fn save_status(&self) -> &SaveStatus {
     &self.save_status
+  }
+
+  pub fn selection(&self) -> &EditorSelection {
+    &self.selection
+  }
+
+  pub fn style_state(&self) -> RichTextEditorStyleState {
+    let range = self.selection.normalized();
+    let paragraph_style = selection_state_from_values((range.start.paragraph..=range.end.paragraph).filter_map(|paragraph_ix| {
+      self.document.paragraphs.get(paragraph_ix).map(|paragraph| paragraph.style)
+    }));
+
+    let run_styles = if self.selection.is_caret() {
+      vec![self.styles_at_caret()]
+    } else {
+      selection_run_styles(&self.document, range)
+    };
+
+    RichTextEditorStyleState {
+      paragraph_style,
+      cite: selection_state_from_values(run_styles.iter().map(|styles| styles.cite)),
+      underline: selection_state_from_values(run_styles.iter().map(|styles| styles.direct_underline || styles.style_underline)),
+      emphasis: selection_state_from_values(run_styles.iter().map(|styles| styles.emphasis)),
+      highlight: selection_state_from_values(run_styles.iter().map(|styles| styles.highlight)),
+    }
   }
 
   pub fn has_unsaved_changes(&self) -> bool {
