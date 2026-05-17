@@ -126,9 +126,10 @@ fn serialize_db8(document: &Document) -> io::Result<Vec<u8>> {
   let mut bytes = Vec::new();
   bytes.extend_from_slice(DB8_MAGIC);
   bytes.extend_from_slice(&DB8_VERSION.to_le_bytes());
-  let text = document_text_slice(document, 0..document.text.byte_len());
-  write_u64(&mut bytes, text.len() as u64);
-  bytes.extend_from_slice(text.as_bytes());
+  write_u64(&mut bytes, document.text.byte_len() as u64);
+  for chunk in document.text.chunks() {
+    bytes.extend_from_slice(chunk.as_bytes());
+  }
   write_u64(&mut bytes, document.paragraphs.len() as u64);
   for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
     let range = paragraph_byte_range(document, paragraph_ix);

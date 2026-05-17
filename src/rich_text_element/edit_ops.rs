@@ -601,6 +601,28 @@ pub(super) fn clear_whole_paragraph_formatting(document: &mut Document, paragrap
   }
 }
 
+pub(super) fn insert_rich_fragment_at(document: &mut Document, offset: DocumentOffset, fragment: &RichClipboardFragment) -> DocumentOffset {
+  let mut caret = offset;
+  for (paragraph_ix, paragraph) in fragment.paragraphs.iter().enumerate() {
+    if paragraph_ix > 0 {
+      split_paragraph_at(document, caret.paragraph, caret.byte);
+      caret = DocumentOffset {
+        paragraph: caret.paragraph + 1,
+        byte: 0,
+      };
+      if let Some(target) = paragraphs_mut(document).get_mut(caret.paragraph) {
+        target.style = paragraph.style;
+        bump_paragraph_version(target);
+      }
+    }
+    for run in &paragraph.runs {
+      insert_text_at(document, caret.paragraph, caret.byte, &run.text, run.styles);
+      caret.byte += run.text.len();
+    }
+  }
+  caret
+}
+
 pub(super) fn mutate_runs_in_range(document: &mut Document, range: Range<DocumentOffset>, mut mutate: impl FnMut(&mut RunStyles)) {
   for paragraph_ix in range.start.paragraph..=range.end.paragraph {
     let paragraph = &mut paragraphs_mut(document)[paragraph_ix];

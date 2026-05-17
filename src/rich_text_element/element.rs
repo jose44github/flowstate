@@ -94,7 +94,7 @@ impl Element for RichTextDocumentElement {
     cx: &mut App,
   ) {
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(layout.as_ref(), None, false, window, cx);
+      paint_layout(layout.as_ref(), None, None, false, px(1.0), window, cx);
     }
   }
 }
@@ -178,18 +178,21 @@ impl Element for VirtualParagraphElement {
     window: &mut Window,
     cx: &mut App,
   ) {
-    let (selection, show_caret) = {
+    let (selection, drag_selection, show_caret, caret_width) = {
       let editor = self.editor.read(cx);
+      let drag_selection = editor.drag_source_selection();
       (
         editor.selection.clone(),
+        drag_selection,
         editor.selection.is_caret()
           && editor.selection.head.paragraph == self.paragraph_ix
           && editor.caret_visible
           && editor.focus_handle.is_focused(window),
+        editor.caret_paint_width(),
       )
     };
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(layout.as_ref(), Some(&selection), show_caret, window, cx);
+      paint_layout(layout.as_ref(), Some(&selection), drag_selection.as_ref(), show_caret, caret_width, window, cx);
     }
   }
 }

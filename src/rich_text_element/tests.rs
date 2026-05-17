@@ -185,7 +185,7 @@ fn run_style_full_selection_toggle_policy() {
 }
 
 #[test]
-fn span_patch_undo_redo_round_trip_for_text_and_paragraph_split() {
+fn history_operation_round_trip_for_text_and_paragraph_split() {
   let mut document = document_from_input(
     DocumentTheme::default(),
     vec![InputParagraph {
@@ -199,15 +199,59 @@ fn span_patch_undo_redo_round_trip_for_text_and_paragraph_split() {
   let after = capture_document_span(&document, 0..2);
   assert_eq!(document.paragraphs.len(), 2);
 
-  apply_document_span_replacement(&mut document, &after, &before);
+  let operation = EditOperation::ReplaceParagraphSpan { before, after };
+  operation.undo(&mut document);
   assert_eq!(document.paragraphs.len(), 1);
   assert_eq!(paragraph_text(&document, 0), "alpha beta");
 
-  apply_document_span_replacement(&mut document, &before, &after);
+  operation.redo(&mut document);
   assert_eq!(document.paragraphs.len(), 2);
   assert_eq!(paragraph_text(&document, 0), "alpha");
   assert_eq!(paragraph_text(&document, 1), "NEW  beta");
   assert!(document.paragraphs[1].runs[0].styles.emphasis);
+}
+
+#[test]
+fn dragged_text_drop_offset_adjusts_after_source_deletion() {
+  let source = DocumentOffset { paragraph: 0, byte: 2 }..DocumentOffset { paragraph: 0, byte: 5 };
+  assert_eq!(
+    adjust_drop_after_source_delete(DocumentOffset { paragraph: 0, byte: 8 }, source.clone()),
+    DocumentOffset { paragraph: 0, byte: 5 }
+  );
+  assert_eq!(
+    adjust_drop_after_source_delete(DocumentOffset { paragraph: 0, byte: 1 }, source),
+    DocumentOffset { paragraph: 0, byte: 1 }
+  );
+
+  let cross = DocumentOffset { paragraph: 1, byte: 2 }..DocumentOffset { paragraph: 3, byte: 4 };
+  assert_eq!(
+    adjust_drop_after_source_delete(DocumentOffset { paragraph: 5, byte: 7 }, cross),
+    DocumentOffset { paragraph: 3, byte: 7 }
+  );
+}
+
+#[test]
+fn drag_drop_history_capture_covers_source_and_drop() {
+  let document = document_from_input(
+    DocumentTheme::default(),
+    vec![
+      InputParagraph {
+        style: ParagraphStyle::Normal,
+        runs: vec![plain("source")],
+      },
+      InputParagraph {
+        style: ParagraphStyle::Normal,
+        runs: vec![plain("middle")],
+      },
+      InputParagraph {
+        style: ParagraphStyle::Normal,
+        runs: vec![plain("drop")],
+      },
+    ],
+  );
+  let source = DocumentOffset { paragraph: 0, byte: 1 }..DocumentOffset { paragraph: 0, byte: 4 };
+  let drop = DocumentOffset { paragraph: 2, byte: 2 };
+  assert_eq!(drag_drop_capture_range(&document, source, drop), 0..3);
 }
 
 #[test]

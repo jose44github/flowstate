@@ -116,13 +116,53 @@ struct EditRecord {
   before_generation: u64,
   after_selection: EditorSelection,
   after_generation: u64,
-  patch: DocumentPatch,
+  operations: Vec<EditOperation>,
 }
 
 #[derive(Clone, Debug)]
-struct DocumentPatch {
-  before: DocumentSpan,
-  after: DocumentSpan,
+pub(super) enum EditOperation {
+  ReplaceParagraphSpan {
+    before: DocumentSpan,
+    after: DocumentSpan,
+  },
+  MoveRichText {
+    source_range: Range<DocumentOffset>,
+    adjusted_drop: DocumentOffset,
+    inserted_range: Range<DocumentOffset>,
+    fragment: RichClipboardFragment,
+  },
+}
+
+impl EditOperation {
+  pub(super) fn undo(&self, document: &mut Document) {
+    match self {
+      Self::ReplaceParagraphSpan { before, after } => apply_document_span_replacement(document, after, before),
+      Self::MoveRichText {
+        source_range,
+        inserted_range,
+        fragment,
+        ..
+      } => {
+        delete_cross_paragraph_range(document, inserted_range.clone());
+        insert_rich_fragment_at(document, source_range.start, fragment);
+      },
+    }
+  }
+
+  pub(super) fn redo(&self, document: &mut Document) {
+    match self {
+      Self::ReplaceParagraphSpan { before, after } => apply_document_span_replacement(document, before, after),
+      Self::MoveRichText {
+        source_range,
+        adjusted_drop,
+        fragment,
+        ..
+      } => {
+        delete_cross_paragraph_range(document, source_range.clone());
+        insert_rich_fragment_at(document, *adjusted_drop, fragment);
+      },
+    }
+  }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -168,6 +208,52 @@ fn selection_state_from_values<T: Eq>(values: impl IntoIterator<Item = T>) -> Se
   }
 }
 
+fn offset_in_range(offset: DocumentOffset, range: Range<DocumentOffset>) -> bool {
+  range.start <= offset && offset <= range.end
+}
+
+fn point_distance_squared(a: Point<Pixels>, b: Point<Pixels>) -> f32 {
+  let ax: f32 = a.x.into();
+  let ay: f32 = a.y.into();
+  let bx: f32 = b.x.into();
+  let by: f32 = b.y.into();
+  let dx = ax - bx;
+  let dy = ay - by;
+  dx * dx + dy * dy
+}
+
+pub(super) fn adjust_drop_after_source_delete(drop: DocumentOffset, source: Range<DocumentOffset>) -> DocumentOffset {
+  if drop <= source.start {
+    return drop;
+  }
+  if source.start.paragraph == source.end.paragraph {
+    if drop.paragraph == source.start.paragraph {
+      return DocumentOffset {
+        paragraph: drop.paragraph,
+        byte: drop.byte.saturating_sub(source.end.byte - source.start.byte),
+      };
+    }
+    return drop;
+  }
+  if drop.paragraph <= source.end.paragraph {
+    return source.start;
+  }
+  DocumentOffset {
+    paragraph: drop.paragraph - (source.end.paragraph - source.start.paragraph),
+    byte: drop.byte,
+  }
+}
+
+pub(super) fn drag_drop_capture_range(document: &Document, source: Range<DocumentOffset>, drop: DocumentOffset) -> Range<usize> {
+  let paragraph_count = document.paragraphs.len();
+  if paragraph_count == 0 {
+    return 0..0;
+  }
+  let start = source.start.paragraph.min(drop.paragraph).saturating_sub(1);
+  let end = (source.end.paragraph.max(drop.paragraph) + 2).min(paragraph_count).max(start + 1);
+  start..end
+}
+
 /// Formatting state for the current caret or selection.
 ///
 /// This is intentionally a read-only snapshot. Toolbars can render buttons,
@@ -200,6 +286,18 @@ struct ParagraphLayoutCacheEntry {
 enum PasteCache {
   Rich { metadata: String, fragment: RichClipboardFragment },
   Plain { text: String },
+}
+
+#[derive(Clone)]
+struct PendingTextDrag {
+  start_position: Point<Pixels>,
+  source_selection: EditorSelection,
+}
+
+#[derive(Clone)]
+struct ActiveTextDrag {
+  source_range: Range<DocumentOffset>,
+  fragment: RichClipboardFragment,
 }
 
 #[derive(Default)]
@@ -297,6 +395,8 @@ pub struct RichTextEditor {
   selecting: bool,
   drag_granularity: SelectionGranularity,
   last_drag_position: Option<Point<Pixels>>,
+  pending_text_drag: Option<PendingTextDrag>,
+  active_text_drag: Option<ActiveTextDrag>,
   autoscroll_active: bool,
   pub(super) caret_visible: bool,
   caret_blink_active: bool,
@@ -342,6 +442,8 @@ impl RichTextEditor {
       selecting: false,
       drag_granularity: SelectionGranularity::Character,
       last_drag_position: None,
+      pending_text_drag: None,
+      active_text_drag: None,
       autoscroll_active: false,
       caret_visible: true,
       caret_blink_active: false,
@@ -368,6 +470,21 @@ impl RichTextEditor {
 
   pub fn selection(&self) -> &EditorSelection {
     &self.selection
+  }
+
+  pub(super) fn drag_source_selection(&self) -> Option<EditorSelection> {
+    self.active_text_drag.as_ref().map(|drag| EditorSelection {
+      anchor: drag.source_range.start,
+      head: drag.source_range.end,
+    })
+  }
+
+  pub(super) fn caret_paint_width(&self) -> Pixels {
+    if self.active_text_drag.is_some() {
+      px(2.0)
+    } else {
+      px(1.0)
+    }
   }
 
   pub fn find_text(&self, query: &str) -> Vec<Range<DocumentOffset>> {
@@ -435,7 +552,9 @@ impl RichTextEditor {
       return;
     };
     let restored_generation = record.before_generation;
-    apply_document_span_replacement(&mut self.document, &record.patch.after, &record.patch.before);
+    for operation in record.operations.iter().rev() {
+      operation.undo(&mut self.document);
+    }
     self.selection = record.before_selection.clone();
     self.edit_generation = restored_generation;
     self.redo_stack.push(record);
@@ -447,7 +566,9 @@ impl RichTextEditor {
       return;
     };
     let restored_generation = record.after_generation;
-    apply_document_span_replacement(&mut self.document, &record.patch.before, &record.patch.after);
+    for operation in &record.operations {
+      operation.redo(&mut self.document);
+    }
     self.selection = record.after_selection.clone();
     self.edit_generation = restored_generation;
     self.undo_stack.push(record);
@@ -935,10 +1056,19 @@ impl RichTextEditor {
   }
 
   fn apply_document_edit(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Self, &mut Context<Self>)) {
+    self.apply_document_edit_with_capture_range(cx, None, edit);
+  }
+
+  fn apply_document_edit_with_capture_range(
+    &mut self,
+    cx: &mut Context<Self>,
+    capture_range: Option<Range<usize>>,
+    edit: impl FnOnce(&mut Self, &mut Context<Self>),
+  ) {
     let timing = Instant::now();
     let before_selection = self.selection.clone();
     let before_paragraph_count = self.document.paragraphs.len();
-    let before_range = self.edit_capture_range();
+    let before_range = capture_range.unwrap_or_else(|| self.edit_capture_range());
     let before_span = capture_document_span(&self.document, before_range);
     edit(self, cx);
     let paragraph_delta = self.document.paragraphs.len() as isize - before_paragraph_count as isize;
@@ -989,10 +1119,10 @@ impl RichTextEditor {
       before_generation,
       after_selection: self.selection.clone(),
       after_generation,
-      patch: DocumentPatch {
+      operations: vec![EditOperation::ReplaceParagraphSpan {
         before: before_span,
         after: after_span,
-      },
+      }],
     };
     self.undo_stack.push(record);
     self.redo_stack.clear();
@@ -1440,24 +1570,7 @@ impl RichTextEditor {
     if !self.selection.is_caret() {
       self.delete_selection_internal();
     }
-    let mut caret = self.selection.head;
-    for (paragraph_ix, paragraph) in fragment.paragraphs.iter().enumerate() {
-      if paragraph_ix > 0 {
-        split_paragraph_at(&mut self.document, caret.paragraph, caret.byte);
-        caret = DocumentOffset {
-          paragraph: caret.paragraph + 1,
-          byte: 0,
-        };
-        if let Some(target) = paragraphs_mut(&mut self.document).get_mut(caret.paragraph) {
-          target.style = paragraph.style;
-          bump_paragraph_version(target);
-        }
-      }
-      for run in &paragraph.runs {
-        insert_text_at(&mut self.document, caret.paragraph, caret.byte, &run.text, run.styles);
-        caret.byte += run.text.len();
-      }
-    }
+    let caret = insert_rich_fragment_at(&mut self.document, self.selection.head, &fragment);
     self.selection = EditorSelection { anchor: caret, head: caret };
     self.after_text_mutation(cx);
   }
@@ -1983,10 +2096,23 @@ impl RichTextEditor {
 
   fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
     window.focus(&self.focus_handle);
-    self.selecting = true;
     self.last_drag_position = Some(event.position);
     self.goal_x = None;
     let offset = self.hit_test_document_position(event.position, window, cx);
+    if event.click_count <= 1 && !event.modifiers.shift && !self.selection.is_caret() && offset_in_range(offset, self.selection.normalized()) {
+      self.selecting = false;
+      self.pending_text_drag = Some(PendingTextDrag {
+        start_position: event.position,
+        source_selection: self.selection.clone(),
+      });
+      self.active_text_drag = None;
+      self.reset_caret_blink(cx);
+      cx.notify();
+      return;
+    }
+    self.pending_text_drag = None;
+    self.active_text_drag = None;
+    self.selecting = true;
     self.drag_granularity = match event.click_count {
       0 | 1 => SelectionGranularity::Character,
       2 => SelectionGranularity::Word,
@@ -2009,6 +2135,33 @@ impl RichTextEditor {
   }
 
   fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(pending_drag) = self.pending_text_drag.clone() {
+      self.last_drag_position = Some(event.position);
+      if point_distance_squared(pending_drag.start_position, event.position) < 16.0 {
+        return;
+      }
+      let source_range = pending_drag.source_selection.normalized();
+      self.active_text_drag = Some(ActiveTextDrag {
+        source_range: source_range.clone(),
+        fragment: selected_rich_fragment(&self.document, source_range),
+      });
+      self.selection = pending_drag.source_selection;
+      self.pending_text_drag = None;
+    }
+    if self.active_text_drag.is_some() {
+      self.last_drag_position = Some(event.position);
+      self.autoscroll_for_drag(event.position);
+      self.ensure_drag_autoscroll_task(cx);
+      let drop = self.hit_test_document_position(event.position, window, cx);
+      let selection = EditorSelection { anchor: drop, head: drop };
+      if self.selection != selection {
+        self.selection = selection;
+        self.scroll_head_into_view();
+        self.reset_caret_blink(cx);
+      }
+      cx.notify();
+      return;
+    }
     if !self.selecting {
       return;
     }
@@ -2027,11 +2180,59 @@ impl RichTextEditor {
     }
   }
 
-  fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+  fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(active_drag) = self.active_text_drag.take() {
+      let drop = self.hit_test_document_position(event.position, window, cx);
+      self.move_rich_text_fragment(active_drag, drop, cx);
+    }
+    self.pending_text_drag = None;
     self.selecting = false;
     self.drag_granularity = SelectionGranularity::Character;
     self.last_drag_position = None;
     self.autoscroll_active = false;
+  }
+
+  fn move_rich_text_fragment(&mut self, drag: ActiveTextDrag, drop: DocumentOffset, cx: &mut Context<Self>) {
+    if offset_in_range(drop, drag.source_range.clone()) {
+      self.selection = EditorSelection {
+        anchor: drag.source_range.start,
+        head: drag.source_range.end,
+      };
+      cx.notify();
+      return;
+    }
+    let before_selection = EditorSelection {
+      anchor: drag.source_range.start,
+      head: drag.source_range.end,
+    };
+    let before_generation = self.edit_generation;
+    let after_generation = self.next_edit_generation;
+    self.next_edit_generation = self.next_edit_generation.wrapping_add(1);
+    let source_range = drag.source_range.clone();
+    let adjusted_drop = adjust_drop_after_source_delete(drop, source_range.clone());
+    self.selection = before_selection.clone();
+    self.delete_selection_internal();
+    let inserted_start = adjusted_drop;
+    let inserted_end = insert_rich_fragment_at(&mut self.document, inserted_start, &drag.fragment);
+    self.selection = EditorSelection {
+      anchor: inserted_end,
+      head: inserted_end,
+    };
+    self.undo_stack.push(EditRecord {
+      before_selection,
+      before_generation,
+      after_selection: self.selection.clone(),
+      after_generation,
+      operations: vec![EditOperation::MoveRichText {
+        source_range,
+        adjusted_drop,
+        inserted_range: inserted_start..inserted_end,
+        fragment: drag.fragment,
+      }],
+    });
+    self.redo_stack.clear();
+    self.after_text_mutation(cx);
+    self.mark_document_changed(after_generation, cx);
   }
 
   fn reset_caret_blink(&mut self, cx: &mut Context<Self>) {

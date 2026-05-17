@@ -36,6 +36,8 @@ use word_boundary::*;
 // module's namespace. Outside `#[cfg(test)]` they would be unused.
 #[cfg(test)]
 use demo::{document_from_input, plain, run};
+#[cfg(test)]
+use editor::{EditOperation, adjust_drop_after_source_delete, drag_drop_capture_range};
 
 use std::time::Instant;
 

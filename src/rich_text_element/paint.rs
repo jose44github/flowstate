@@ -4,7 +4,15 @@ use gpui::{App, Background, Bounds, Pixels, Point, ScrollHandle, Window, black, 
 
 use super::*;
 
-pub(super) fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, show_caret: bool, window: &mut Window, cx: &mut App) {
+pub(super) fn paint_layout(
+  layout: &LayoutState,
+  selection: Option<&EditorSelection>,
+  drag_selection: Option<&EditorSelection>,
+  show_caret: bool,
+  caret_width: Pixels,
+  window: &mut Window,
+  cx: &mut App,
+) {
   let timing = Instant::now();
   let Some(bounds) = layout.bounds else {
     return;
@@ -40,6 +48,9 @@ pub(super) fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelect
   if let Some(selection) = selection {
     paint_selection(layout, selection, bounds.origin, content_mask, visible_range.clone(), window);
   }
+  if let Some(selection) = drag_selection {
+    paint_selection(layout, selection, bounds.origin, content_mask, visible_range.clone(), window);
+  }
   for paragraph in &layout.paragraphs[visible_range.clone()] {
     if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
       continue;
@@ -70,9 +81,10 @@ pub(super) fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelect
   if let Some(selection) = selection
     && selection.is_caret()
     && show_caret
-    && let Some(caret) = caret_bounds(layout, selection.head, bounds.origin)
+    && let Some(mut caret) = caret_bounds(layout, selection.head, bounds.origin)
     && caret.intersects(&content_mask)
   {
+    caret.size.width = caret_width;
     window.paint_quad(fill(snap_vertical_rule_to_device_pixels(caret, window), black()));
   }
   log_timing("paint layout", timing, format!("visible_paragraphs={visible_count}"));
