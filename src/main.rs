@@ -1,7 +1,8 @@
 mod rich_text_element;
 
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, path::PathBuf, rc::Rc};
 
+use clap::Parser;
 use gpui::{
   App, Application, Bounds, Context, IntoElement, KeyBinding, PromptButton, PromptLevel, Render, Window, WindowBounds, WindowOptions, div,
   prelude::*, px, rgb, size,
@@ -28,30 +29,35 @@ impl Render for DemoApp {
   }
 }
 
+/// Command line arguments for the debate processor.
+///
+/// `clap`'s derive API turns this struct into a parser: it generates
+/// `--help`/`-h`, validates input, and fills in defaults for us. We just
+/// describe the shape of the CLI and read the resulting fields.
+#[derive(Parser)]
+#[command(name = "debateprocessor", about = "A rich-text editor for debate documents.")]
+struct Cli {
+  /// Path to the `.db8` document to open. Defaults to `data/demo.db8` when omitted.
+  #[arg(value_name = "PATH", default_value = "data/demo.db8")]
+  path: PathBuf,
+
+  /// Write a freshly generated demo document to `data/demo.db8` and exit.
+  /// Mutually exclusive with providing a `PATH`.
+  #[arg(long, conflicts_with = "path")]
+  write_demo_db8: bool,
+}
+
 fn main() {
-  let mut args = std::env::args().skip(1);
-  let document_path = match args.next() {
-    Some(arg) if arg == "--write-demo-db8" => {
-      if args.next().is_some() {
-        eprintln!("usage: debateprocessor [path/to/document.db8]");
-        std::process::exit(2);
-      }
-      write_db8("data/demo.db8", &demo_document()).expect("failed to write data/demo.db8");
-      return;
-    },
-    Some(arg) if arg == "-h" || arg == "--help" => {
-      eprintln!("usage: debateprocessor [path/to/document.db8]");
-      return;
-    },
-    Some(arg) => {
-      if args.next().is_some() {
-        eprintln!("usage: debateprocessor [path/to/document.db8]");
-        std::process::exit(2);
-      }
-      std::path::PathBuf::from(arg)
-    },
-    None => std::path::PathBuf::from("data/demo.db8"),
-  };
+  let cli = Cli::parse();
+
+  // `--write-demo-db8` is a one-shot maintenance command: regenerate the
+  // bundled demo file and bail out before opening any window.
+  if cli.write_demo_db8 {
+    write_db8("data/demo.db8", &demo_document()).expect("failed to write data/demo.db8");
+    return;
+  }
+
+  let document_path = cli.path;
 
   Application::new().run(|cx: &mut App| {
     gpui_component::init(cx);
@@ -124,6 +130,7 @@ fn main() {
         ..Default::default()
       },
       |window, cx| {
+        window.set_window_title("Odrenrir - Debate Processor");
         let document =
           load_or_create_document(&document_path).unwrap_or_else(|error| panic!("failed to open {}: {error}", document_path.display()));
         let editor = cx.new(|cx| RichTextEditor::new_with_path(document, Some(document_path), cx));

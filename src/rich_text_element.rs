@@ -1,23 +1,24 @@
 use std::{
   cell::RefCell,
-  collections::hash_map::DefaultHasher,
+  collections::{HashMap, hash_map::DefaultHasher},
   fs,
   hash::{Hash, Hasher},
   io::{self, Cursor, Read, Write},
   ops::Range,
   path::{Path, PathBuf},
   rc::Rc,
-  time::Duration,
+  time::{Duration, Instant},
 };
 
 use crop::Rope;
 use gpui::{
   App, AvailableSpace, Background, Bounds, ClipboardItem, Context, CursorStyle, Element, ElementId, Entity, FocusHandle, Focusable, FontStyle,
   FontWeight, GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-  MouseUpEvent, Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Size, StatefulInteractiveElement, Style, Subscription,
-  TextRun as GpuiTextRun, Timer, Window, actions, black, div, fill, font, hsla, point, prelude::*, px, rgb, size,
+  MouseUpEvent, Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Size, Style, Subscription, TextRun as GpuiTextRun, Timer, Window,
+  actions, black, div, fill, font, hsla, point, prelude::*, px, rgb, size,
 };
-use gpui_component::scroll::{Scrollbar, ScrollbarShow};
+use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
+use gpui_component::{VirtualListScrollHandle, v_virtual_list};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use unicode_segmentation::GraphemeCursor;
@@ -100,7 +101,68 @@ struct RichClipboardFragment {
 pub struct Document {
   pub text: Rope,
   pub paragraphs: Vec<Paragraph>,
+  offset_index: ParagraphOffsetIndex,
   pub theme: DocumentTheme,
+}
+
+#[derive(Clone, Debug)]
+struct ParagraphOffsetIndex {
+  widths: Vec<usize>,
+  tree: Vec<usize>,
+}
+
+impl ParagraphOffsetIndex {
+  fn new(paragraphs: &[Paragraph]) -> Self {
+    let mut index = Self {
+      widths: paragraph_widths(paragraphs),
+      tree: vec![0; paragraphs.len() + 1],
+    };
+    for ix in 0..index.widths.len() {
+      index.add(ix, index.widths[ix] as isize);
+    }
+    index
+  }
+
+  fn rebuild(&mut self, paragraphs: &[Paragraph]) {
+    *self = Self::new(paragraphs);
+  }
+
+  fn paragraph_start(&self, paragraph_ix: usize) -> usize {
+    self.prefix_sum(paragraph_ix)
+  }
+
+  fn update_paragraph_width(&mut self, paragraph_ix: usize, paragraphs: &[Paragraph]) {
+    let Some(width) = paragraph_width(paragraphs, paragraph_ix) else {
+      return;
+    };
+    let old_width = self.widths[paragraph_ix];
+    if old_width == width {
+      return;
+    }
+    self.widths[paragraph_ix] = width;
+    self.add(paragraph_ix, width as isize - old_width as isize);
+  }
+
+  fn add(&mut self, paragraph_ix: usize, delta: isize) {
+    if delta == 0 {
+      return;
+    }
+    let mut ix = paragraph_ix + 1;
+    while ix < self.tree.len() {
+      self.tree[ix] = self.tree[ix].saturating_add_signed(delta);
+      ix += ix & (!ix + 1);
+    }
+  }
+
+  fn prefix_sum(&self, paragraph_count: usize) -> usize {
+    let mut ix = paragraph_count.min(self.widths.len());
+    let mut sum = 0;
+    while ix > 0 {
+      sum += self.tree[ix];
+      ix &= ix - 1;
+    }
+    sum
+  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -325,6 +387,17 @@ pub struct DocumentOffset {
 
 const DB8_MAGIC: &[u8; 4] = b"DB8\0";
 const DB8_VERSION: u32 = 1;
+const TIMING_ENV: &str = "DEBATEPROCESSOR_TIMING";
+
+fn timing_enabled() -> bool {
+  std::env::var_os(TIMING_ENV).is_some()
+}
+
+fn log_timing(label: &str, start: Instant, detail: impl AsRef<str>) {
+  if timing_enabled() {
+    eprintln!("[timing] {label}: {:?} {}", start.elapsed(), detail.as_ref());
+  }
+}
 
 pub fn load_or_create_document(path: impl AsRef<Path>) -> io::Result<Document> {
   let path = path.as_ref();
@@ -340,6 +413,7 @@ pub fn load_or_create_document(path: impl AsRef<Path>) -> io::Result<Document> {
 }
 
 pub fn read_db8(path: impl AsRef<Path>) -> io::Result<Document> {
+  let timing = Instant::now();
   let bytes = fs::read(path)?;
   let mut cursor = Cursor::new(bytes.as_slice());
   let mut magic = [0; 4];
@@ -378,12 +452,19 @@ pub fn read_db8(path: impl AsRef<Path>) -> io::Result<Document> {
     });
   }
 
+  let offset_index = ParagraphOffsetIndex::new(&paragraphs);
   let document = Document {
     text: Rope::from(text),
     paragraphs,
+    offset_index,
     theme: DocumentTheme::default(),
   };
   validate_document(&document)?;
+  log_timing(
+    "db8 read",
+    timing,
+    format!("bytes={} paragraphs={}", document.text.byte_len(), document.paragraphs.len()),
+  );
   Ok(document)
 }
 
@@ -405,10 +486,11 @@ fn serialize_db8(document: &Document) -> io::Result<Vec<u8>> {
   write_u64(&mut bytes, text.len() as u64);
   bytes.extend_from_slice(text.as_bytes());
   write_u64(&mut bytes, document.paragraphs.len() as u64);
-  for paragraph in &document.paragraphs {
+  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
+    let range = paragraph_byte_range(document, paragraph_ix);
     bytes.push(encode_paragraph_style(paragraph.style));
-    write_u64(&mut bytes, paragraph.byte_range.start as u64);
-    write_u64(&mut bytes, paragraph.byte_range.end as u64);
+    write_u64(&mut bytes, range.start as u64);
+    write_u64(&mut bytes, range.end as u64);
     write_u64(&mut bytes, paragraph.runs.len() as u64);
     for run in &paragraph.runs {
       write_u64(&mut bytes, run.len as u64);
@@ -438,28 +520,18 @@ fn recovery_path_for_document(path: &PathBuf) -> PathBuf {
   recovery_path
 }
 
+#[allow(dead_code)]
 fn document_fingerprint(document: &Document) -> u64 {
   let mut hasher = DefaultHasher::new();
   document_text_slice(document, 0..document.text.byte_len()).hash(&mut hasher);
-  for paragraph in &document.paragraphs {
+  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
+    let range = paragraph_byte_range(document, paragraph_ix);
     paragraph.style.hash(&mut hasher);
-    paragraph.byte_range.start.hash(&mut hasher);
-    paragraph.byte_range.end.hash(&mut hasher);
+    range.start.hash(&mut hasher);
+    range.end.hash(&mut hasher);
     paragraph.runs.hash(&mut hasher);
   }
   hasher.finish()
-}
-
-fn documents_equivalent(left: &Document, right: &Document) -> bool {
-  if left.text.byte_len() != right.text.byte_len() || left.paragraphs.len() != right.paragraphs.len() {
-    return false;
-  }
-  for (left, right) in left.paragraphs.iter().zip(&right.paragraphs) {
-    if left.style != right.style || left.byte_range != right.byte_range || left.runs != right.runs {
-      return false;
-    }
-  }
-  document_text_slice(left, 0..left.text.byte_len()) == document_text_slice(right, 0..right.text.byte_len())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -485,10 +557,24 @@ impl EditorSelection {
 
 #[derive(Clone, Debug)]
 struct EditRecord {
-  before_document: Document,
   before_selection: EditorSelection,
-  after_document: Document,
+  before_generation: u64,
   after_selection: EditorSelection,
+  after_generation: u64,
+  patch: DocumentPatch,
+}
+
+#[derive(Clone, Debug)]
+struct DocumentPatch {
+  before: DocumentSpan,
+  after: DocumentSpan,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DocumentSpan {
+  start_paragraph: usize,
+  paragraphs: Vec<Paragraph>,
+  text: String,
 }
 
 #[derive(Clone, Debug)]
@@ -502,13 +588,14 @@ pub enum SaveStatus {
 pub struct RichTextEditor {
   focus_handle: FocusHandle,
   focus_subscriptions: Vec<Subscription>,
-  scroll_handle: ScrollHandle,
+  scroll_handle: VirtualListScrollHandle,
   document_path: Option<PathBuf>,
   recovery_path: Option<PathBuf>,
   document: Document,
   selection: EditorSelection,
   edit_generation: u64,
-  saved_fingerprint: u64,
+  saved_generation: u64,
+  next_edit_generation: u64,
   save_status: SaveStatus,
   undo_stack: Vec<EditRecord>,
   redo_stack: Vec<EditRecord>,
@@ -522,6 +609,10 @@ pub struct RichTextEditor {
   caret_visible: bool,
   caret_blink_active: bool,
   last_layout: Option<Rc<LayoutState>>,
+  paragraph_height_cache: Vec<Option<ParagraphHeightCacheEntry>>,
+  visible_layout_generation: u64,
+  visible_layout_range: Range<usize>,
+  visible_layout_parts: Vec<Option<LaidOutParagraph>>,
   // Remembered horizontal pixel position for vertical caret motion. When the
   // user presses Up/Down repeatedly we want the caret to track a consistent
   // x even on lines whose contents are shorter than the previous one. The
@@ -532,16 +623,18 @@ pub struct RichTextEditor {
 
 impl RichTextEditor {
   pub fn new_with_path(document: Document, document_path: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
+    let paragraph_count = document.paragraphs.len();
     Self {
       focus_handle: cx.focus_handle(),
       focus_subscriptions: Vec::new(),
-      scroll_handle: ScrollHandle::new(),
+      scroll_handle: VirtualListScrollHandle::new(),
       recovery_path: document_path.as_ref().map(recovery_path_for_document),
       document_path,
-      saved_fingerprint: document_fingerprint(&document),
       document,
       selection: EditorSelection::caret(),
       edit_generation: 0,
+      saved_generation: 0,
+      next_edit_generation: 1,
       save_status: SaveStatus::Saved,
       undo_stack: Vec::new(),
       redo_stack: Vec::new(),
@@ -555,6 +648,10 @@ impl RichTextEditor {
       caret_visible: true,
       caret_blink_active: false,
       last_layout: None,
+      paragraph_height_cache: vec![None; paragraph_count],
+      visible_layout_generation: 0,
+      visible_layout_range: 0..0,
+      visible_layout_parts: Vec::new(),
       goal_x: None,
     }
   }
@@ -569,7 +666,7 @@ impl RichTextEditor {
   }
 
   pub fn has_unsaved_changes(&self) -> bool {
-    document_fingerprint(&self.document) != self.saved_fingerprint
+    self.edit_generation != self.saved_generation
   }
 
   pub fn save(&mut self, cx: &mut Context<Self>) -> io::Result<()> {
@@ -581,7 +678,7 @@ impl RichTextEditor {
     let result = write_db8(&path, &self.document);
     match result {
       Ok(()) => {
-        self.saved_fingerprint = document_fingerprint(&self.document);
+        self.saved_generation = self.edit_generation;
         self.save_status = SaveStatus::Saved;
         if let Some(path) = &self.recovery_path {
           let _ = fs::remove_file(path);
@@ -601,8 +698,10 @@ impl RichTextEditor {
     let Some(record) = self.undo_stack.pop() else {
       return;
     };
-    self.document = record.before_document.clone();
+    let restored_generation = record.before_generation;
+    apply_document_span_replacement(&mut self.document, &record.patch.after, &record.patch.before);
     self.selection = record.before_selection.clone();
+    self.edit_generation = restored_generation;
     self.redo_stack.push(record);
     self.after_history_restore(cx);
   }
@@ -611,8 +710,10 @@ impl RichTextEditor {
     let Some(record) = self.redo_stack.pop() else {
       return;
     };
-    self.document = record.after_document.clone();
+    let restored_generation = record.after_generation;
+    apply_document_span_replacement(&mut self.document, &record.patch.before, &record.patch.after);
     self.selection = record.after_selection.clone();
+    self.edit_generation = restored_generation;
     self.undo_stack.push(record);
     self.after_history_restore(cx);
   }
@@ -827,36 +928,36 @@ impl RichTextEditor {
 
   #[allow(dead_code)]
   pub fn apply_run_style_to_selection(&mut self, style: RunStyle, cx: &mut Context<Self>) {
-    let before_document = self.document.clone();
-    let before_selection = self.selection.clone();
     if self.selection.is_caret() {
       return;
     }
-    let range = self.selection.normalized();
-    for paragraph_ix in range.start.paragraph..=range.end.paragraph {
-      let start = if paragraph_ix == range.start.paragraph { range.start.byte } else { 0 };
-      let end = if paragraph_ix == range.end.paragraph {
-        range.end.byte
-      } else {
-        paragraph_text_len(&self.document.paragraphs[paragraph_ix])
-      };
-      apply_style_to_paragraph_range(&mut self.document, paragraph_ix, start..end, style);
-    }
-    self.finish_document_edit(before_document, before_selection, cx);
+    self.apply_document_edit(cx, |editor, _| {
+      let range = editor.selection.normalized();
+      for paragraph_ix in range.start.paragraph..=range.end.paragraph {
+        let start = if paragraph_ix == range.start.paragraph { range.start.byte } else { 0 };
+        let end = if paragraph_ix == range.end.paragraph {
+          range.end.byte
+        } else {
+          paragraph_text_len(&editor.document.paragraphs[paragraph_ix])
+        };
+        apply_style_to_paragraph_range(&mut editor.document, paragraph_ix, start..end, style);
+      }
+    });
   }
 
   #[allow(dead_code)]
   pub fn set_paragraph_style_for_selection(&mut self, style: ParagraphStyle, cx: &mut Context<Self>) {
-    let before_document = self.document.clone();
-    let before_selection = self.selection.clone();
-    let range = self.selection.normalized();
-    for paragraph_ix in range.start.paragraph..=range.end.paragraph {
-      if let Some(paragraph) = self.document.paragraphs.get_mut(paragraph_ix) {
-        paragraph.style = style;
-        bump_paragraph_version(paragraph);
+    self.apply_document_edit(cx, |editor, _| {
+      let range = editor.selection.normalized();
+      for paragraph_ix in range.start.paragraph..=range.end.paragraph {
+        if let Some(paragraph) = editor.document.paragraphs.get_mut(paragraph_ix) {
+          if paragraph.style != style {
+            paragraph.style = style;
+            bump_paragraph_version(paragraph);
+          }
+        }
       }
-    }
-    self.finish_document_edit(before_document, before_selection, cx);
+    });
   }
 
   // -------- Action handlers (bound to keystrokes in main.rs) -----------
@@ -1029,29 +1130,72 @@ impl RichTextEditor {
   }
 
   fn apply_document_edit(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Self, &mut Context<Self>)) {
-    let before_document = self.document.clone();
+    let timing = Instant::now();
     let before_selection = self.selection.clone();
+    let before_paragraph_count = self.document.paragraphs.len();
+    let before_range = self.edit_capture_range();
+    let before_span = capture_document_span(&self.document, before_range);
     edit(self, cx);
-    self.finish_document_edit(before_document, before_selection, cx);
+    let paragraph_delta = self.document.paragraphs.len() as isize - before_paragraph_count as isize;
+    let after_count = before_span
+      .paragraphs
+      .len()
+      .saturating_add_signed(paragraph_delta)
+      .min(
+        self
+          .document
+          .paragraphs
+          .len()
+          .saturating_sub(before_span.start_paragraph),
+      );
+    let after_span = capture_document_span(&self.document, before_span.start_paragraph..before_span.start_paragraph + after_count);
+    self.finish_document_edit(before_span, before_selection, after_span, cx);
+    log_timing("edit command", timing, format!("paragraphs={}", self.document.paragraphs.len()));
   }
 
-  fn finish_document_edit(&mut self, before_document: Document, before_selection: EditorSelection, cx: &mut Context<Self>) {
-    if documents_equivalent(&before_document, &self.document) && before_selection == self.selection {
+  fn edit_capture_range(&self) -> Range<usize> {
+    let paragraph_count = self.document.paragraphs.len();
+    if paragraph_count == 0 {
+      return 0..0;
+    }
+    let range = self.selection.normalized();
+    let start = range.start.paragraph.saturating_sub(1);
+    let end = (range.end.paragraph + 2)
+      .min(paragraph_count)
+      .max(start + 1);
+    start..end
+  }
+
+  fn finish_document_edit(
+    &mut self,
+    before_span: DocumentSpan,
+    before_selection: EditorSelection,
+    after_span: DocumentSpan,
+    cx: &mut Context<Self>,
+  ) {
+    if before_span == after_span && before_selection == self.selection {
       return;
     }
+    let before_generation = self.edit_generation;
+    let after_generation = self.next_edit_generation;
+    self.next_edit_generation = self.next_edit_generation.wrapping_add(1);
     let record = EditRecord {
-      before_document,
       before_selection,
-      after_document: self.document.clone(),
+      before_generation,
       after_selection: self.selection.clone(),
+      after_generation,
+      patch: DocumentPatch {
+        before: before_span,
+        after: after_span,
+      },
     };
     self.undo_stack.push(record);
     self.redo_stack.clear();
-    self.mark_document_changed(cx);
+    self.mark_document_changed(after_generation, cx);
   }
 
-  fn mark_document_changed(&mut self, cx: &mut Context<Self>) {
-    self.edit_generation = self.edit_generation.wrapping_add(1);
+  fn mark_document_changed(&mut self, generation: u64, cx: &mut Context<Self>) {
+    self.edit_generation = generation;
     self.refresh_save_status();
     self.schedule_recovery_write(cx);
     cx.notify();
@@ -1060,7 +1204,6 @@ impl RichTextEditor {
   fn after_history_restore(&mut self, cx: &mut Context<Self>) {
     self.goal_x = None;
     self.last_layout = None;
-    self.edit_generation = self.edit_generation.wrapping_add(1);
     self.refresh_save_status();
     self.scroll_head_into_view();
     self.reset_caret_blink(cx);
@@ -1068,12 +1211,101 @@ impl RichTextEditor {
     cx.notify();
   }
 
+  fn paragraph_item_sizes(&mut self) -> Rc<Vec<Size<Pixels>>> {
+    self
+      .paragraph_height_cache
+      .resize(self.document.paragraphs.len(), None);
+    let viewport_width = self.scroll_handle.bounds().size.width;
+    let width = if viewport_width > px(1.0) { viewport_width } else { px(900.0) };
+    Rc::new(
+      self
+        .document
+        .paragraphs
+        .iter()
+        .enumerate()
+        .map(|(paragraph_ix, paragraph)| {
+          let key = paragraph_cache_key(&self.document, paragraph);
+          let height = self
+            .paragraph_height_cache
+            .get(paragraph_ix)
+            .and_then(|entry| *entry)
+            .filter(|entry| entry.key == key && entry.width == width)
+            .map(|entry| entry.height)
+            .unwrap_or_else(|| estimate_paragraph_item_height(&self.document, paragraph_ix, width));
+          size(width, height)
+        })
+        .collect(),
+    )
+  }
+
+  fn update_paragraph_height_cache(
+    &mut self,
+    paragraph_ix: usize,
+    width: Pixels,
+    key: ParagraphCacheKey,
+    height: Pixels,
+    cx: &mut Context<Self>,
+  ) {
+    self
+      .paragraph_height_cache
+      .resize(self.document.paragraphs.len(), None);
+    let entry = ParagraphHeightCacheEntry { key, width, height };
+    if self
+      .paragraph_height_cache
+      .get(paragraph_ix)
+      .copied()
+      .flatten()
+      == Some(entry)
+    {
+      return;
+    }
+    self.paragraph_height_cache[paragraph_ix] = Some(entry);
+    cx.notify();
+  }
+
+  fn begin_visible_layout(&mut self, range: Range<usize>) -> u64 {
+    self.visible_layout_generation = self.visible_layout_generation.wrapping_add(1);
+    self.visible_layout_range = range.clone();
+    self.visible_layout_parts = vec![None; range.end.saturating_sub(range.start)];
+    self.visible_layout_generation
+  }
+
+  fn store_visible_paragraph_layout(&mut self, generation: u64, paragraph_ix: usize, layout: &LayoutState, bounds: Bounds<Pixels>) {
+    if generation != self.visible_layout_generation || !self.visible_layout_range.contains(&paragraph_ix) {
+      return;
+    }
+    let Some(source) = layout.paragraphs.first() else {
+      return;
+    };
+    let mut paragraph = source.clone();
+    paragraph.shift_y(bounds.origin.y + source.top);
+    let part_ix = paragraph_ix - self.visible_layout_range.start;
+    if let Some(slot) = self.visible_layout_parts.get_mut(part_ix) {
+      *slot = Some(paragraph);
+    }
+
+    let paragraphs = self
+      .visible_layout_parts
+      .iter()
+      .filter_map(|paragraph| paragraph.clone())
+      .collect::<Vec<_>>();
+    if paragraphs.is_empty() {
+      return;
+    }
+    self.last_layout = Some(Rc::new(LayoutState {
+      paragraphs,
+      bounds: Some(Bounds::new(point(bounds.origin.x, px(0.0)), self.scroll_handle.content_size())),
+      size: self.scroll_handle.content_size(),
+      width: layout.width,
+      snap_underline_rules_to_pixels: layout.snap_underline_rules_to_pixels,
+    }));
+  }
+
   fn refresh_save_status(&mut self) {
-    let fingerprint = document_fingerprint(&self.document);
-    self.save_status = if fingerprint == self.saved_fingerprint {
-      SaveStatus::Saved
-    } else {
+    self.save_status = if self.has_unsaved_changes() {
       SaveStatus::Dirty
+    } else {
+      SaveStatus::Saved
     };
   }
 
@@ -1092,17 +1324,22 @@ impl RichTextEditor {
     self.recovery_write_in_progress = true;
     cx.spawn(async move |editor, cx| {
       Timer::after(Duration::from_millis(750)).await;
+      let snapshot_timing = Instant::now();
       let snapshot = editor
         .update(cx, |editor, _| {
           editor.recovery_write_pending = false;
           editor.document.clone()
         })
         .ok();
+      log_timing("recovery snapshot", snapshot_timing, "");
       if let Some(document) = snapshot {
+        let write_timing = Instant::now();
+        let paragraph_count = document.paragraphs.len();
         let write_result = cx
           .background_executor()
           .spawn(async move { write_db8(path, &document) })
           .await;
+        log_timing("recovery write", write_timing, format!("paragraphs={paragraph_count}"));
         if let Err(error) = write_result {
           eprintln!("failed to write recovery file: {error}");
         }
@@ -1132,17 +1369,11 @@ impl RichTextEditor {
   }
 
   fn word_left(&self, offset: DocumentOffset) -> DocumentOffset {
-    global_to_document_offset(
-      &self.document,
-      previous_debate_word_boundary(&full_document_text(&self.document), global_byte(&self.document, offset)),
-    )
+    previous_debate_word_boundary_in_document(&self.document, offset)
   }
 
   fn word_right(&self, offset: DocumentOffset) -> DocumentOffset {
-    global_to_document_offset(
-      &self.document,
-      next_debate_word_boundary(&full_document_text(&self.document), global_byte(&self.document, offset)),
-    )
+    next_debate_word_boundary_in_document(&self.document, offset)
   }
 
   fn page_move(&mut self, dir: VDir, extend: bool, cx: &mut Context<Self>) {
@@ -1791,6 +2022,8 @@ impl Focusable for RichTextEditor {
 impl Render for RichTextEditor {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.ensure_focus_subscriptions(window, cx);
+    let item_sizes = self.paragraph_item_sizes();
+    let scroll_handle = self.scroll_handle.clone();
     div()
       .size_full()
       .id("rich-text-editor")
@@ -1848,15 +2081,18 @@ impl Render for RichTextEditor {
       .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
       .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
       .child(
-        div()
-          .id("rich-text-scroll-area")
-          .size_full()
-          .overflow_y_scroll()
-          .track_scroll(&self.scroll_handle)
-          .child(WordDocumentElement {
-            editor: cx.entity(),
-            layout: WordElementLayout::default(),
-          }),
+        v_virtual_list(cx.entity(), "rich-text-virtual-document", item_sizes, |editor, range, _window, cx| {
+          let generation = editor.begin_visible_layout(range.clone());
+          range
+            .map(|paragraph_ix| VirtualParagraphElement {
+              editor: cx.entity(),
+              paragraph_ix,
+              generation,
+              layout: WordElementLayout::default(),
+            })
+            .collect::<Vec<_>>()
+        })
+        .track_scroll(&scroll_handle),
       )
       .child(
         div()
@@ -1916,12 +2152,14 @@ impl IntoElement for RichTextDocumentElement {
 }
 
 #[derive(Clone)]
-struct WordDocumentElement {
+struct VirtualParagraphElement {
   editor: Entity<RichTextEditor>,
+  paragraph_ix: usize,
+  generation: u64,
   layout: WordElementLayout,
 }
 
-impl IntoElement for WordDocumentElement {
+impl IntoElement for VirtualParagraphElement {
   type Element = Self;
 
   fn into_element(self) -> Self::Element {
@@ -1947,16 +2185,15 @@ impl LayoutState {
       Some(bounds) => position - bounds.origin,
       None => position,
     };
-    for paragraph in &self.paragraphs {
+    let paragraph_ix = first_paragraph_with_bottom_at_or_after(&self.paragraphs, position.y);
+    if let Some(paragraph) = self.paragraphs.get(paragraph_ix) {
       if position.y < paragraph.top {
         return DocumentOffset {
           paragraph: paragraph.index,
           byte: 0,
         };
       }
-      if position.y <= paragraph.bottom {
-        return paragraph.hit_test(position);
-      }
+      return paragraph.hit_test(position);
     }
     let Some(last) = self.paragraphs.last() else {
       return DocumentOffset::default();
@@ -1984,11 +2221,17 @@ struct ParagraphCacheKey {
   fingerprint: u64,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct ParagraphHeightCacheEntry {
+  key: ParagraphCacheKey,
+  width: Pixels,
+  height: Pixels,
+}
+
 fn paragraph_cache_key(_document: &Document, paragraph: &Paragraph) -> ParagraphCacheKey {
   let mut hasher = DefaultHasher::new();
   paragraph.style.hash(&mut hasher);
   paragraph.version.hash(&mut hasher);
-  paragraph.byte_range.hash(&mut hasher);
   ParagraphCacheKey {
     fingerprint: hasher.finish(),
   }
@@ -2008,13 +2251,12 @@ impl LaidOutParagraph {
   }
 
   fn hit_test(&self, position: Point<Pixels>) -> DocumentOffset {
-    for line in &self.lines {
-      if position.y <= line.origin.y + line.line_height {
-        return DocumentOffset {
-          paragraph: self.index,
-          byte: line.hit_test_x(position.x - line.origin.x),
-        };
-      }
+    let line_ix = first_line_with_bottom_at_or_after(&self.lines, position.y);
+    if let Some(line) = self.lines.get(line_ix) {
+      return DocumentOffset {
+        paragraph: self.index,
+        byte: line.hit_test_x(position.x - line.origin.x),
+      };
     }
     DocumentOffset {
       paragraph: self.index,
@@ -2137,7 +2379,7 @@ impl Element for RichTextDocumentElement {
   }
 }
 
-impl Element for WordDocumentElement {
+impl Element for VirtualParagraphElement {
   type RequestLayoutState = ();
   type PrepaintState = ();
 
@@ -2156,7 +2398,32 @@ impl Element for WordDocumentElement {
     window: &mut Window,
     _cx: &mut App,
   ) -> (LayoutId, Self::RequestLayoutState) {
-    request_word_layout_for_editor(self.editor.clone(), self.layout.clone(), window)
+    let editor = self.editor.clone();
+    let paragraph_ix = self.paragraph_ix;
+    let layout_cell = self.layout.clone();
+    let layout_id = window.request_measured_layout(Style::default(), move |known, available, window, cx| {
+      let width = known
+        .width
+        .or(match available.width {
+          AvailableSpace::Definite(width) => Some(width),
+          _ => Some(px(900.0)),
+        })
+        .unwrap_or(px(900.0));
+      let previous_layout = layout_cell.0.borrow().clone();
+      let layout = editor.update(cx, |editor, cx| {
+        build_single_paragraph_layout(&editor.document, paragraph_ix, width, previous_layout.as_deref(), window, cx)
+      });
+      let size = layout.size;
+      if let Some(paragraph) = layout.paragraphs.first() {
+        let key = paragraph.cache_key;
+        editor.update(cx, |editor, cx| {
+          editor.update_paragraph_height_cache(paragraph_ix, width, key, size.height, cx)
+        });
+      }
+      layout_cell.0.borrow_mut().replace(Rc::new(layout));
+      size
+    });
+    (layout_id, ())
   }
 
   fn prepaint(
@@ -2166,11 +2433,19 @@ impl Element for WordDocumentElement {
     bounds: Bounds<Pixels>,
     _request_layout: &mut Self::RequestLayoutState,
     _window: &mut Window,
-    _cx: &mut App,
+    cx: &mut App,
   ) {
-    if let Some(layout) = self.layout.0.borrow_mut().as_mut() {
+    let layout = {
+      let mut layout_ref = self.layout.0.borrow_mut();
+      let Some(layout) = layout_ref.as_mut() else {
+        return;
+      };
       Rc::make_mut(layout).bounds = Some(bounds);
-    }
+      layout.clone()
+    };
+    self.editor.update(cx, |editor, _| {
+      editor.store_visible_paragraph_layout(self.generation, self.paragraph_ix, layout.as_ref(), bounds);
+    });
   }
 
   fn paint(
@@ -2187,20 +2462,14 @@ impl Element for WordDocumentElement {
       let editor = self.editor.read(cx);
       (
         editor.selection.clone(),
-        editor.selection.is_caret() && editor.caret_visible && editor.focus_handle.is_focused(window),
+        editor.selection.is_caret()
+          && editor.selection.head.paragraph == self.paragraph_ix
+          && editor.caret_visible
+          && editor.focus_handle.is_focused(window),
       )
     };
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
       paint_layout(layout.as_ref(), Some(&selection), show_caret, window, cx);
-      self.editor.update(cx, |editor, _| {
-        if editor
-          .last_layout
-          .as_ref()
-          .map_or(true, |last_layout| !Rc::ptr_eq(last_layout, &layout))
-        {
-          editor.last_layout = Some(layout);
-        }
-      });
     }
   }
 }
@@ -2216,25 +2485,6 @@ fn request_word_layout(document: Document, layout_cell: WordElementLayout, windo
       .unwrap_or(px(900.0));
     let previous_layout = layout_cell.0.borrow().clone();
     let layout = build_layout(&document, width, previous_layout.as_deref(), window, cx);
-    let size = layout.size;
-    layout_cell.0.borrow_mut().replace(Rc::new(layout));
-    size
-  });
-  (layout_id, ())
-}
-
-fn request_word_layout_for_editor(editor: Entity<RichTextEditor>, layout_cell: WordElementLayout, window: &mut Window) -> (LayoutId, ()) {
-  let layout_id = window.request_measured_layout(Style::default(), move |known, available, window, cx| {
-    let width = known
-      .width
-      .or(match available.width {
-        AvailableSpace::Definite(width) => Some(width),
-        _ => Some(px(900.0)),
-      })
-      .unwrap_or(px(900.0));
-    let layout = editor.update(cx, |editor, cx| {
-      build_layout(&editor.document, width, editor.last_layout.as_deref(), window, cx)
-    });
     let size = layout.size;
     layout_cell.0.borrow_mut().replace(Rc::new(layout));
     size
@@ -2407,66 +2657,136 @@ fn run_format(document: &Document, paragraph: EffectiveParagraphFormat, styles: 
 }
 
 fn build_layout(document: &Document, width: Pixels, previous_layout: Option<&LayoutState>, window: &mut Window, cx: &mut App) -> LayoutState {
-  let pageless_left = document.theme.pageless_inset_x;
-  let pageless_width = (width - document.theme.pageless_inset_x * 2.0).max(px(1.0));
+  let timing = Instant::now();
   let mut y = document.theme.pageless_inset_top;
   let mut paragraphs = Vec::with_capacity(document.paragraphs.len());
   let mut max_width = width;
+  let mut shaped_count = 0;
+  let mut reused_count = 0;
   let previous_layout = previous_layout.filter(|layout| layout.width == width);
 
-  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
-    let p_format = paragraph_format(document, paragraph.style);
-    y += p_format.spacing_before;
-    let cache_key = paragraph_cache_key(document, paragraph);
-
-    if let Some(cached) = previous_layout
-      .and_then(|layout| layout.paragraphs.get(paragraph_ix))
-      .filter(|cached| cached.cache_key == cache_key)
-    {
-      let mut laid_out_paragraph = cached.clone();
-      laid_out_paragraph.shift_y(y);
-      for line in &laid_out_paragraph.lines {
-        max_width = max_width.max(line.origin.x + line.width);
-      }
-      y = laid_out_paragraph.bottom + p_format.spacing_after;
-      paragraphs.push(laid_out_paragraph);
-      continue;
+  for paragraph_ix in 0..document.paragraphs.len() {
+    let previous_paragraph = previous_layout.and_then(|layout| layout.paragraphs.get(paragraph_ix));
+    let (paragraph, next_y, paragraph_max_width, reused) = layout_paragraph_at(document, paragraph_ix, width, y, previous_paragraph, window, cx);
+    if reused {
+      reused_count += 1;
+    } else {
+      shaped_count += 1;
     }
+    max_width = max_width.max(paragraph_max_width);
+    y = next_y;
+    paragraphs.push(paragraph);
+  }
 
-    let border = p_format.border;
-    let border_inset = border.map_or(px(0.0), |border| border.width + border.space_x);
-    let content_left = pageless_left + border_inset;
-    let content_top = border.map_or(px(0.0), |border| border.width + border.space_y);
-    let content_width = (pageless_width - border_inset * 2.0).max(px(1.0));
-    let paragraph_text = paragraph_text(document, paragraph);
-    let lines = wrap_lines(document, paragraph, p_format.clone(), &paragraph_text, content_width, window, cx);
+  let layout = LayoutState {
+    paragraphs,
+    bounds: None,
+    size: size(max_width, y + document.theme.pageless_inset_bottom),
+    width,
+    snap_underline_rules_to_pixels: document.theme.snap_underline_rules_to_pixels,
+  };
+  log_timing(
+    "build layout",
+    timing,
+    format!("paragraphs={} shaped={shaped_count} reused={reused_count}", layout.paragraphs.len()),
+  );
+  layout
+}
 
-    let mut laid_out_lines = Vec::with_capacity(lines.len());
-    let mut line_y = y + content_top;
-    for mut line in lines {
-      line.origin.x = content_left
-        + match p_format.align {
-          ParagraphAlign::Left => px(0.0),
-          ParagraphAlign::Center => (content_width - line.width).max(px(0.0)) / 2.0,
-        };
-      line.origin.y = line_y;
-      line_y += line.line_height;
-      max_width = max_width.max(line.origin.x + line.width);
-      laid_out_lines.push(line);
-    }
+fn build_single_paragraph_layout(
+  document: &Document,
+  paragraph_ix: usize,
+  width: Pixels,
+  previous_layout: Option<&LayoutState>,
+  window: &mut Window,
+  cx: &mut App,
+) -> LayoutState {
+  let timing = Instant::now();
+  let start_y = if paragraph_ix == 0 { document.theme.pageless_inset_top } else { px(0.0) };
+  let previous_paragraph = previous_layout.and_then(|layout| paragraph_layout(layout, paragraph_ix));
+  let (paragraph, mut height, max_width, reused) = layout_paragraph_at(document, paragraph_ix, width, start_y, previous_paragraph, window, cx);
+  if paragraph_ix + 1 == document.paragraphs.len() {
+    height += document.theme.pageless_inset_bottom;
+  }
+  let layout = LayoutState {
+    paragraphs: vec![paragraph],
+    bounds: None,
+    size: size(max_width.max(width), height),
+    width,
+    snap_underline_rules_to_pixels: document.theme.snap_underline_rules_to_pixels,
+  };
+  log_timing(
+    "build visible paragraph",
+    timing,
+    format!("paragraph={paragraph_ix} shaped={} reused={}", usize::from(!reused), usize::from(reused)),
+  );
+  layout
+}
 
-    let bottom = line_y + content_top;
-    let mut borders = Vec::new();
-    if let Some(border) = border {
-      push_box_rules(
-        &mut borders,
-        Bounds::new(point(pageless_left, y), size(pageless_width, bottom - y)),
-        border.width,
-        document.theme.default_text_color,
-      );
-    }
+fn layout_paragraph_at(
+  document: &Document,
+  paragraph_ix: usize,
+  width: Pixels,
+  previous_bottom: Pixels,
+  previous_paragraph: Option<&LaidOutParagraph>,
+  window: &mut Window,
+  cx: &mut App,
+) -> (LaidOutParagraph, Pixels, Pixels, bool) {
+  let paragraph = &document.paragraphs[paragraph_ix];
+  let p_format = paragraph_format(document, paragraph.style);
+  let y = previous_bottom + p_format.spacing_before;
+  let cache_key = paragraph_cache_key(document, paragraph);
 
-    paragraphs.push(LaidOutParagraph {
+  if let Some(cached) = previous_paragraph.filter(|cached| cached.cache_key == cache_key) {
+    let mut laid_out_paragraph = cached.clone();
+    laid_out_paragraph.shift_y(y);
+    let max_width = laid_out_paragraph
+      .lines
+      .iter()
+      .map(|line| line.origin.x + line.width)
+      .fold(width, Pixels::max);
+    let next_y = laid_out_paragraph.bottom + p_format.spacing_after;
+    return (laid_out_paragraph, next_y, max_width, true);
+  }
+
+  let pageless_left = document.theme.pageless_inset_x;
+  let pageless_width = (width - document.theme.pageless_inset_x * 2.0).max(px(1.0));
+  let border = p_format.border;
+  let border_inset = border.map_or(px(0.0), |border| border.width + border.space_x);
+  let content_left = pageless_left + border_inset;
+  let content_top = border.map_or(px(0.0), |border| border.width + border.space_y);
+  let content_width = (pageless_width - border_inset * 2.0).max(px(1.0));
+  let paragraph_text = paragraph_text(document, paragraph_ix);
+  let lines = wrap_lines(document, paragraph, p_format.clone(), &paragraph_text, content_width, window, cx);
+
+  let mut max_width = width;
+  let mut laid_out_lines = Vec::with_capacity(lines.len());
+  let mut line_y = y + content_top;
+  for mut line in lines {
+    line.origin.x = content_left
+      + match p_format.align {
+        ParagraphAlign::Left => px(0.0),
+        ParagraphAlign::Center => (content_width - line.width).max(px(0.0)) / 2.0,
+      };
+    line.origin.y = line_y;
+    line_y += line.line_height;
+    max_width = max_width.max(line.origin.x + line.width);
+    laid_out_lines.push(line);
+  }
+
+  let bottom = line_y + content_top;
+  let mut borders = Vec::new();
+  if let Some(border) = border {
+    push_box_rules(
+      &mut borders,
+      Bounds::new(point(pageless_left, y), size(pageless_width, bottom - y)),
+      border.width,
+      document.theme.default_text_color,
+    );
+  }
+
+  (
+    LaidOutParagraph {
       index: paragraph_ix,
       cache_key,
       len: paragraph_text.len(),
@@ -2474,17 +2794,34 @@ fn build_layout(document: &Document, width: Pixels, previous_layout: Option<&Lay
       bottom,
       lines: laid_out_lines,
       borders,
-    });
-    y = bottom + p_format.spacing_after;
-  }
+    },
+    bottom + p_format.spacing_after,
+    max_width,
+    false,
+  )
+}
 
-  LayoutState {
-    paragraphs,
-    bounds: None,
-    size: size(max_width, y + document.theme.pageless_inset_bottom),
-    width,
-    snap_underline_rules_to_pixels: document.theme.snap_underline_rules_to_pixels,
+fn estimate_paragraph_item_height(document: &Document, paragraph_ix: usize, width: Pixels) -> Pixels {
+  let paragraph = &document.paragraphs[paragraph_ix];
+  let p_format = paragraph_format(document, paragraph.style);
+  let border = p_format.border;
+  let border_inset = border.map_or(px(0.0), |border| border.width + border.space_x);
+  let content_top = border.map_or(px(0.0), |border| border.width + border.space_y);
+  let content_width = (width - document.theme.pageless_inset_x * 2.0 - border_inset * 2.0).max(px(1.0));
+  let avg_char_width = (p_format.font_size * 0.52).max(px(1.0));
+  let chars_per_line = ((content_width / avg_char_width).floor() as usize).max(1);
+  let text_len = paragraph_text_len(paragraph);
+  let estimated_lines = (text_len / chars_per_line).saturating_add(1).max(1);
+  let line_gap = p_format.font_size * document.theme.line_gap_fraction;
+  let line_height = (p_format.font_size + line_gap) * p_format.line_spacing;
+  let mut height = p_format.spacing_before + content_top + line_height * estimated_lines as f32 + content_top + p_format.spacing_after;
+  if paragraph_ix == 0 {
+    height += document.theme.pageless_inset_top;
   }
+  if paragraph_ix + 1 == document.paragraphs.len() {
+    height += document.theme.pageless_inset_bottom;
+  }
+  height.max(line_height)
 }
 
 fn wrap_lines(
@@ -2496,8 +2833,9 @@ fn wrap_lines(
   window: &mut Window,
   cx: &mut App,
 ) -> Vec<LaidOutLine> {
+  let mut shape_cache = FragmentShapeCache::default();
   if text.is_empty() {
-    return vec![shape_line(document, paragraph, p_format, text, 0..0, window, cx)];
+    return vec![shape_line(document, paragraph, p_format, text, 0..0, &mut shape_cache, window, cx)];
   }
 
   let mut lines = Vec::new();
@@ -2515,17 +2853,29 @@ fn wrap_lines(
 
     while scan_ix < break_ends.len() {
       let break_at = break_ends[scan_ix];
-      let candidate_width = measure_line_width(document, paragraph, &p_format, text, start..break_at, break_at - start, window);
+      let candidate_width = measure_line_width(
+        document,
+        paragraph,
+        &p_format,
+        text,
+        start..break_at,
+        break_at - start,
+        &mut shape_cache,
+        window,
+      );
       if candidate_width > max_width {
         let line_end = last_break
           .filter(|break_at| *break_at > start)
-          .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, break_at, max_width, window));
+          .unwrap_or_else(|| {
+            first_overflow_line_end(document, paragraph, &p_format, text, start, break_at, max_width, &mut shape_cache, window)
+          });
         lines.push(shape_line(
           document,
           paragraph,
           p_format.clone(),
           text[start..line_end].trim_end(),
           start..line_end,
+          &mut shape_cache,
           window,
           cx,
         ));
@@ -2541,21 +2891,52 @@ fn wrap_lines(
       continue;
     }
 
-    let remaining_width = measure_line_width(document, paragraph, &p_format, text, start..text.len(), text.len() - start, window);
+    let remaining_width = measure_line_width(
+      document,
+      paragraph,
+      &p_format,
+      text,
+      start..text.len(),
+      text.len() - start,
+      &mut shape_cache,
+      window,
+    );
     if remaining_width <= max_width {
-      lines.push(shape_line(document, paragraph, p_format, &text[start..], start..text.len(), window, cx));
+      lines.push(shape_line(
+        document,
+        paragraph,
+        p_format,
+        &text[start..],
+        start..text.len(),
+        &mut shape_cache,
+        window,
+        cx,
+      ));
       break;
     }
 
     let line_end = last_break
       .filter(|break_at| *break_at > start)
-      .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, text.len(), max_width, window));
+      .unwrap_or_else(|| {
+        first_overflow_line_end(
+          document,
+          paragraph,
+          &p_format,
+          text,
+          start,
+          text.len(),
+          max_width,
+          &mut shape_cache,
+          window,
+        )
+      });
     lines.push(shape_line(
       document,
       paragraph,
       p_format.clone(),
       text[start..line_end].trim_end(),
       start..line_end,
+      &mut shape_cache,
       window,
       cx,
     ));
@@ -2591,6 +2972,7 @@ fn first_overflow_line_end(
   start: usize,
   limit: usize,
   max_width: Pixels,
+  shape_cache: &mut FragmentShapeCache,
   window: &mut Window,
 ) -> usize {
   let chars: Vec<_> = text[start..limit]
@@ -2609,7 +2991,7 @@ fn first_overflow_line_end(
   while low < high {
     let mid = (low + high) / 2;
     let end = chars[mid].1;
-    let width = measure_line_width(document, paragraph, p_format, text, start..end, end - start, window);
+    let width = measure_line_width(document, paragraph, p_format, text, start..end, end - start, shape_cache, window);
     if width > max_width {
       high = mid;
     } else {
@@ -2630,6 +3012,7 @@ fn measure_line_width(
   paragraph_text: &str,
   source_range: Range<usize>,
   rendered_len: usize,
+  shape_cache: &mut FragmentShapeCache,
   window: &mut Window,
 ) -> Pixels {
   let mut width = px(0.0);
@@ -2640,7 +3023,7 @@ fn measure_line_width(
       continue;
     }
     let format = run_format(document, p_format.clone(), fragment.styles);
-    let shaped = shape_fragment(window, text, format.clone());
+    let shaped = shape_fragment_cached(window, text, format.clone(), fragment.source_start, fragment.styles, shape_cache);
     if format.border_width > px(0.0) {
       width += document.theme.box_padding_left;
     }
@@ -2658,6 +3041,7 @@ fn shape_line(
   p_format: EffectiveParagraphFormat,
   line_text: &str,
   source_range: Range<usize>,
+  shape_cache: &mut FragmentShapeCache,
   window: &mut Window,
   cx: &mut App,
 ) -> LaidOutLine {
@@ -2673,7 +3057,7 @@ fn shape_line(
       continue;
     }
     let format = run_format(document, p_format.clone(), fragment.styles);
-    let shaped = shape_fragment(window, text, format.clone());
+    let shaped = shape_fragment_cached(window, text, format.clone(), fragment.source_start, fragment.styles, shape_cache);
     let width = shaped.width;
     let box_margin_left = if format.border_width > px(0.0) {
       document.theme.box_padding_left
@@ -2750,6 +3134,39 @@ fn shape_line(
   line.rects = rects_for_line(document, &line);
   line.underlines = underlines_for_line(document, &line, cx);
   line
+}
+
+#[derive(Default)]
+struct FragmentShapeCache {
+  shapes: HashMap<FragmentShapeCacheKey, ShapedLine>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct FragmentShapeCacheKey {
+  source_start: usize,
+  len: usize,
+  styles: RunStyles,
+}
+
+fn shape_fragment_cached(
+  window: &mut Window,
+  text: &str,
+  format: EffectiveRunFormat,
+  source_start: usize,
+  styles: RunStyles,
+  cache: &mut FragmentShapeCache,
+) -> ShapedLine {
+  let key = FragmentShapeCacheKey {
+    source_start,
+    len: text.len(),
+    styles,
+  };
+  if let Some(shaped) = cache.shapes.get(&key) {
+    return shaped.clone();
+  }
+  let shaped = shape_fragment(window, text, format);
+  cache.shapes.insert(key, shaped.clone());
+  shaped
 }
 
 fn shape_fragment(window: &mut Window, text: &str, format: EffectiveRunFormat) -> ShapedLine {
@@ -2970,11 +3387,14 @@ fn regular_underscore_bounds(segment: &LaidOutSegment, cx: &mut App) -> Option<B
 }
 
 fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, show_caret: bool, window: &mut Window, cx: &mut App) {
+  let timing = Instant::now();
   let Some(bounds) = layout.bounds else {
     return;
   };
   let content_mask = window.content_mask().bounds;
-  for paragraph in &layout.paragraphs {
+  let visible_range = visible_paragraph_range(layout, bounds.origin, content_mask);
+  let visible_count = visible_range.end.saturating_sub(visible_range.start);
+  for paragraph in &layout.paragraphs[visible_range.clone()] {
     if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
       continue;
     }
@@ -2983,7 +3403,7 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, show_
       window.paint_quad(fill(border_bounds, Background::from(border.color)));
     }
   }
-  for paragraph in &layout.paragraphs {
+  for paragraph in &layout.paragraphs[visible_range.clone()] {
     if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
       continue;
     }
@@ -2997,7 +3417,7 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, show_
       }
     }
   }
-  for paragraph in &layout.paragraphs {
+  for paragraph in &layout.paragraphs[visible_range.clone()] {
     if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
       continue;
     }
@@ -3007,7 +3427,7 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, show_
       }
     }
   }
-  for paragraph in &layout.paragraphs {
+  for paragraph in &layout.paragraphs[visible_range.clone()] {
     if !paragraph_intersects_mask(paragraph, bounds.origin, content_mask) {
       continue;
     }
@@ -3025,7 +3445,7 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, show_
     }
   }
   if let Some(selection) = selection {
-    paint_selection(layout, selection, bounds.origin, content_mask, window);
+    paint_selection(layout, selection, bounds.origin, content_mask, visible_range, window);
   }
   if let Some(selection) = selection
     && selection.is_caret()
@@ -3035,6 +3455,64 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, show_
   {
     window.paint_quad(fill(snap_vertical_rule_to_device_pixels(caret, window), black()));
   }
+  log_timing("paint layout", timing, format!("visible_paragraphs={visible_count}"));
+}
+
+fn visible_paragraph_range(layout: &LayoutState, origin: Point<Pixels>, mask: Bounds<Pixels>) -> Range<usize> {
+  if layout.paragraphs.is_empty() {
+    return 0..0;
+  }
+
+  // Keep a little slack around the viewport so rules and selection edges do
+  // not pop at the mask boundary while scrolling.
+  let overscan = px(64.0);
+  let top = mask.origin.y - origin.y - overscan;
+  let bottom = mask.origin.y + mask.size.height - origin.y + overscan;
+  let start = first_paragraph_with_bottom_at_or_after(&layout.paragraphs, top);
+  let end = first_paragraph_with_top_after(&layout.paragraphs, bottom);
+  start..end.max(start)
+}
+
+fn first_paragraph_with_bottom_at_or_after(paragraphs: &[LaidOutParagraph], y: Pixels) -> usize {
+  let mut low = 0;
+  let mut high = paragraphs.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if paragraphs[mid].bottom < y {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  low
+}
+
+fn first_paragraph_with_top_after(paragraphs: &[LaidOutParagraph], y: Pixels) -> usize {
+  let mut low = 0;
+  let mut high = paragraphs.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if paragraphs[mid].top <= y {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  low
+}
+
+fn first_line_with_bottom_at_or_after(lines: &[LaidOutLine], y: Pixels) -> usize {
+  let mut low = 0;
+  let mut high = lines.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if lines[mid].origin.y + lines[mid].line_height < y {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  low
 }
 
 fn scroll_rect_into_view(scroll_handle: &ScrollHandle, rect: Bounds<Pixels>, margin: Pixels) {
@@ -3144,12 +3622,19 @@ fn snap_rule_thickness_to_device_grid(value: Pixels, scale: f32) -> Pixels {
   px(((value * scale).round().max(1.0)) / scale)
 }
 
-fn paint_selection(layout: &LayoutState, selection: &EditorSelection, origin: Point<Pixels>, content_mask: Bounds<Pixels>, window: &mut Window) {
+fn paint_selection(
+  layout: &LayoutState,
+  selection: &EditorSelection,
+  origin: Point<Pixels>,
+  content_mask: Bounds<Pixels>,
+  visible_range: Range<usize>,
+  window: &mut Window,
+) {
   if selection.is_caret() {
     return;
   }
   let range = selection.normalized();
-  for paragraph in &layout.paragraphs {
+  for paragraph in &layout.paragraphs[visible_range] {
     if paragraph.index < range.start.paragraph || paragraph.index > range.end.paragraph {
       continue;
     }
@@ -3246,12 +3731,13 @@ fn apply_style_to_paragraph_range(document: &mut Document, paragraph_ix: usize, 
   };
   let mut output = Vec::with_capacity(paragraph.runs.len() + 2);
   let mut offset = 0;
-  for run in paragraph.runs.drain(..) {
+  let old_runs = std::mem::take(&mut paragraph.runs);
+  for run in &old_runs {
     let run_start = offset;
     let run_end = offset + run.len;
     offset = run_end;
     if run_end <= range.start || run_start >= range.end {
-      output.push(run);
+      output.push(run.clone());
       continue;
     }
     let local_start = range.start.saturating_sub(run_start).min(run.len);
@@ -3275,8 +3761,13 @@ fn apply_style_to_paragraph_range(document: &mut Document, paragraph_ix: usize, 
       });
     }
   }
-  paragraph.runs = merge_adjacent_runs(output);
-  bump_paragraph_version(paragraph);
+  let new_runs = merge_adjacent_runs(output);
+  if new_runs != old_runs {
+    paragraph.runs = new_runs;
+    bump_paragraph_version(paragraph);
+  } else {
+    paragraph.runs = old_runs;
+  }
 }
 
 fn merge_adjacent_runs(runs: Vec<TextRun>) -> Vec<TextRun> {
@@ -3296,12 +3787,12 @@ fn merge_adjacent_runs(runs: Vec<TextRun>) -> Vec<TextRun> {
   merged
 }
 
-fn paragraph_text(document: &Document, paragraph: &Paragraph) -> String {
-  document_text_slice(document, paragraph.byte_range.clone())
+fn paragraph_text(document: &Document, paragraph_ix: usize) -> String {
+  document_text_slice(document, paragraph_byte_range(document, paragraph_ix))
 }
 
 fn paragraph_text_len(paragraph: &Paragraph) -> usize {
-  paragraph.byte_range.end - paragraph.byte_range.start
+  paragraph_runs_len(paragraph)
 }
 
 fn pt(value: f32) -> Pixels {
@@ -3332,6 +3823,50 @@ fn document_text_slice(document: &Document, range: Range<usize>) -> String {
   text
 }
 
+fn capture_document_span(document: &Document, range: Range<usize>) -> DocumentSpan {
+  let start = range.start.min(document.paragraphs.len());
+  let end = range.end.min(document.paragraphs.len()).max(start);
+  let text = if start < end {
+    let byte_range = paragraph_span_byte_range(document, start, end - start);
+    document_text_slice(document, byte_range)
+  } else {
+    String::new()
+  };
+  DocumentSpan {
+    start_paragraph: start,
+    paragraphs: document.paragraphs[start..end].to_vec(),
+    text,
+  }
+}
+
+fn apply_document_span_replacement(document: &mut Document, current: &DocumentSpan, replacement: &DocumentSpan) {
+  let byte_range = paragraph_span_byte_range(document, current.start_paragraph, current.paragraphs.len());
+  document.text.delete(byte_range.clone());
+  document.text.insert(byte_range.start, &replacement.text);
+  let paragraph_end = current
+    .start_paragraph
+    .saturating_add(current.paragraphs.len())
+    .min(document.paragraphs.len());
+  document
+    .paragraphs
+    .splice(current.start_paragraph..paragraph_end, replacement.paragraphs.clone());
+  rebuild_document_offset_index(document);
+}
+
+fn paragraph_span_byte_range(document: &Document, start_paragraph: usize, paragraph_count: usize) -> Range<usize> {
+  if paragraph_count == 0 || start_paragraph >= document.paragraphs.len() {
+    let byte = document
+      .paragraphs
+      .get(start_paragraph)
+      .map(|_| paragraph_byte_range(document, start_paragraph).start)
+      .unwrap_or_else(|| document.text.byte_len());
+    return byte..byte;
+  }
+  let end_paragraph = (start_paragraph + paragraph_count - 1).min(document.paragraphs.len() - 1);
+  paragraph_byte_range(document, start_paragraph).start..paragraph_byte_range(document, end_paragraph).end
+}
+
+#[allow(dead_code)]
 fn full_document_text(document: &Document) -> String {
   document_text_slice(document, 0..document.text.byte_len())
 }
@@ -3348,32 +3883,39 @@ fn document_end(document: &Document) -> DocumentOffset {
   }
 }
 
+#[allow(dead_code)]
 fn global_byte(document: &Document, offset: DocumentOffset) -> usize {
-  document.paragraphs[offset.paragraph].byte_range.start + offset.byte
+  paragraph_byte_range(document, offset.paragraph).start + offset.byte
 }
 
+#[allow(dead_code)]
 fn global_to_document_offset(document: &Document, byte: usize) -> DocumentOffset {
   let byte = byte.min(document.text.byte_len());
-  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
-    if byte <= paragraph.byte_range.end {
-      return DocumentOffset {
-        paragraph: paragraph_ix,
-        byte: byte
-          .saturating_sub(paragraph.byte_range.start)
-          .min(paragraph_text_len(paragraph)),
-      };
+  let mut low = 0;
+  let mut high = document.paragraphs.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if paragraph_byte_range(document, mid).end < byte {
+      low = mid + 1;
+    } else {
+      high = mid;
     }
   }
-  document_end(document)
+  let Some(paragraph) = document.paragraphs.get(low) else {
+    return document_end(document);
+  };
+  DocumentOffset {
+    paragraph: low,
+    byte: byte
+      .saturating_sub(paragraph_byte_range(document, low).start)
+      .min(paragraph_text_len(paragraph)),
+  }
 }
 
 fn selected_plain_text(document: &Document, range: Range<DocumentOffset>) -> String {
   if range.start.paragraph == range.end.paragraph {
-    let paragraph = &document.paragraphs[range.start.paragraph];
-    return document_text_slice(
-      document,
-      paragraph.byte_range.start + range.start.byte..paragraph.byte_range.start + range.end.byte,
-    );
+    let paragraph_range = paragraph_byte_range(document, range.start.paragraph);
+    return document_text_slice(document, paragraph_range.start + range.start.byte..paragraph_range.start + range.end.byte);
   }
 
   let mut text = String::new();
@@ -3388,10 +3930,8 @@ fn selected_plain_text(document: &Document, range: Range<DocumentOffset>) -> Str
     } else {
       paragraph_text_len(paragraph)
     };
-    text.push_str(&document_text_slice(
-      document,
-      paragraph.byte_range.start + start..paragraph.byte_range.start + end,
-    ));
+    let paragraph_range = paragraph_byte_range(document, paragraph_ix);
+    text.push_str(&document_text_slice(document, paragraph_range.start + start..paragraph_range.start + end));
   }
   text
 }
@@ -3415,11 +3955,9 @@ fn selected_rich_fragment(document: &Document, range: Range<DocumentOffset>) -> 
       let clipped_start = run_start.max(start);
       let clipped_end = run_end.min(end);
       if clipped_start < clipped_end {
+        let paragraph_range = paragraph_byte_range(document, paragraph_ix);
         runs.push(InputRun {
-          text: document_text_slice(
-            document,
-            paragraph.byte_range.start + clipped_start..paragraph.byte_range.start + clipped_end,
-          ),
+          text: document_text_slice(document, paragraph_range.start + clipped_start..paragraph_range.start + clipped_end),
           styles: run.styles,
         });
       }
@@ -3432,25 +3970,6 @@ fn selected_rich_fragment(document: &Document, range: Range<DocumentOffset>) -> 
   RichClipboardFragment {
     format: "debateprocessor.rich-text-fragment.v1".to_string(),
     paragraphs,
-  }
-}
-
-fn shift_paragraphs_after(document: &mut Document, paragraph_ix: usize, delta: isize) {
-  if delta == 0 {
-    return;
-  }
-  for paragraph in document.paragraphs.iter_mut().skip(paragraph_ix + 1) {
-    paragraph.byte_range = shift_range(paragraph.byte_range.clone(), delta);
-  }
-}
-
-fn shift_range(range: Range<usize>, delta: isize) -> Range<usize> {
-  if delta >= 0 {
-    let delta = delta as usize;
-    range.start + delta..range.end + delta
-  } else {
-    let delta = (-delta) as usize;
-    range.start - delta..range.end - delta
   }
 }
 
@@ -3492,11 +4011,12 @@ fn split_runs_at(runs: &[TextRun], byte: usize) -> (Vec<TextRun>, Vec<TextRun>) 
 
 fn split_paragraph_at(document: &mut Document, paragraph_ix: usize, byte: usize) {
   let paragraph = document.paragraphs[paragraph_ix].clone();
-  let global = paragraph.byte_range.start + byte;
+  let paragraph_range = paragraph_byte_range(document, paragraph_ix);
+  let global = paragraph_range.start + byte;
   document.text.insert(global, "\n");
   let (left_runs, right_runs) = split_runs_at(&paragraph.runs, byte);
-  let old_end = paragraph.byte_range.end;
-  document.paragraphs[paragraph_ix].byte_range = paragraph.byte_range.start..global;
+  let old_end = paragraph_range.end;
+  document.paragraphs[paragraph_ix].byte_range = paragraph_range.start..global;
   document.paragraphs[paragraph_ix].runs = left_runs;
   bump_paragraph_version(&mut document.paragraphs[paragraph_ix]);
   document.paragraphs.insert(
@@ -3508,9 +4028,7 @@ fn split_paragraph_at(document: &mut Document, paragraph_ix: usize, byte: usize)
       version: paragraph.version.wrapping_add(1),
     },
   );
-  for paragraph in document.paragraphs.iter_mut().skip(paragraph_ix + 2) {
-    paragraph.byte_range = shift_range(paragraph.byte_range.clone(), 1);
-  }
+  rebuild_document_offset_index(document);
 }
 
 fn delete_cross_paragraph_range(document: &mut Document, range: Range<DocumentOffset>) {
@@ -3523,8 +4041,10 @@ fn delete_cross_paragraph_range(document: &mut Document, range: Range<DocumentOf
   let end_ix = range.end.paragraph;
   let start_para = document.paragraphs[start_ix].clone();
   let end_para = document.paragraphs[end_ix].clone();
-  let start_global = start_para.byte_range.start + range.start.byte;
-  let end_global = end_para.byte_range.start + range.end.byte;
+  let start_para_range = paragraph_byte_range(document, start_ix);
+  let end_para_range = paragraph_byte_range(document, end_ix);
+  let start_global = start_para_range.start + range.start.byte;
+  let end_global = end_para_range.start + range.end.byte;
   let delete_len = end_global - start_global;
 
   let (left_runs, _) = split_runs_at(&start_para.runs, range.start.byte);
@@ -3534,17 +4054,57 @@ fn delete_cross_paragraph_range(document: &mut Document, range: Range<DocumentOf
   let mut merged_runs = left_runs;
   merged_runs.extend(right_runs);
   document.paragraphs[start_ix].runs = merge_adjacent_runs(merged_runs);
-  document.paragraphs[start_ix].byte_range =
-    start_para.byte_range.start..start_para.byte_range.start + paragraph_runs_len(&document.paragraphs[start_ix]);
+  document.paragraphs[start_ix].byte_range = start_para_range.start..start_para_range.start + paragraph_runs_len(&document.paragraphs[start_ix]);
   bump_paragraph_version(&mut document.paragraphs[start_ix]);
   document.paragraphs.drain(start_ix + 1..=end_ix);
-  for paragraph in document.paragraphs.iter_mut().skip(start_ix + 1) {
-    paragraph.byte_range = shift_range(paragraph.byte_range.clone(), -(delete_len as isize));
-  }
+  let _ = delete_len;
+  rebuild_document_offset_index(document);
 }
 
 fn paragraph_runs_len(paragraph: &Paragraph) -> usize {
   paragraph.runs.iter().map(|run| run.len).sum()
+}
+
+fn paragraph_widths(paragraphs: &[Paragraph]) -> Vec<usize> {
+  paragraphs
+    .iter()
+    .enumerate()
+    .map(|(ix, _)| paragraph_width(paragraphs, ix).unwrap_or(0))
+    .collect()
+}
+
+fn paragraph_width(paragraphs: &[Paragraph], paragraph_ix: usize) -> Option<usize> {
+  let paragraph = paragraphs.get(paragraph_ix)?;
+  let newline_len = usize::from(paragraph_ix + 1 < paragraphs.len());
+  Some(paragraph_runs_len(paragraph) + newline_len)
+}
+
+fn paragraph_byte_range(document: &Document, paragraph_ix: usize) -> Range<usize> {
+  let start = document.offset_index.paragraph_start(paragraph_ix);
+  start..start + paragraph_text_len(&document.paragraphs[paragraph_ix])
+}
+
+fn refresh_paragraph_range(document: &mut Document, paragraph_ix: usize) {
+  let range = paragraph_byte_range(document, paragraph_ix);
+  document.paragraphs[paragraph_ix].byte_range = range;
+}
+
+fn refresh_paragraph_ranges(document: &mut Document) {
+  for paragraph_ix in 0..document.paragraphs.len() {
+    refresh_paragraph_range(document, paragraph_ix);
+  }
+}
+
+fn rebuild_document_offset_index(document: &mut Document) {
+  document.offset_index.rebuild(&document.paragraphs);
+  refresh_paragraph_ranges(document);
+}
+
+fn update_paragraph_offsets_after_len_change(document: &mut Document, paragraph_ix: usize) {
+  document
+    .offset_index
+    .update_paragraph_width(paragraph_ix, &document.paragraphs);
+  refresh_paragraph_range(document, paragraph_ix);
 }
 
 // Returns `(run_index, local_byte)` for the given absolute byte offset within
@@ -3577,18 +4137,18 @@ fn insert_text_at(document: &mut Document, paragraph_ix: usize, byte: usize, tex
     return;
   }
   let insert_len = text.len();
-  let paragraph_start = document.paragraphs[paragraph_ix].byte_range.start;
+  let paragraph_start = paragraph_byte_range(document, paragraph_ix).start;
   document.text.insert(paragraph_start + byte, text);
-  shift_paragraphs_after(document, paragraph_ix, insert_len as isize);
   let paragraph = &mut document.paragraphs[paragraph_ix];
-  paragraph.byte_range.end += insert_len;
   bump_paragraph_version(paragraph);
   if paragraph.runs.is_empty() {
     paragraph.runs.push(TextRun { len: insert_len, styles });
+    update_paragraph_offsets_after_len_change(document, paragraph_ix);
     return;
   }
 
   let mut offset = 0;
+  let mut inserted = false;
   for i in 0..paragraph.runs.len() {
     let run_start = offset;
     let run_len = paragraph.runs[i].len;
@@ -3598,7 +4158,8 @@ fn insert_text_at(document: &mut Document, paragraph_ix: usize, byte: usize, tex
 
       if paragraph.runs[i].styles == styles {
         paragraph.runs[i].len += insert_len;
-        return;
+        inserted = true;
+        break;
       }
 
       if local == 0 {
@@ -3609,7 +4170,8 @@ fn insert_text_at(document: &mut Document, paragraph_ix: usize, byte: usize, tex
             .runs
             .insert(i, TextRun { len: insert_len, styles });
         }
-        return;
+        inserted = true;
+        break;
       }
 
       if local == run_len {
@@ -3620,7 +4182,8 @@ fn insert_text_at(document: &mut Document, paragraph_ix: usize, byte: usize, tex
             .runs
             .insert(i + 1, TextRun { len: insert_len, styles });
         }
-        return;
+        inserted = true;
+        break;
       }
 
       let run_styles = paragraph.runs[i].styles;
@@ -3636,18 +4199,20 @@ fn insert_text_at(document: &mut Document, paragraph_ix: usize, byte: usize, tex
           styles: run_styles,
         },
       );
-      return;
+      inserted = true;
+      break;
     }
     offset = run_end;
   }
 
-  if let Some(last) = paragraph.runs.last_mut() {
+  if !inserted && let Some(last) = paragraph.runs.last_mut() {
     if last.styles == styles {
       last.len += insert_len;
     } else {
       paragraph.runs.push(TextRun { len: insert_len, styles });
     }
   }
+  update_paragraph_offsets_after_len_change(document, paragraph_ix);
 }
 
 // Removes the half-open byte range `[range.start, range.end)` from
@@ -3657,14 +4222,11 @@ fn delete_range_in_paragraph(document: &mut Document, paragraph_ix: usize, range
   if range.start >= range.end {
     return;
   }
-  let delete_len = range.end - range.start;
-  let paragraph_start = document.paragraphs[paragraph_ix].byte_range.start;
+  let paragraph_start = paragraph_byte_range(document, paragraph_ix).start;
   document
     .text
     .delete(paragraph_start + range.start..paragraph_start + range.end);
-  shift_paragraphs_after(document, paragraph_ix, -(delete_len as isize));
   let paragraph = &mut document.paragraphs[paragraph_ix];
-  paragraph.byte_range.end -= delete_len;
   bump_paragraph_version(paragraph);
   let mut offset = 0;
   let mut new_runs: Vec<TextRun> = Vec::with_capacity(paragraph.runs.len());
@@ -3688,6 +4250,7 @@ fn delete_range_in_paragraph(document: &mut Document, paragraph_ix: usize, range
     }
   }
   paragraph.runs = merge_adjacent_runs(new_runs);
+  update_paragraph_offsets_after_len_change(document, paragraph_ix);
 }
 
 fn is_word_char(ch: char) -> bool {
@@ -3759,14 +4322,84 @@ fn next_debate_word_boundary(text: &str, mut byte: usize) -> usize {
   byte
 }
 
+fn previous_debate_word_boundary_in_document(document: &Document, offset: DocumentOffset) -> DocumentOffset {
+  if document.paragraphs.is_empty() {
+    return DocumentOffset::default();
+  }
+
+  let mut paragraph_ix = offset.paragraph.min(document.paragraphs.len() - 1);
+  let mut byte = if paragraph_ix == offset.paragraph {
+    offset
+      .byte
+      .min(paragraph_text_len(&document.paragraphs[paragraph_ix]))
+  } else {
+    paragraph_text_len(&document.paragraphs[paragraph_ix])
+  };
+
+  loop {
+    let text = paragraph_text(document, paragraph_ix);
+    let mut scan = byte.min(text.len());
+    let mut found_word = false;
+    while scan > 0 {
+      let prev = previous_char_boundary(&text, scan);
+      if is_debate_word_byte(&text, prev) {
+        found_word = true;
+        break;
+      }
+      scan = prev;
+    }
+    if found_word {
+      return DocumentOffset {
+        paragraph: paragraph_ix,
+        byte: previous_debate_word_boundary(&text, byte),
+      };
+    }
+    if paragraph_ix == 0 {
+      return DocumentOffset { paragraph: 0, byte: 0 };
+    }
+    paragraph_ix -= 1;
+    byte = paragraph_text_len(&document.paragraphs[paragraph_ix]);
+  }
+}
+
+fn next_debate_word_boundary_in_document(document: &Document, offset: DocumentOffset) -> DocumentOffset {
+  if document.paragraphs.is_empty() {
+    return DocumentOffset::default();
+  }
+
+  let mut paragraph_ix = offset.paragraph.min(document.paragraphs.len() - 1);
+  let mut byte = if paragraph_ix == offset.paragraph {
+    offset
+      .byte
+      .min(paragraph_text_len(&document.paragraphs[paragraph_ix]))
+  } else {
+    paragraph_text_len(&document.paragraphs[paragraph_ix])
+  };
+
+  loop {
+    let text = paragraph_text(document, paragraph_ix);
+    let mut scan = byte.min(text.len());
+    while scan < text.len() && !is_debate_word_byte(&text, scan) {
+      scan = next_char_boundary(&text, scan);
+    }
+    if scan < text.len() {
+      return DocumentOffset {
+        paragraph: paragraph_ix,
+        byte: next_debate_word_boundary(&text, byte),
+      };
+    }
+    if paragraph_ix + 1 >= document.paragraphs.len() {
+      return document_end(document);
+    }
+    paragraph_ix += 1;
+    byte = 0;
+  }
+}
+
 fn selection_for_word_at(document: &Document, offset: DocumentOffset) -> EditorSelection {
-  let text = full_document_text(document);
-  let global = global_byte(document, offset);
-  let start = previous_debate_word_boundary(&text, global);
-  let end = next_debate_word_boundary(&text, global);
   EditorSelection {
-    anchor: global_to_document_offset(document, start),
-    head: global_to_document_offset(document, end),
+    anchor: previous_debate_word_boundary_in_document(document, offset),
+    head: next_debate_word_boundary_in_document(document, offset),
   }
 }
 
@@ -3885,12 +4518,13 @@ fn mutate_runs_in_range(document: &mut Document, range: Range<DocumentOffset>, m
 
     let mut new_runs = Vec::with_capacity(paragraph.runs.len() + 2);
     let mut offset = 0;
-    for run in paragraph.runs.drain(..) {
+    let old_runs = std::mem::take(&mut paragraph.runs);
+    for run in &old_runs {
       let run_start = offset;
       let run_end = offset + run.len;
       offset = run_end;
       if run_end <= start || run_start >= end {
-        new_runs.push(run);
+        new_runs.push(run.clone());
         continue;
       }
       if run_start < start {
@@ -3914,8 +4548,13 @@ fn mutate_runs_in_range(document: &mut Document, range: Range<DocumentOffset>, m
         });
       }
     }
-    paragraph.runs = merge_adjacent_runs(new_runs);
-    bump_paragraph_version(paragraph);
+    let new_runs = merge_adjacent_runs(new_runs);
+    if new_runs != old_runs {
+      paragraph.runs = new_runs;
+      bump_paragraph_version(paragraph);
+    } else {
+      paragraph.runs = old_runs;
+    }
   }
 }
 
@@ -3927,14 +4566,25 @@ fn mutate_runs_in_range(document: &mut Document, range: Range<DocumentOffset>, m
 fn locate_line(layout: &LayoutState, off: DocumentOffset) -> Option<(usize, usize)> {
   let p_ix = paragraph_layout_index(layout, off.paragraph)?;
   let para = &layout.paragraphs[p_ix];
-  for (i, line) in para.lines.iter().enumerate() {
-    if off.byte >= line.start_byte && off.byte <= line.end_byte {
-      // Bias to next line at exact wrap seam.
-      if off.byte == line.end_byte && i + 1 < para.lines.len() && para.lines[i + 1].start_byte == off.byte {
-        return Some((p_ix, i + 1));
-      }
-      return Some((p_ix, i));
+  let mut low = 0;
+  let mut high = para.lines.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if para.lines[mid].end_byte < off.byte {
+      low = mid + 1;
+    } else {
+      high = mid;
     }
+  }
+  if let Some(line) = para.lines.get(low)
+    && off.byte >= line.start_byte
+    && off.byte <= line.end_byte
+  {
+    // Bias to next line at exact wrap seam.
+    if off.byte == line.end_byte && low + 1 < para.lines.len() && para.lines[low + 1].start_byte == off.byte {
+      return Some((p_ix, low + 1));
+    }
+    return Some((p_ix, low));
   }
   // Fall back to last line of the paragraph (e.g. byte == para.len after a
   // soft-wrapped trailing whitespace strip).
@@ -3943,16 +4593,8 @@ fn locate_line(layout: &LayoutState, off: DocumentOffset) -> Option<(usize, usiz
 }
 
 fn paragraph_layout(layout: &LayoutState, paragraph: usize) -> Option<&LaidOutParagraph> {
-  layout
-    .paragraphs
-    .get(paragraph)
-    .filter(|layout_paragraph| layout_paragraph.index == paragraph)
-    .or_else(|| {
-      layout
-        .paragraphs
-        .iter()
-        .find(|layout_paragraph| layout_paragraph.index == paragraph)
-    })
+  let layout_ix = paragraph_layout_index(layout, paragraph)?;
+  layout.paragraphs.get(layout_ix)
 }
 
 fn paragraph_layout_index(layout: &LayoutState, paragraph: usize) -> Option<usize> {
@@ -3963,10 +4605,21 @@ fn paragraph_layout_index(layout: &LayoutState, paragraph: usize) -> Option<usiz
   {
     Some(paragraph)
   } else {
+    let mut low = 0;
+    let mut high = layout.paragraphs.len();
+    while low < high {
+      let mid = low + (high - low) / 2;
+      if layout.paragraphs[mid].index < paragraph {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
     layout
       .paragraphs
-      .iter()
-      .position(|layout_paragraph| layout_paragraph.index == paragraph)
+      .get(low)
+      .is_some_and(|layout_paragraph| layout_paragraph.index == paragraph)
+      .then_some(low)
   }
 }
 
@@ -4006,7 +4659,7 @@ fn prev_grapheme_boundary_in_paragraph(document: &Document, paragraph_ix: usize,
   if paragraph_byte_at(document, paragraph_ix, byte - 1).is_some_and(|byte| byte.is_ascii()) {
     return byte - 1;
   }
-  let text = paragraph_text(document, &document.paragraphs[paragraph_ix]);
+  let text = paragraph_text(document, paragraph_ix);
   prev_grapheme_boundary(&text, byte)
 }
 
@@ -4019,13 +4672,17 @@ fn next_grapheme_boundary_in_paragraph(document: &Document, paragraph_ix: usize,
   if paragraph_byte_at(document, paragraph_ix, byte).is_some_and(|byte| byte.is_ascii()) {
     return byte + 1;
   }
-  let text = paragraph_text(document, paragraph);
+  let text = paragraph_text(document, paragraph_ix);
   next_grapheme_boundary(&text, byte)
 }
 
 fn paragraph_byte_at(document: &Document, paragraph_ix: usize, byte: usize) -> Option<u8> {
   let paragraph = document.paragraphs.get(paragraph_ix)?;
-  (byte < paragraph_text_len(paragraph)).then(|| document.text.byte(paragraph.byte_range.start + byte))
+  (byte < paragraph_text_len(paragraph)).then(|| {
+    document
+      .text
+      .byte(paragraph_byte_range(document, paragraph_ix).start + byte)
+  })
 }
 
 fn prev_grapheme_boundary(s: &str, byte: usize) -> usize {
@@ -4044,10 +4701,11 @@ fn validate_document(document: &Document) -> io::Result<()> {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "DB8 document has no paragraphs"));
   }
   for (ix, paragraph) in document.paragraphs.iter().enumerate() {
-    if paragraph.byte_range.start > paragraph.byte_range.end || paragraph.byte_range.end > text_len {
+    let range = paragraph_byte_range(document, ix);
+    if range.start > range.end || range.end > text_len {
       return Err(io::Error::new(io::ErrorKind::InvalidData, "paragraph range is outside document text"));
     }
-    if ix == 0 && paragraph.byte_range.start != 0 {
+    if ix == 0 && range.start != 0 {
       return Err(io::Error::new(io::ErrorKind::InvalidData, "first paragraph does not start at byte 0"));
     }
     if paragraph_runs_len(paragraph) != paragraph_text_len(paragraph) {
@@ -4057,8 +4715,8 @@ fn validate_document(document: &Document) -> io::Result<()> {
       ));
     }
     if ix > 0 {
-      let previous = &document.paragraphs[ix - 1];
-      if previous.byte_range.end + 1 != paragraph.byte_range.start || document.text.byte(previous.byte_range.end) != b'\n' {
+      let previous_range = paragraph_byte_range(document, ix - 1);
+      if previous_range.end + 1 != range.start || document.text.byte(previous_range.end) != b'\n' {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "paragraph ranges are not newline separated"));
       }
     }
@@ -4066,7 +4724,7 @@ fn validate_document(document: &Document) -> io::Result<()> {
   if document
     .paragraphs
     .last()
-    .is_some_and(|paragraph| paragraph.byte_range.end != text_len)
+    .is_some_and(|_| paragraph_byte_range(document, document.paragraphs.len() - 1).end != text_len)
   {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "last paragraph does not end at text length"));
   }
@@ -4193,9 +4851,11 @@ fn document_from_input(theme: DocumentTheme, paragraphs: Vec<InputParagraph>) ->
       version: 0,
     });
   }
+  let offset_index = ParagraphOffsetIndex::new(&stored_paragraphs);
   Document {
     text: Rope::from(text),
     paragraphs: stored_paragraphs,
+    offset_index,
     theme,
   }
 }
@@ -4462,16 +5122,16 @@ mod tests {
     );
 
     insert_text_at(&mut document, 0, "he".len(), "y", RunStyles::default());
-    assert_eq!(paragraph_text(&document, &document.paragraphs[0]), "heyllo");
+    assert_eq!(paragraph_text(&document, 0), "heyllo");
     assert_eq!(document.paragraphs[0].runs.len(), 1);
 
     apply_style_to_paragraph_range(&mut document, 0, "hey".len().."heyll".len(), RunStyle::Emphasis);
-    assert_eq!(paragraph_text(&document, &document.paragraphs[0]), "heyllo");
+    assert_eq!(paragraph_text(&document, 0), "heyllo");
     assert_eq!(document.paragraphs[0].runs.len(), 3);
     assert_eq!(document.paragraphs[0].runs[1].styles, emphasized);
 
     delete_range_in_paragraph(&mut document, 0, "he".len().."heyll".len());
-    assert_eq!(paragraph_text(&document, &document.paragraphs[0]), "heo");
+    assert_eq!(paragraph_text(&document, 0), "heo");
     assert_eq!(document.paragraphs[0].runs.len(), 1);
     assert_eq!(document.paragraphs[0].runs[0].styles, RunStyles::default());
   }
@@ -4486,12 +5146,12 @@ mod tests {
       }],
     );
     insert_text_at(&mut document, 0, "abé".len(), "Z", RunStyles::default());
-    assert_eq!(paragraph_text(&document, &document.paragraphs[0]), "abéZ🚀cd");
+    assert_eq!(paragraph_text(&document, 0), "abéZ🚀cd");
 
     let delete_start = "abé".len();
     let delete_end = "abéZ🚀".len();
     delete_range_in_paragraph(&mut document, 0, delete_start..delete_end);
-    assert_eq!(paragraph_text(&document, &document.paragraphs[0]), "abécd");
+    assert_eq!(paragraph_text(&document, 0), "abécd");
   }
 
   #[test]
