@@ -231,27 +231,47 @@ fn dragged_text_drop_offset_adjusts_after_source_deletion() {
 }
 
 #[test]
-fn drag_drop_history_capture_covers_source_and_drop() {
-  let document = document_from_input(
+fn move_rich_text_operation_undo_redo_restores_source_and_drop() {
+  let emphasized = RunStyles::default().with(RunStyle::Emphasis);
+  let mut document = document_from_input(
     DocumentTheme::default(),
     vec![
       InputParagraph {
         style: ParagraphStyle::Normal,
-        runs: vec![plain("source")],
+        runs: vec![plain("abc "), run("MOVE", emphasized), plain(" def")],
       },
       InputParagraph {
         style: ParagraphStyle::Normal,
-        runs: vec![plain("middle")],
-      },
-      InputParagraph {
-        style: ParagraphStyle::Normal,
-        runs: vec![plain("drop")],
+        runs: vec![plain("target")],
       },
     ],
   );
-  let source = DocumentOffset { paragraph: 0, byte: 1 }..DocumentOffset { paragraph: 0, byte: 4 };
-  let drop = DocumentOffset { paragraph: 2, byte: 2 };
-  assert_eq!(drag_drop_capture_range(&document, source, drop), 0..3);
+  let source = DocumentOffset { paragraph: 0, byte: "abc ".len() }..DocumentOffset { paragraph: 0, byte: "abc MOVE".len() };
+  let fragment = selected_rich_fragment(&document, source.clone());
+  let drop = DocumentOffset { paragraph: 1, byte: "tar".len() };
+  let adjusted_drop = adjust_drop_after_source_delete(drop, source.clone());
+  delete_cross_paragraph_range(&mut document, source.clone());
+  let inserted_end = insert_rich_fragment_at(&mut document, adjusted_drop, &fragment);
+  let operation = EditOperation::MoveRichText {
+    source_range: source,
+    adjusted_drop,
+    inserted_range: adjusted_drop..inserted_end,
+    fragment,
+  };
+
+  assert_eq!(paragraph_text(&document, 0), "abc  def");
+  assert_eq!(paragraph_text(&document, 1), "tarMOVEget");
+  assert!(document.paragraphs[1].runs.iter().any(|run| run.styles.emphasis));
+
+  operation.undo(&mut document);
+  assert_eq!(paragraph_text(&document, 0), "abc MOVE def");
+  assert_eq!(paragraph_text(&document, 1), "target");
+  assert!(document.paragraphs[0].runs.iter().any(|run| run.styles.emphasis));
+
+  operation.redo(&mut document);
+  assert_eq!(paragraph_text(&document, 0), "abc  def");
+  assert_eq!(paragraph_text(&document, 1), "tarMOVEget");
+  assert!(document.paragraphs[1].runs.iter().any(|run| run.styles.emphasis));
 }
 
 #[test]

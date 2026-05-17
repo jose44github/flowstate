@@ -37,7 +37,7 @@ use word_boundary::*;
 #[cfg(test)]
 use demo::{document_from_input, plain, run};
 #[cfg(test)]
-use editor::{EditOperation, adjust_drop_after_source_delete, drag_drop_capture_range};
+use editor::{EditOperation, adjust_drop_after_source_delete};
 
 use std::time::Instant;
 

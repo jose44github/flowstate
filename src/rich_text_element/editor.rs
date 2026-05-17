@@ -244,16 +244,6 @@ pub(super) fn adjust_drop_after_source_delete(drop: DocumentOffset, source: Rang
   }
 }
 
-pub(super) fn drag_drop_capture_range(document: &Document, source: Range<DocumentOffset>, drop: DocumentOffset) -> Range<usize> {
-  let paragraph_count = document.paragraphs.len();
-  if paragraph_count == 0 {
-    return 0..0;
-  }
-  let start = source.start.paragraph.min(drop.paragraph).saturating_sub(1);
-  let end = (source.end.paragraph.max(drop.paragraph) + 2).min(paragraph_count).max(start + 1);
-  start..end
-}
-
 /// Formatting state for the current caret or selection.
 ///
 /// This is intentionally a read-only snapshot. Toolbars can render buttons,
