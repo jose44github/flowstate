@@ -14,10 +14,10 @@ use crop::Rope;
 use gpui::{
   App, AvailableSpace, Background, Bounds, Context, CursorStyle, Element, ElementId, Entity, FocusHandle, Focusable, FontStyle, FontWeight,
   GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-  Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Size, StatefulInteractiveElement, Style, TextRun as GpuiTextRun, Timer, Window,
-  actions, black, div, fill, font, hsla, point, prelude::*, px, rgb, size,
+  Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Size, StatefulInteractiveElement, Style, Subscription, TextRun as GpuiTextRun,
+  Timer, Window, actions, black, div, fill, font, hsla, point, prelude::*, px, rgb, size,
 };
-use gpui_component::scroll::Scrollbar;
+use gpui_component::scroll::{Scrollbar, ScrollbarShow};
 use unicode_segmentation::GraphemeCursor;
 
 // All editing-action types live in the `rich_text_editor` namespace so the
@@ -397,6 +397,7 @@ impl EditorSelection {
 
 pub struct RichTextEditor {
   focus_handle: FocusHandle,
+  focus_subscriptions: Vec<Subscription>,
   scroll_handle: ScrollHandle,
   document_path: Option<PathBuf>,
   document: Document,
@@ -404,6 +405,8 @@ pub struct RichTextEditor {
   selecting: bool,
   last_drag_position: Option<Point<Pixels>>,
   autoscroll_active: bool,
+  caret_visible: bool,
+  caret_blink_active: bool,
   last_layout: Option<Rc<LayoutState>>,
   // Remembered horizontal pixel position for vertical caret motion. When the
   // user presses Up/Down repeatedly we want the caret to track a consistent
@@ -417,6 +420,7 @@ impl RichTextEditor {
   pub fn new_with_path(document: Document, document_path: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
     Self {
       focus_handle: cx.focus_handle(),
+      focus_subscriptions: Vec::new(),
       scroll_handle: ScrollHandle::new(),
       document_path,
       document,
@@ -424,6 +428,8 @@ impl RichTextEditor {
       selecting: false,
       last_drag_position: None,
       autoscroll_active: false,
+      caret_visible: true,
+      caret_blink_active: false,
       last_layout: None,
       goal_x: None,
     }
@@ -524,6 +530,7 @@ impl RichTextEditor {
     self.selection = selection;
     self.goal_x = None;
     self.scroll_head_into_view();
+    self.reset_caret_blink(cx);
     cx.notify();
   }
   fn on_save(&mut self, _: &Save, _: &mut Window, _: &mut Context<Self>) {
@@ -617,6 +624,7 @@ impl RichTextEditor {
     self.selection = selection;
     self.goal_x = None;
     self.scroll_head_into_view();
+    self.reset_caret_blink(cx);
     cx.notify();
   }
 
@@ -695,6 +703,7 @@ impl RichTextEditor {
     // straight column.
     self.goal_x = Some(used_goal_x);
     self.scroll_head_into_view();
+    self.reset_caret_blink(cx);
     cx.notify();
   }
 
@@ -727,6 +736,7 @@ impl RichTextEditor {
     self.selection = selection;
     self.goal_x = None;
     self.scroll_head_into_view();
+    self.reset_caret_blink(cx);
     cx.notify();
   }
 
@@ -760,6 +770,7 @@ impl RichTextEditor {
     self.selection = EditorSelection { anchor: new, head: new };
     self.goal_x = None;
     self.scroll_head_into_view();
+    self.reset_caret_blink(cx);
     cx.notify();
   }
 
@@ -790,6 +801,7 @@ impl RichTextEditor {
       self.delete_selection_internal();
       self.goal_x = None;
       self.scroll_head_into_view();
+      self.reset_caret_blink(cx);
       cx.notify();
       return;
     }
@@ -825,6 +837,7 @@ impl RichTextEditor {
     }
     self.goal_x = None;
     self.scroll_head_into_view();
+    self.reset_caret_blink(cx);
     cx.notify();
   }
 
@@ -833,6 +846,7 @@ impl RichTextEditor {
       self.delete_selection_internal();
       self.goal_x = None;
       self.scroll_head_into_view();
+      self.reset_caret_blink(cx);
       cx.notify();
       return;
     }
@@ -856,6 +870,7 @@ impl RichTextEditor {
     }
     self.goal_x = None;
     self.scroll_head_into_view();
+    self.reset_caret_blink(cx);
     cx.notify();
   }
 
@@ -872,6 +887,7 @@ impl RichTextEditor {
     self.selection = EditorSelection { anchor: new, head: new };
     self.goal_x = None;
     self.scroll_head_into_view();
+    self.reset_caret_blink(cx);
     cx.notify();
   }
 
@@ -896,6 +912,7 @@ impl RichTextEditor {
         head: offset,
       }
     };
+    self.reset_caret_blink(cx);
     cx.notify();
   }
 
@@ -911,6 +928,7 @@ impl RichTextEditor {
       if self.selection.head != head {
         self.selection.head = head;
         self.scroll_head_into_view();
+        self.reset_caret_blink(cx);
         cx.notify();
       } else {
         cx.notify();
@@ -922,6 +940,58 @@ impl RichTextEditor {
     self.selecting = false;
     self.last_drag_position = None;
     self.autoscroll_active = false;
+  }
+
+  fn reset_caret_blink(&mut self, cx: &mut Context<Self>) {
+    self.caret_visible = true;
+    self.ensure_caret_blink_task(cx);
+  }
+
+  fn ensure_caret_blink_task(&mut self, cx: &mut Context<Self>) {
+    if self.caret_blink_active {
+      return;
+    }
+    self.caret_blink_active = true;
+    cx.spawn(async move |editor, cx| {
+      loop {
+        Timer::after(Duration::from_millis(530)).await;
+        let keep_running = editor
+          .update(cx, |editor, cx| {
+            if !editor.caret_blink_active {
+              return false;
+            }
+            editor.caret_visible = !editor.caret_visible;
+            cx.notify();
+            true
+          })
+          .unwrap_or(false);
+        if !keep_running {
+          break;
+        }
+      }
+    })
+    .detach();
+  }
+
+  fn ensure_focus_subscriptions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if !self.focus_subscriptions.is_empty() {
+      return;
+    }
+    let focus_handle = self.focus_handle.clone();
+    self
+      .focus_subscriptions
+      .push(cx.on_focus(&focus_handle, window, |editor, _, cx| {
+        editor.reset_caret_blink(cx);
+        cx.notify();
+      }));
+    let focus_handle = self.focus_handle.clone();
+    self
+      .focus_subscriptions
+      .push(cx.on_blur(&focus_handle, window, |editor, _, cx| {
+        editor.caret_blink_active = false;
+        editor.caret_visible = false;
+        cx.notify();
+      }));
   }
 
   fn scroll_head_into_view(&self) {
@@ -1000,7 +1070,8 @@ impl Focusable for RichTextEditor {
 }
 
 impl Render for RichTextEditor {
-  fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    self.ensure_focus_subscriptions(window, cx);
     div()
       .size_full()
       .id("rich-text-editor")
@@ -1050,9 +1121,10 @@ impl Render for RichTextEditor {
         div()
           .absolute()
           .top_0()
+          .left_0()
           .right_0()
           .bottom_0()
-          .child(Scrollbar::vertical(&self.scroll_handle)),
+          .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always)),
       )
   }
 }
@@ -1322,7 +1394,7 @@ impl Element for RichTextDocumentElement {
     cx: &mut App,
   ) {
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(layout.as_ref(), None, window, cx);
+      paint_layout(layout.as_ref(), None, false, window, cx);
     }
   }
 }
@@ -1373,9 +1445,15 @@ impl Element for WordDocumentElement {
     window: &mut Window,
     cx: &mut App,
   ) {
-    let selection = self.editor.read(cx).selection.clone();
+    let (selection, show_caret) = {
+      let editor = self.editor.read(cx);
+      (
+        editor.selection.clone(),
+        editor.selection.is_caret() && editor.caret_visible && editor.focus_handle.is_focused(window),
+      )
+    };
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(layout.as_ref(), Some(&selection), window, cx);
+      paint_layout(layout.as_ref(), Some(&selection), show_caret, window, cx);
       self.editor.update(cx, |editor, _| {
         if editor
           .last_layout
@@ -2153,7 +2231,7 @@ fn regular_underscore_bounds(segment: &LaidOutSegment, cx: &mut App) -> Option<B
     .ok()
 }
 
-fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, window: &mut Window, cx: &mut App) {
+fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, show_caret: bool, window: &mut Window, cx: &mut App) {
   let Some(bounds) = layout.bounds else {
     return;
   };
@@ -2213,10 +2291,11 @@ fn paint_layout(layout: &LayoutState, selection: Option<&EditorSelection>, windo
   }
   if let Some(selection) = selection
     && selection.is_caret()
+    && show_caret
     && let Some(caret) = caret_bounds(layout, selection.head, bounds.origin)
     && caret.intersects(&content_mask)
   {
-    window.paint_quad(fill(caret, black()));
+    window.paint_quad(fill(snap_vertical_rule_to_device_pixels(caret, window), black()));
   }
 }
 
