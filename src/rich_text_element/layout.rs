@@ -772,32 +772,32 @@ pub(super) fn shape_line(
     let format = run_format(document, p_format.clone(), RunStyles::default());
     let shaped = shape_fragment(window, "", format.clone());
     #[cfg(target_os = "linux")]
-    let (ascent, descent) = {
+    let (segment_ascent, segment_descent) = {
       let (font_ascent, font_descent) = font_metrics_for_format(&format, cx);
       (shaped.ascent.max(font_ascent), shaped.descent.max(font_descent))
     };
     #[cfg(not(target_os = "linux"))]
-    let (ascent, descent) = (shaped.ascent, shaped.descent);
+    let (segment_ascent, segment_descent) = (shaped.ascent, shaped.descent);
     segments.push(LaidOutSegment {
       shaped,
       format: format.clone(),
       x: px(0.0),
       width: px(0.0),
-      ascent,
-      descent,
+      ascent: segment_ascent,
+      descent: segment_descent,
       font_size: format.font_size,
       start_byte: source_range.start,
     });
-  } else {
-    ascent = segments
-      .iter()
-      .map(|segment| segment.ascent)
-      .fold(px(0.0), Pixels::max);
-    descent = segments
-      .iter()
-      .map(|segment| segment.descent)
-      .fold(px(0.0), Pixels::max);
   }
+
+  ascent = segments
+    .iter()
+    .map(|segment| segment.ascent)
+    .fold(px(0.0), Pixels::max);
+  descent = segments
+    .iter()
+    .map(|segment| segment.descent)
+    .fold(px(0.0), Pixels::max);
 
   let max_font_size = segments
     .iter()
