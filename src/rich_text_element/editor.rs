@@ -9,7 +9,7 @@ use std::{
 use gpui::{
   App, Bounds, ClipboardItem, Context, CursorStyle, FocusHandle, Focusable, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
   MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollStrategy, Size, Subscription, Timer, Window, actions, div, point, prelude::*,
-  px, rgb, size,
+  px, size,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::{VirtualListScrollHandle, v_virtual_list};
@@ -190,6 +190,12 @@ struct ItemSizesCache {
   sizes: Rc<Vec<Size<Pixels>>>,
 }
 
+#[derive(Clone)]
+enum PasteCache {
+  Rich { metadata: String, fragment: RichClipboardFragment },
+  Plain { text: String },
+}
+
 #[derive(Default)]
 struct HeightPrefixIndex {
   heights: Vec<f32>,
@@ -235,6 +241,10 @@ impl HeightPrefixIndex {
     sum
   }
 
+  fn item_top(&self, ix: usize) -> Pixels {
+    px(self.prefix_sum(ix))
+  }
+
   fn lower_bound(&self, target: Pixels) -> usize {
     if self.heights.is_empty() {
       return 0;
@@ -275,6 +285,7 @@ pub struct RichTextEditor {
   redo_stack: Vec<EditRecord>,
   recovery_write_in_progress: bool,
   recovery_write_pending: bool,
+  paste_cache: Option<PasteCache>,
   pending_styles: Option<RunStyles>,
   selecting: bool,
   drag_granularity: SelectionGranularity,
@@ -317,6 +328,7 @@ impl RichTextEditor {
       redo_stack: Vec::new(),
       recovery_write_in_progress: false,
       recovery_write_pending: false,
+      paste_cache: None,
       pending_styles: None,
       selecting: false,
       drag_granularity: SelectionGranularity::Character,
@@ -342,15 +354,6 @@ impl RichTextEditor {
 
   pub fn save_status(&self) -> &SaveStatus {
     &self.save_status
-  }
-
-  fn save_status_label(&self) -> Option<String> {
-    match &self.save_status {
-      SaveStatus::Saved => None,
-      SaveStatus::Dirty => Some("Unsaved changes".to_string()),
-      SaveStatus::Saving => Some("Saving...".to_string()),
-      SaveStatus::SaveFailed(error) => Some(format!("Save failed: {error}")),
-    }
   }
 
   pub fn selection(&self) -> &EditorSelection {
@@ -597,13 +600,14 @@ impl RichTextEditor {
     });
   }
 
-  pub fn copy(&self, cx: &mut Context<Self>) {
+  pub fn copy(&mut self, cx: &mut Context<Self>) {
     if self.selection.is_caret() {
       return;
     }
     let text = selected_plain_text(&self.document, self.selection.normalized());
     let fragment = selected_rich_fragment(&self.document, self.selection.normalized());
     cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(text, fragment));
+    self.paste_cache = None;
   }
 
   pub fn cut(&mut self, cx: &mut Context<Self>) {
@@ -618,13 +622,35 @@ impl RichTextEditor {
     let Some(item) = cx.read_from_clipboard() else {
       return;
     };
-    if let Some(fragment) = item
-      .metadata()
-      .and_then(|metadata| serde_json::from_str::<RichClipboardFragment>(metadata).ok())
-      .filter(|fragment| fragment.format == "debateprocessor.rich-text-fragment.v1")
-    {
-      self.apply_document_edit(cx, |editor, cx| editor.insert_rich_fragment(fragment, cx));
-    } else if let Some(text) = item.text() {
+    if let Some(metadata) = item.metadata() {
+      if let Some(PasteCache::Rich { metadata: cached_metadata, fragment }) = &self.paste_cache
+        && cached_metadata == metadata
+      {
+        let fragment = fragment.clone();
+        self.apply_document_edit(cx, |editor, cx| editor.insert_rich_fragment(fragment, cx));
+        return;
+      }
+      if let Some(fragment) = serde_json::from_str::<RichClipboardFragment>(metadata)
+        .ok()
+        .filter(|fragment| fragment.format == "debateprocessor.rich-text-fragment.v1")
+      {
+        self.paste_cache = Some(PasteCache::Rich {
+          metadata: metadata.to_string(),
+          fragment: fragment.clone(),
+        });
+        self.apply_document_edit(cx, |editor, cx| editor.insert_rich_fragment(fragment, cx));
+        return;
+      }
+    }
+    if let Some(text) = item.text() {
+      if let Some(PasteCache::Plain { text: cached_text }) = &self.paste_cache
+        && cached_text == &text
+      {
+        let text = cached_text.clone();
+        self.apply_document_edit(cx, |editor, cx| editor.insert_plain_text_fragment(&text, cx));
+        return;
+      }
+      self.paste_cache = Some(PasteCache::Plain { text: text.clone() });
       self.apply_document_edit(cx, |editor, cx| editor.insert_plain_text_fragment(&text, cx));
     }
   }
@@ -1618,6 +1644,45 @@ impl RichTextEditor {
     }
   }
 
+  fn hit_test_document_position(&mut self, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> DocumentOffset {
+    if let Some(layout) = self.last_layout.as_ref()
+      && let (Some(first), Some(last)) = (layout.paragraphs.first(), layout.paragraphs.last())
+      && position.y >= first.top
+      && position.y <= last.bottom
+    {
+      return layout.hit_test(position);
+    }
+
+    let paragraph_count = self.document.paragraphs.len();
+    if paragraph_count == 0 {
+      return DocumentOffset::default();
+    }
+    let viewport = self.scroll_handle.bounds();
+    let width = if viewport.size.width > px(1.0) {
+      viewport.size.width
+    } else {
+      px(900.0)
+    };
+    self.ensure_exact_interaction_paragraph_heights(width, window, cx);
+    let content_y = (position.y - viewport.top() - self.scroll_handle.offset().y).max(px(0.0));
+    let paragraph_ix = if self.height_prefix_index.len() == paragraph_count {
+      self.height_prefix_index.lower_bound(content_y)
+    } else {
+      self.selection.head.paragraph.min(paragraph_count - 1)
+    };
+    let mut layout = build_single_paragraph_layout(&self.document, paragraph_ix, width, None, window, cx);
+    let row_top = if self.height_prefix_index.len() == paragraph_count {
+      self.height_prefix_index.item_top(paragraph_ix)
+    } else {
+      px(0.0)
+    };
+    layout.bounds = Some(Bounds::new(
+      point(viewport.left(), viewport.top() + self.scroll_handle.offset().y + row_top),
+      size(width, layout.size.height),
+    ));
+    layout.hit_test(position)
+  }
+
   // Home / End: jump to the start or end of the current visual (wrapped) line.
   // We resolve which `LaidOutLine` the caret sits on, then snap to its byte
   // range endpoints. This is why Home/End work correctly across soft wraps
@@ -1791,11 +1856,7 @@ impl RichTextEditor {
     self.selecting = true;
     self.last_drag_position = Some(event.position);
     self.goal_x = None;
-    let offset = self
-      .last_layout
-      .as_ref()
-      .map(|layout| layout.hit_test(event.position))
-      .unwrap_or_default();
+    let offset = self.hit_test_document_position(event.position, window, cx);
     self.drag_granularity = match event.click_count {
       0 | 1 => SelectionGranularity::Character,
       2 => SelectionGranularity::Word,
@@ -1817,24 +1878,22 @@ impl RichTextEditor {
     cx.notify();
   }
 
-  fn on_mouse_move(&mut self, event: &MouseMoveEvent, _window: &mut Window, cx: &mut Context<Self>) {
+  fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
     if !self.selecting {
       return;
     }
     self.last_drag_position = Some(event.position);
     self.autoscroll_for_drag(event.position);
     self.ensure_drag_autoscroll_task(cx);
-    if let Some(layout) = &self.last_layout {
-      let head = layout.hit_test(event.position);
-      let selection = expand_drag_selection(&self.document, self.selection.anchor, head, self.drag_granularity);
-      if self.selection != selection {
-        self.selection = selection;
-        self.scroll_head_into_view();
-        self.reset_caret_blink(cx);
-        cx.notify();
-      } else {
-        cx.notify();
-      }
+    let head = self.hit_test_document_position(event.position, window, cx);
+    let selection = expand_drag_selection(&self.document, self.selection.anchor, head, self.drag_granularity);
+    if self.selection != selection {
+      self.selection = selection;
+      self.scroll_head_into_view();
+      self.reset_caret_blink(cx);
+      cx.notify();
+    } else {
+      cx.notify();
     }
   }
 
@@ -2064,15 +2123,6 @@ impl Render for RichTextEditor {
           .bottom_0()
           .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always)),
       )
-      .children(self.save_status_label().map(|label| {
-        div()
-          .absolute()
-          .left_0()
-          .bottom_0()
-          .bg(rgb(0xffffff))
-          .text_color(rgb(0x555555))
-          .child(label)
-      }))
   }
 }
 
