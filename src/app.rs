@@ -209,7 +209,13 @@ fn install_unsaved_close_prompt(view: Entity<RichTextEditorView>, window: &mut W
             false
           },
         },
-        Ok(1) => true,
+        Ok(1) => match editor.update(cx, |editor, _| editor.discard_recovery_file()) {
+          Ok(()) => true,
+          Err(error) => {
+            eprintln!("failed to access editor before close: {error}");
+            false
+          },
+        },
         _ => false,
       };
 

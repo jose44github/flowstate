@@ -407,6 +407,12 @@ impl RichTextEditor {
     }
   }
 
+  pub fn discard_recovery_file(&mut self) {
+    if let Some(path) = &self.recovery_path {
+      let _ = fs::remove_file(path);
+    }
+  }
+
   pub fn undo(&mut self, cx: &mut Context<Self>) {
     let Some(record) = self.undo_stack.pop() else {
       return;
