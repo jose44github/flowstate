@@ -545,10 +545,47 @@ pub(super) fn selection_prefers_direct_underline(document: &Document, range: Ran
   })
 }
 
-pub(super) fn selection_has_underline_kind(document: &Document, range: Range<DocumentOffset>, direct: bool) -> bool {
-  selection_run_styles(document, range)
-    .into_iter()
-    .any(|styles| if direct { styles.direct_underline } else { styles.style_underline })
+pub(super) fn selection_all_run_styles(document: &Document, range: Range<DocumentOffset>, predicate: impl Fn(RunStyles) -> bool) -> bool {
+  let styles = selection_run_styles(document, range);
+  !styles.is_empty() && styles.into_iter().all(predicate)
+}
+
+pub(super) fn selection_all_underline_kind(document: &Document, range: Range<DocumentOffset>, direct: bool) -> bool {
+  selection_all_run_styles(document, range, |styles| {
+    if direct {
+      styles.direct_underline
+    } else {
+      styles.style_underline
+    }
+  })
+}
+
+pub(super) fn selection_contains_whole_paragraph(document: &Document, range: Range<DocumentOffset>) -> bool {
+  (range.start.paragraph..=range.end.paragraph).any(|paragraph_ix| {
+    let start = if paragraph_ix == range.start.paragraph { range.start.byte } else { 0 };
+    let end = if paragraph_ix == range.end.paragraph {
+      range.end.byte
+    } else {
+      paragraph_text_len(&document.paragraphs[paragraph_ix])
+    };
+    start == 0 && end == paragraph_text_len(&document.paragraphs[paragraph_ix])
+  })
+}
+
+pub(super) fn clear_whole_paragraph_formatting(document: &mut Document, paragraph_ix: usize) {
+  let Some(paragraph) = document.paragraphs.get_mut(paragraph_ix) else {
+    return;
+  };
+  let old_style = paragraph.style;
+  let old_runs = paragraph.runs.clone();
+  paragraph.style = ParagraphStyle::Normal;
+  for run in &mut paragraph.runs {
+    run.styles = RunStyles::default();
+  }
+  paragraph.runs = merge_adjacent_runs(std::mem::take(&mut paragraph.runs));
+  if paragraph.style != old_style || paragraph.runs != old_runs {
+    bump_paragraph_version(paragraph);
+  }
 }
 
 pub(super) fn mutate_runs_in_range(document: &mut Document, range: Range<DocumentOffset>, mut mutate: impl FnMut(&mut RunStyles)) {

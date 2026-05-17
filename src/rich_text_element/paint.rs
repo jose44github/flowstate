@@ -230,11 +230,15 @@ pub(super) fn paint_selection(
       }
       let line_start = start.max(line.start_byte);
       let line_end = end.min(line.end_byte);
-      if line_start >= line_end {
+      if line_start > line_end || (line_start == line_end && !(line.start_byte == line.end_byte && start <= line_start && end >= line_end)) {
         continue;
       }
       let x1 = x_for_byte(line, line_start);
-      let x2 = x_for_byte(line, line_end);
+      let x2 = if line_start == line_end {
+        x1 + px(8.0)
+      } else {
+        x_for_byte(line, line_end)
+      };
       window.paint_quad(fill(
         Bounds::new(origin + line.origin + point(x1, px(0.0)), size((x2 - x1).max(px(1.0)), line.line_height)),
         hsla(0.0, 0.0, 0.0, 0.22),

@@ -9,7 +9,7 @@ use std::{
 use gpui::{
   App, Bounds, ClipboardItem, Context, CursorStyle, FocusHandle, Focusable, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
   MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ScrollStrategy, Size, Subscription, Timer, Window, actions, div, point, prelude::*,
-  px, size,
+  px, rgb, size,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::{VirtualListScrollHandle, v_virtual_list};
@@ -52,8 +52,16 @@ actions!(
     Save,
     Undo,
     Redo,
+    SetParagraphPocket,
+    SetParagraphHat,
+    SetParagraphBlock,
+    SetParagraphTag,
+    SetParagraphAnalytic,
+    ToggleCite,
     ToggleUnderline,
     ToggleEmphasis,
+    SetHighlightSpoken,
+    ClearFormatting,
     ClearHighlight,
     Backspace,
     Delete,
@@ -174,6 +182,83 @@ pub struct RichTextEditorStyleState {
   pub highlight: SelectionState<Option<HighlightStyle>>,
 }
 
+struct ItemSizesCache {
+  width: Pixels,
+  paragraph_count: usize,
+  height_revision: u64,
+  edit_generation: u64,
+  sizes: Rc<Vec<Size<Pixels>>>,
+}
+
+#[derive(Default)]
+struct HeightPrefixIndex {
+  heights: Vec<f32>,
+  tree: Vec<f32>,
+}
+
+impl HeightPrefixIndex {
+  fn rebuild(&mut self, sizes: &[Size<Pixels>]) {
+    self.heights.clear();
+    self.heights.reserve(sizes.len());
+    self.tree.clear();
+    self.tree.resize(sizes.len() + 1, 0.0);
+    for (ix, size) in sizes.iter().enumerate() {
+      let height: f32 = size.height.into();
+      self.heights.push(height);
+      self.add(ix, height);
+    }
+  }
+
+  fn len(&self) -> usize {
+    self.heights.len()
+  }
+
+  fn add(&mut self, ix: usize, delta: f32) {
+    let mut tree_ix = ix + 1;
+    while tree_ix < self.tree.len() {
+      self.tree[tree_ix] += delta;
+      tree_ix += tree_ix & (!tree_ix + 1);
+    }
+  }
+
+  fn total_height(&self) -> f32 {
+    self.prefix_sum(self.heights.len())
+  }
+
+  fn prefix_sum(&self, count: usize) -> f32 {
+    let mut tree_ix = count.min(self.heights.len());
+    let mut sum = 0.0;
+    while tree_ix > 0 {
+      sum += self.tree[tree_ix];
+      tree_ix &= tree_ix - 1;
+    }
+    sum
+  }
+
+  fn lower_bound(&self, target: Pixels) -> usize {
+    if self.heights.is_empty() {
+      return 0;
+    }
+    let target: f32 = target.into();
+    let target = target.clamp(0.0, self.total_height());
+    let mut idx = 0usize;
+    let mut bit = 1usize;
+    while bit < self.tree.len() {
+      bit <<= 1;
+    }
+    let mut sum = 0.0;
+    while bit > 0 {
+      let next = idx + bit;
+      if next < self.tree.len() && sum + self.tree[next] <= target {
+        idx = next;
+        sum += self.tree[next];
+      }
+      bit >>= 1;
+    }
+    idx.min(self.heights.len().saturating_sub(1))
+  }
+}
+
 pub struct RichTextEditor {
   pub(super) focus_handle: FocusHandle,
   focus_subscriptions: Vec<Subscription>,
@@ -199,6 +284,9 @@ pub struct RichTextEditor {
   caret_blink_active: bool,
   last_layout: Option<Rc<LayoutState>>,
   paragraph_height_cache: Vec<Option<ParagraphHeightCacheEntry>>,
+  paragraph_height_cache_revision: u64,
+  item_sizes_cache: Option<ItemSizesCache>,
+  height_prefix_index: HeightPrefixIndex,
   visible_layout_generation: u64,
   visible_layout_range: Range<usize>,
   visible_layout_parts: Vec<Option<LaidOutParagraph>>,
@@ -238,6 +326,9 @@ impl RichTextEditor {
       caret_blink_active: false,
       last_layout: None,
       paragraph_height_cache: vec![None; paragraph_count],
+      paragraph_height_cache_revision: 0,
+      item_sizes_cache: None,
+      height_prefix_index: HeightPrefixIndex::default(),
       visible_layout_generation: 0,
       visible_layout_range: 0..0,
       visible_layout_parts: Vec::new(),
@@ -251,6 +342,15 @@ impl RichTextEditor {
 
   pub fn save_status(&self) -> &SaveStatus {
     &self.save_status
+  }
+
+  fn save_status_label(&self) -> Option<String> {
+    match &self.save_status {
+      SaveStatus::Saved => None,
+      SaveStatus::Dirty => Some("Unsaved changes".to_string()),
+      SaveStatus::Saving => Some("Saving...".to_string()),
+      SaveStatus::SaveFailed(error) => Some(format!("Save failed: {error}")),
+    }
   }
 
   pub fn selection(&self) -> &EditorSelection {
@@ -531,12 +631,36 @@ impl RichTextEditor {
     self.toggle_run_style_flag(|styles| styles.emphasis, |styles, value| styles.emphasis = value, cx);
   }
 
+  pub fn toggle_cite(&mut self, cx: &mut Context<Self>) {
+    self.toggle_run_style_flag(|styles| styles.cite, |styles, value| styles.cite = value, cx);
+  }
+
   pub fn set_highlight(&mut self, highlight: HighlightStyle, cx: &mut Context<Self>) {
     self.set_highlight_internal(Some(highlight), cx);
   }
 
   pub fn clear_highlight(&mut self, cx: &mut Context<Self>) {
     self.set_highlight_internal(None, cx);
+  }
+
+  pub fn clear_formatting(&mut self, cx: &mut Context<Self>) {
+    self.apply_document_edit(cx, |editor, cx| {
+      if editor.selection.is_caret() {
+        let paragraph_ix = editor.selection.head.paragraph;
+        clear_whole_paragraph_formatting(&mut editor.document, paragraph_ix);
+      } else {
+        let range = editor.selection.normalized();
+        if selection_contains_whole_paragraph(&editor.document, range.clone()) {
+          for paragraph_ix in range.start.paragraph..=range.end.paragraph {
+            clear_whole_paragraph_formatting(&mut editor.document, paragraph_ix);
+          }
+        } else {
+          mutate_runs_in_range(&mut editor.document, range, |styles| *styles = RunStyles::default());
+        }
+      }
+      editor.pending_styles = None;
+      editor.after_text_mutation(cx);
+    });
   }
 
   pub fn apply_run_style_to_selection(&mut self, style: RunStyle, cx: &mut Context<Self>) {
@@ -677,11 +801,35 @@ impl RichTextEditor {
   fn on_redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
     self.redo(cx);
   }
+  fn on_set_paragraph_pocket(&mut self, _: &SetParagraphPocket, _: &mut Window, cx: &mut Context<Self>) {
+    self.set_paragraph_style_for_selection(ParagraphStyle::Pocket, cx);
+  }
+  fn on_set_paragraph_hat(&mut self, _: &SetParagraphHat, _: &mut Window, cx: &mut Context<Self>) {
+    self.set_paragraph_style_for_selection(ParagraphStyle::Hat, cx);
+  }
+  fn on_set_paragraph_block(&mut self, _: &SetParagraphBlock, _: &mut Window, cx: &mut Context<Self>) {
+    self.set_paragraph_style_for_selection(ParagraphStyle::Block, cx);
+  }
+  fn on_set_paragraph_tag(&mut self, _: &SetParagraphTag, _: &mut Window, cx: &mut Context<Self>) {
+    self.set_paragraph_style_for_selection(ParagraphStyle::Tag, cx);
+  }
+  fn on_set_paragraph_analytic(&mut self, _: &SetParagraphAnalytic, _: &mut Window, cx: &mut Context<Self>) {
+    self.set_paragraph_style_for_selection(ParagraphStyle::Analytic, cx);
+  }
+  fn on_toggle_cite(&mut self, _: &ToggleCite, _: &mut Window, cx: &mut Context<Self>) {
+    self.toggle_cite(cx);
+  }
   fn on_toggle_underline(&mut self, _: &ToggleUnderline, _: &mut Window, cx: &mut Context<Self>) {
     self.toggle_underline(cx);
   }
   fn on_toggle_emphasis(&mut self, _: &ToggleEmphasis, _: &mut Window, cx: &mut Context<Self>) {
     self.toggle_emphasis(cx);
+  }
+  fn on_set_highlight_spoken(&mut self, _: &SetHighlightSpoken, _: &mut Window, cx: &mut Context<Self>) {
+    self.set_highlight(HighlightStyle::Spoken, cx);
+  }
+  fn on_clear_formatting(&mut self, _: &ClearFormatting, _: &mut Window, cx: &mut Context<Self>) {
+    self.clear_formatting(cx);
   }
   fn on_clear_highlight(&mut self, _: &ClearHighlight, _: &mut Window, cx: &mut Context<Self>) {
     self.clear_highlight(cx);
@@ -829,7 +977,15 @@ impl RichTextEditor {
     let viewport_width = self.scroll_handle.bounds().size.width;
     let width = if viewport_width > px(1.0) { viewport_width } else { px(900.0) };
     self.ensure_exact_interaction_paragraph_heights(width, window, cx);
-    Rc::new(
+    if let Some(cache) = &self.item_sizes_cache
+      && cache.width == width
+      && cache.paragraph_count == self.document.paragraphs.len()
+      && cache.height_revision == self.paragraph_height_cache_revision
+      && cache.edit_generation == self.edit_generation
+    {
+      return cache.sizes.clone();
+    }
+    let sizes = Rc::new(
       self
         .document
         .paragraphs
@@ -846,8 +1002,17 @@ impl RichTextEditor {
             .unwrap_or_else(|| estimate_paragraph_item_height(&self.document, paragraph_ix, width));
           size(width, height)
         })
-        .collect(),
-    )
+        .collect::<Vec<_>>(),
+    );
+    self.height_prefix_index.rebuild(sizes.as_ref());
+    self.item_sizes_cache = Some(ItemSizesCache {
+      width,
+      paragraph_count: self.document.paragraphs.len(),
+      height_revision: self.paragraph_height_cache_revision,
+      edit_generation: self.edit_generation,
+      sizes: sizes.clone(),
+    });
+    sizes
   }
 
   fn ensure_exact_interaction_paragraph_heights(&mut self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) {
@@ -886,6 +1051,7 @@ impl RichTextEditor {
       width,
       height: layout.size.height,
     });
+    self.paragraph_height_cache_revision = self.paragraph_height_cache_revision.wrapping_add(1);
   }
 
   fn predicted_visible_height_range(&self, width: Pixels) -> Range<usize> {
@@ -902,6 +1068,11 @@ impl RichTextEditor {
     };
     let scroll_top = -self.scroll_handle.offset().y;
     let scroll_bottom = scroll_top + viewport_height + px(256.0);
+    if self.height_prefix_index.len() == paragraph_count {
+      let start = self.height_prefix_index.lower_bound((scroll_top - px(256.0)).max(px(0.0)));
+      let end = (self.height_prefix_index.lower_bound(scroll_bottom) + 1).min(paragraph_count);
+      return expand_paragraph_range(start..end.max(start + 1), paragraph_count, 2);
+    }
     let mut y = px(0.0);
     let mut start = 0;
     let mut found_start = false;
@@ -967,6 +1138,7 @@ impl RichTextEditor {
       return;
     }
     self.paragraph_height_cache[paragraph_ix] = Some(entry);
+    self.paragraph_height_cache_revision = self.paragraph_height_cache_revision.wrapping_add(1);
     cx.notify();
   }
 
@@ -1185,7 +1357,13 @@ impl RichTextEditor {
       if direct {
         styles.direct_underline = !styles.direct_underline;
       } else {
-        styles.style_underline = !styles.style_underline;
+        let new_value = !styles.style_underline;
+        styles.style_underline = new_value;
+        if new_value {
+          styles.direct_underline = false;
+          styles.cite = false;
+          styles.emphasis = false;
+        }
       }
       self.pending_styles = Some(styles);
       self.reset_caret_blink(cx);
@@ -1195,13 +1373,19 @@ impl RichTextEditor {
 
     let range = self.selection.normalized();
     let direct = explicit_direct.unwrap_or_else(|| selection_prefers_direct_underline(&self.document, range.clone()));
-    let has_any = selection_has_underline_kind(&self.document, range.clone(), direct);
+    let all_selected = selection_all_underline_kind(&self.document, range.clone(), direct);
     self.apply_document_edit(cx, |editor, cx| {
       mutate_runs_in_range(&mut editor.document, range, |styles| {
         if direct {
-          styles.direct_underline = !has_any;
+          styles.direct_underline = !all_selected;
         } else {
-          styles.style_underline = !has_any;
+          let new_value = !all_selected;
+          styles.style_underline = new_value;
+          if new_value {
+            styles.direct_underline = false;
+            styles.cite = false;
+            styles.emphasis = false;
+          }
         }
       });
       editor.after_text_mutation(cx);
@@ -1220,11 +1404,9 @@ impl RichTextEditor {
     }
 
     let range = self.selection.normalized();
-    let has_any = selection_run_styles(&self.document, range.clone())
-      .into_iter()
-      .any(&get);
+    let all_selected = selection_all_run_styles(&self.document, range.clone(), get);
     self.apply_document_edit(cx, |editor, cx| {
-      mutate_runs_in_range(&mut editor.document, range, |styles| set(styles, !has_any));
+      mutate_runs_in_range(&mut editor.document, range, |styles| set(styles, !all_selected));
       editor.after_text_mutation(cx);
     });
   }
@@ -1240,8 +1422,14 @@ impl RichTextEditor {
     }
 
     let range = self.selection.normalized();
+    let all_selected = if let Some(highlight) = highlight {
+      selection_all_run_styles(&self.document, range.clone(), |styles| styles.highlight == Some(highlight))
+    } else {
+      false
+    };
+    let target_highlight = if all_selected { None } else { highlight };
     self.apply_document_edit(cx, |editor, cx| {
-      mutate_runs_in_range(&mut editor.document, range, |styles| styles.highlight = highlight);
+      mutate_runs_in_range(&mut editor.document, range, |styles| styles.highlight = target_highlight);
       editor.after_text_mutation(cx);
     });
   }
@@ -1825,8 +2013,16 @@ impl Render for RichTextEditor {
       .on_action(cx.listener(Self::on_save))
       .on_action(cx.listener(Self::on_undo))
       .on_action(cx.listener(Self::on_redo))
+      .on_action(cx.listener(Self::on_set_paragraph_pocket))
+      .on_action(cx.listener(Self::on_set_paragraph_hat))
+      .on_action(cx.listener(Self::on_set_paragraph_block))
+      .on_action(cx.listener(Self::on_set_paragraph_tag))
+      .on_action(cx.listener(Self::on_set_paragraph_analytic))
+      .on_action(cx.listener(Self::on_toggle_cite))
       .on_action(cx.listener(Self::on_toggle_underline))
       .on_action(cx.listener(Self::on_toggle_emphasis))
+      .on_action(cx.listener(Self::on_set_highlight_spoken))
+      .on_action(cx.listener(Self::on_clear_formatting))
       .on_action(cx.listener(Self::on_clear_highlight))
       .on_action(cx.listener(Self::on_backspace))
       .on_action(cx.listener(Self::on_delete))
@@ -1862,6 +2058,15 @@ impl Render for RichTextEditor {
           .bottom_0()
           .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always)),
       )
+      .children(self.save_status_label().map(|label| {
+        div()
+          .absolute()
+          .left_0()
+          .bottom_0()
+          .bg(rgb(0xffffff))
+          .text_color(rgb(0x555555))
+          .child(label)
+      }))
   }
 }
 
