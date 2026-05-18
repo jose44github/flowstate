@@ -12,11 +12,11 @@ Before making architectural decisions, use Context7 MCP to inspect GPUI and GPUI
 
 Do not invent GPUI APIs. Verify method names, trait implementations, app/window setup, entity/state patterns, event handlers, and layout APIs against documentation or source examples before changing code.
 
-After each meaningful edit, run:
+After all edits are complete, run:
 
 cargo check
 
-Fix compiler errors before continuing.
+Fix compiler errors before finishing.
 
 Do not launch the project after making edits unless specifically requested.
 

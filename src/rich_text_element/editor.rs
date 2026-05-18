@@ -468,6 +468,10 @@ impl RichTextEditor {
     &self.selection
   }
 
+  pub fn caret_paragraph(&self) -> usize {
+    self.selection.head.paragraph
+  }
+
   pub(super) fn drag_source_selection(&self) -> Option<EditorSelection> {
     self.active_text_drag.as_ref().map(|drag| EditorSelection {
       anchor: drag.source_range.start,
@@ -548,13 +552,36 @@ impl RichTextEditor {
 
   pub fn scroll_to_paragraph(&mut self, paragraph_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
     if paragraph_ix < self.document.paragraphs.len() {
+      // Outline navigation should place the insertion caret at the start of
+      // the target paragraph, matching what the user just selected in the nav.
+      self.selection = EditorSelection {
+        anchor: DocumentOffset {
+          paragraph: paragraph_ix,
+          byte: 0,
+        },
+        head: DocumentOffset {
+          paragraph: paragraph_ix,
+          byte: 0,
+        },
+      };
+      self.goal_x = None;
+      self.reset_caret_blink(cx);
+
       let width = self.current_layout_width();
       let end = (paragraph_ix + 40).min(self.document.paragraphs.len());
-      for ix in paragraph_ix..end {
+      // Snapping by offset needs an exact cumulative height before the target.
+      // If earlier rows still use estimates, the first snap can land slightly
+      // above or below the requested paragraph and then shift after rendering.
+      for ix in 0..end {
         self.ensure_exact_paragraph_height(ix, width, window, cx);
       }
       self.item_sizes_cache = None;
-      self.scroll_handle.scroll_to_item(paragraph_ix, ScrollStrategy::Top);
+      let _ = self.paragraph_item_sizes(window, cx);
+      if self.height_prefix_index.len() == self.document.paragraphs.len() {
+        let mut offset = self.scroll_handle.offset();
+        offset.y = -self.height_prefix_index.item_top(paragraph_ix);
+        self.scroll_handle.set_offset(offset);
+      }
       cx.notify();
     }
   }

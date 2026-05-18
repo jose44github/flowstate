@@ -1,8 +1,9 @@
 use std::{cell::Cell, collections::HashSet, path::PathBuf, rc::Rc};
 
 use gpui::{
-  App, Bounds, Context, Entity, IntoElement, PromptButton, PromptLevel, Render, ScrollHandle, Window, WindowBounds,
-  WindowOptions, PathPromptOptions, div, prelude::*, px, rgb, size,
+  App, Bounds, Context, Entity, InteractiveElement, IntoElement, MouseButton, PromptButton, PromptLevel, Render, ScrollHandle,
+  SharedString, StatefulInteractiveElement, Subscription, Window, WindowBounds, WindowOptions, PathPromptOptions, div, prelude::*,
+  px, rgb, size,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::list::ListItem;
@@ -25,6 +26,15 @@ pub struct Workspace {
   outline_cache: Option<(Uuid, u64, u64)>,
   collapsed_outline_items: HashSet<usize>,
   outline_revision: u64,
+  outline_caret_paragraph: Option<usize>,
+  editor_subscriptions: Vec<Subscription>,
+}
+
+#[derive(Clone)]
+struct DocumentTab {
+  id: Uuid,
+  label: SharedString,
+  active: bool,
 }
 
 impl Workspace {
@@ -43,6 +53,8 @@ impl Workspace {
       outline_cache: None,
       collapsed_outline_items: HashSet::new(),
       outline_revision: 0,
+      outline_caret_paragraph: None,
+      editor_subscriptions: Vec::new(),
     };
 
     if let Some(path) = initial_path {
@@ -61,6 +73,13 @@ impl Workspace {
     cx: &mut Context<Self>,
   ) -> Entity<DocumentPanel> {
     let editor = cx.new(|cx| RichTextEditor::new_with_path(document, path.clone(), cx));
+    self.editor_subscriptions.push(cx.observe(&editor, |workspace, editor, cx| {
+      let caret_paragraph = Some(editor.read(cx).caret_paragraph());
+      if workspace.outline_caret_paragraph != caret_paragraph {
+        workspace.outline_caret_paragraph = caret_paragraph;
+        cx.notify();
+      }
+    }));
     let workspace = cx.entity().downgrade();
     let panel = cx.new(|cx| DocumentPanel::new(path, editor.clone(), workspace, cx));
     let id = panel.read(cx).id();
@@ -249,11 +268,11 @@ impl Workspace {
       .collect()
   }
 
-  fn activate_document_index(&mut self, index: usize, cx: &mut Context<Self>) {
-    let Some(panel) = self.document_panels.get(index) else {
+  fn activate_document_id(&mut self, panel_id: Uuid, cx: &mut Context<Self>) {
+    let Some(panel) = self.document_panels.iter().find(|panel| panel.read(cx).id() == panel_id) else {
       return;
     };
-    self.active_document_id = Some(panel.read(cx).id());
+    self.active_document_id = Some(panel_id);
     self.active_editor = Some(panel.read(cx).editor());
     cx.notify();
   }
@@ -261,6 +280,47 @@ impl Workspace {
   fn active_document_index(&self, cx: &App) -> Option<usize> {
     let active_id = self.active_document_id?;
     self.document_panels.iter().position(|panel| panel.read(cx).id() == active_id)
+  }
+
+  fn document_tabs(&self, cx: &App) -> Vec<DocumentTab> {
+    self
+      .document_panels
+      .iter()
+      .map(|panel| {
+        let panel = panel.read(cx);
+        let title = panel.title_text();
+        let dirty = panel.is_dirty(cx);
+        let title = truncate_tab_title(&title, 32);
+        let label = if dirty {
+          format!("{title} *").into()
+        } else {
+          title.into()
+        };
+        DocumentTab {
+          id: panel.id(),
+          label,
+          active: Some(panel.id()) == self.active_document_id,
+        }
+      })
+      .collect()
+  }
+
+  fn active_outline_paragraph(&self, cx: &App) -> Option<usize> {
+    let editor = self.active_editor.as_ref()?;
+    let editor = editor.read(cx);
+    let caret_paragraph = editor.caret_paragraph();
+    active_visible_outline_paragraph(editor.document(), caret_paragraph, &self.collapsed_outline_items)
+  }
+
+  fn refresh_outline_caret(&mut self, cx: &mut Context<Self>) {
+    let caret_paragraph = self
+      .active_editor
+      .as_ref()
+      .map(|editor| editor.read(cx).caret_paragraph());
+    if self.outline_caret_paragraph != caret_paragraph {
+      self.outline_caret_paragraph = caret_paragraph;
+      cx.notify();
+    }
   }
 
 }
@@ -317,7 +377,9 @@ impl Workspace {
 
   fn render_left_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     self.refresh_outline_tree(cx);
+    self.refresh_outline_caret(cx);
     let workspace = cx.entity().downgrade();
+    let active_outline_paragraph = self.active_outline_paragraph(cx);
     v_flex()
       .w(px(240.0))
       .h_full()
@@ -332,15 +394,17 @@ impl Workspace {
           .flex_1()
           .w_full()
           .overflow_hidden()
-          .child(tree(&self.outline_tree, move |ix, entry, selected, _window, _cx| {
+          .child(tree(&self.outline_tree, move |ix, entry, _selected, _window, _cx| {
             let paragraph_ix = outline_paragraph_ix(entry.item().id.as_ref());
             let label = entry.item().label.clone();
             let is_folder = entry.is_folder();
             let is_expanded = entry.is_expanded();
+            let is_active_outline = paragraph_ix == active_outline_paragraph;
             let workspace = workspace.clone();
             ListItem::new(("outline-tree-item", ix))
-              .selected(selected)
-              .disabled(true)
+              .w_full()
+              .min_w_0()
+              .overflow_hidden()
               .pl(px(4.0) + px(12.0) * entry.depth())
               .pr_1()
               .py_0()
@@ -348,41 +412,56 @@ impl Workspace {
               .child(
                 h_flex()
                   .w_full()
+                  .min_w_0()
+                  .overflow_hidden()
+                  .relative()
                   .items_center()
                   .gap_1()
-                  .child(
+                  .when(is_active_outline, |this| {
+                    this.child(
+                      div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .bg(rgb(0xdbeafe))
+                        .border_1()
+                        .border_color(rgb(0x93c5fd))
+                        .rounded(px(4.0)),
+                    )
+                  })
+                  .when(is_folder, |this| this.child(
                     Button::new(("outline-toggle", ix))
                       .icon(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                       .xsmall()
                       .ghost()
+                      .flex_none()
                       .disabled(!is_folder)
                       .on_click({
                         let workspace = workspace.clone();
                         move |_, _, cx| {
+                          cx.stop_propagation();
                           if let Some(paragraph_ix) = paragraph_ix {
                             let _ = workspace.update(cx, |workspace, cx| workspace.toggle_outline_item(paragraph_ix, cx));
                           }
                         }
                       }),
-                  )
+                  ))
+                  .when(!is_folder, |this| this.child(div().w(px(20.0)).h(px(20.0)).flex_none()))
                   .child(
-                    Button::new(("outline-label", ix))
-                      .xsmall()
-                      .ghost()
+                    div()
+                      .id(("outline-label", ix))
                       .flex_1()
                       .min_w_0()
                       .overflow_hidden()
-                      .child(
-                        div()
-                          .w_full()
-                          .min_w_0()
-                          .overflow_hidden()
-                          .text_ellipsis()
-                          .whitespace_nowrap()
-                          .text_left()
-                          .text_xs()
-                          .child(label),
-                      )
+                      .text_color(rgb(0x0f172a))
+                      .text_ellipsis()
+                      .whitespace_nowrap()
+                      .child(label)
+                      .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
+                      })
                       .on_click(move |_, window, cx| {
                         if let Some(paragraph_ix) = paragraph_ix {
                           let _ = workspace.update(cx, |workspace, cx| workspace.scroll_active_editor_to_paragraph(paragraph_ix, window, cx));
@@ -415,27 +494,32 @@ impl Workspace {
   }
 
   fn render_document_tab_bar(&self, active_index: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    let tabs = self.document_tabs(cx);
     TabBar::new("document-tab-bar")
       .xsmall()
       .track_scroll(&self.tab_bar_scroll_handle)
       .menu(true)
       .selected_index(active_index)
-      .children(self.document_panels.iter().enumerate().map(|(ix, panel)| {
-        let panel_id = panel.read(cx).id();
-        let title = panel.read(cx).title_text();
-        let label = if panel.read(cx).is_dirty(cx) {
-          format!("{title} *")
-        } else {
-          title.to_string()
-        };
+      .on_click({
+        let tabs = tabs.clone();
+        cx.listener(move |workspace, ix: &usize, _, cx| {
+          if let Some(tab) = tabs.get(*ix) {
+            workspace.activate_document_id(tab.id, cx);
+          }
+        })
+      })
+      .children(tabs.into_iter().map(|tab| {
+        let panel_id = tab.id;
         Tab::new()
-          .label(label)
-          .selected(ix == active_index)
-          .on_click(cx.listener(move |workspace, _, _, cx| workspace.activate_document_index(ix, cx)))
+          // GPUI-component tabs size to their labels. Keep tab labels bounded
+          // before rendering so long filenames cannot break the tab strip.
+          .label(tab.label)
+          .selected(tab.active)
           .suffix(
             icon_button(("close-tab", panel_id.as_u128() as u64), AppIcon::Close)
               .tooltip("Close document")
               .on_click(cx.listener(move |workspace, _, window, cx| {
+                cx.stop_propagation();
                 workspace.close_document_panel(panel_id, window, cx);
               })),
           )
@@ -639,10 +723,9 @@ fn insert_outline_node(nodes: &mut Vec<OutlineNode>, level: usize, node: Outline
 
 fn outline_node_to_tree_item(node: OutlineNode, collapsed_items: &HashSet<usize>) -> TreeItem {
   let paragraph_ix = node.paragraph_ix;
-  let expanded = !collapsed_items.contains(&paragraph_ix);
   TreeItem::new(
     outline_item_id(paragraph_ix),
-    format!("{}: {}", outline_style_label(node.style), node.text),
+    node.text,
   )
   .children(
     node
@@ -650,8 +733,54 @@ fn outline_node_to_tree_item(node: OutlineNode, collapsed_items: &HashSet<usize>
       .into_iter()
       .map(|child| outline_node_to_tree_item(child, collapsed_items)),
   )
-  .expanded(expanded)
+  .expanded(!collapsed_items.contains(&paragraph_ix))
   .disabled(true)
+}
+
+fn outline_nodes(document: &Document) -> Vec<OutlineNode> {
+  let mut roots = Vec::<OutlineNode>::new();
+  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
+    let Some(level) = outline_level(paragraph.style) else {
+      continue;
+    };
+    insert_outline_node(
+      &mut roots,
+      level,
+      OutlineNode {
+        paragraph_ix,
+        style: paragraph.style,
+        text: outline_paragraph_label(document, paragraph_ix),
+        children: Vec::new(),
+      },
+    );
+  }
+  roots
+}
+
+fn active_visible_outline_paragraph(document: &Document, caret_paragraph: usize, collapsed_items: &HashSet<usize>) -> Option<usize> {
+  let mut active = None;
+  for node in outline_nodes(document) {
+    active_visible_outline_paragraph_in_node(&node, caret_paragraph, collapsed_items, &mut active);
+  }
+  active
+}
+
+fn active_visible_outline_paragraph_in_node(
+  node: &OutlineNode,
+  caret_paragraph: usize,
+  collapsed_items: &HashSet<usize>,
+  active: &mut Option<usize>,
+) {
+  if node.paragraph_ix > caret_paragraph {
+    return;
+  }
+  *active = Some(node.paragraph_ix);
+  if collapsed_items.contains(&node.paragraph_ix) {
+    return;
+  }
+  for child in &node.children {
+    active_visible_outline_paragraph_in_node(child, caret_paragraph, collapsed_items, active);
+  }
 }
 
 fn outline_level(style: ParagraphStyle) -> Option<usize> {
@@ -661,18 +790,6 @@ fn outline_level(style: ParagraphStyle) -> Option<usize> {
     ParagraphStyle::Block => Some(2),
     ParagraphStyle::Tag | ParagraphStyle::Analytic => Some(3),
     ParagraphStyle::Normal | ParagraphStyle::Undertag => None,
-  }
-}
-
-fn outline_style_label(style: ParagraphStyle) -> &'static str {
-  match style {
-    ParagraphStyle::Pocket => "Pocket",
-    ParagraphStyle::Hat => "Hat",
-    ParagraphStyle::Block => "Block",
-    ParagraphStyle::Tag => "Tag",
-    ParagraphStyle::Analytic => "Analytic",
-    ParagraphStyle::Undertag => "Undertag",
-    ParagraphStyle::Normal => "Normal",
   }
 }
 
@@ -713,4 +830,20 @@ fn safe_prefix_boundary(text: &str, max: usize) -> usize {
     boundary = ix;
   }
   boundary
+}
+
+fn truncate_tab_title(title: &str, max_chars: usize) -> String {
+  let mut chars = title.chars();
+  let mut short = String::new();
+  for _ in 0..max_chars {
+    let Some(ch) = chars.next() else {
+      return title.to_string();
+    };
+    short.push(ch);
+  }
+
+  if chars.next().is_some() {
+    short.push_str("...");
+  }
+  short
 }
