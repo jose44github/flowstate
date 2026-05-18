@@ -402,6 +402,7 @@ pub struct RichTextEditor {
   paragraph_height_cache_revision: u64,
   item_sizes_cache: Option<ItemSizesCache>,
   height_prefix_index: HeightPrefixIndex,
+  pending_snap_to_paragraph: Option<(usize, u8)>,
   visible_layout_generation: u64,
   visible_layout_range: Range<usize>,
   visible_layout_parts: Vec<Option<LaidOutParagraph>>,
@@ -449,6 +450,7 @@ impl RichTextEditor {
       paragraph_height_cache_revision: 0,
       item_sizes_cache: None,
       height_prefix_index: HeightPrefixIndex::default(),
+      pending_snap_to_paragraph: None,
       visible_layout_generation: 0,
       visible_layout_range: 0..0,
       visible_layout_parts: Vec::new(),
@@ -577,11 +579,8 @@ impl RichTextEditor {
       }
       self.item_sizes_cache = None;
       let _ = self.paragraph_item_sizes(window, cx);
-      if self.height_prefix_index.len() == self.document.paragraphs.len() {
-        let mut offset = self.scroll_handle.offset();
-        offset.y = -self.height_prefix_index.item_top(paragraph_ix);
-        self.scroll_handle.set_offset(offset);
-      }
+      self.pending_snap_to_paragraph = Some((paragraph_ix, 4));
+      self.apply_pending_paragraph_snap(cx);
       cx.notify();
     }
   }
@@ -1405,6 +1404,27 @@ impl RichTextEditor {
     }
 
     expand_paragraph_range(start..paragraph_count, paragraph_count, 2)
+  }
+
+  fn apply_pending_paragraph_snap(&mut self, cx: &mut Context<Self>) {
+    let Some((paragraph_ix, remaining)) = self.pending_snap_to_paragraph else {
+      return;
+    };
+    if paragraph_ix >= self.document.paragraphs.len() || self.height_prefix_index.len() != self.document.paragraphs.len() {
+      self.pending_snap_to_paragraph = None;
+      return;
+    }
+
+    let mut offset = self.scroll_handle.offset();
+    offset.y = -self.height_prefix_index.item_top(paragraph_ix);
+    self.scroll_handle.set_offset(offset);
+
+    if remaining > 1 {
+      self.pending_snap_to_paragraph = Some((paragraph_ix, remaining - 1));
+      cx.notify();
+    } else {
+      self.pending_snap_to_paragraph = None;
+    }
   }
 
   fn active_height_range(&self) -> Range<usize> {
@@ -2428,6 +2448,7 @@ impl Render for RichTextEditor {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.ensure_focus_subscriptions(window, cx);
     let item_sizes = self.paragraph_item_sizes(window, cx);
+    self.apply_pending_paragraph_snap(cx);
     let scroll_handle = self.scroll_handle.clone();
     div()
       .size_full()

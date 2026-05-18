@@ -2,7 +2,7 @@ use std::{cell::Cell, collections::HashSet, path::PathBuf, rc::Rc};
 
 use gpui::{
   App, Bounds, Context, Entity, InteractiveElement, IntoElement, MouseButton, PromptButton, PromptLevel, Render, ScrollHandle,
-  SharedString, StatefulInteractiveElement, Subscription, Window, WindowBounds, WindowOptions, PathPromptOptions, div, prelude::*,
+  SharedString, Subscription, Window, WindowBounds, WindowOptions, PathPromptOptions, div, prelude::*,
   px, rgb, size,
 };
 use gpui_component::button::{Button, ButtonVariants};
@@ -414,23 +414,8 @@ impl Workspace {
                   .w_full()
                   .min_w_0()
                   .overflow_hidden()
-                  .relative()
                   .items_center()
                   .gap_1()
-                  .when(is_active_outline, |this| {
-                    this.child(
-                      div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .right_0()
-                        .bottom_0()
-                        .bg(rgb(0xdbeafe))
-                        .border_1()
-                        .border_color(rgb(0x93c5fd))
-                        .rounded(px(4.0)),
-                    )
-                  })
                   .when(is_folder, |this| this.child(
                     Button::new(("outline-toggle", ix))
                       .icon(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
@@ -452,12 +437,28 @@ impl Workspace {
                   .child(
                     div()
                       .id(("outline-label", ix))
+                      .relative()
                       .flex_1()
                       .min_w_0()
+                      .px_1()
                       .overflow_hidden()
                       .text_color(rgb(0x0f172a))
                       .text_ellipsis()
                       .whitespace_nowrap()
+                      .when(is_active_outline, |this| {
+                        this.child(
+                          div()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .right_0()
+                            .bottom_0()
+                            .bg(rgb(0xdbeafe))
+                            .border_1()
+                            .border_color(rgb(0x93c5fd))
+                            .rounded(px(4.0)),
+                        )
+                      })
                       .child(label)
                       .on_mouse_down(MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
