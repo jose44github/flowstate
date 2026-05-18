@@ -46,7 +46,7 @@ impl Workspace {
   // `crate::commands::CommandId` and `COMMAND_SPECS` so menus, toolbar buttons,
   // rebinding UI, and "show shortcut" UI all see the same command surface.
   pub fn new(initial_path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let mut this = Self {
+    let this = Self {
       document_panels: Vec::new(),
       active_document_id: None,
       active_editor: None,
@@ -63,8 +63,14 @@ impl Workspace {
     };
 
     if let Some(path) = initial_path {
-      let document = load_or_create_document(&path).unwrap_or_else(|error| panic!("failed to open {}: {error}", path.display()));
-      this.add_document_panel(document, Some(path), window, cx);
+      // Initial window creation happens before GPUI has produced stable
+      // layout bounds for the resizable document area. Documents opened later
+      // already run after that first layout pass, so defer startup loading by
+      // one frame to give the initial editor the same settled geometry.
+      cx.on_next_frame(window, move |workspace, window, cx| {
+        let document = load_or_create_document(&path).unwrap_or_else(|error| panic!("failed to open {}: {error}", path.display()));
+        workspace.add_document_panel(document, Some(path), window, cx);
+      });
     }
 
     this
@@ -416,7 +422,16 @@ impl Workspace {
       // With a transparent system titlebar, this GPUI-drawn bar becomes the
       // visual titlebar. Let empty space in it drag the native window.
       .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
-      .child(div().text_xs().text_color(rgb(0x64748b)).child("Top bar placeholder"))
+      .child(
+        h_flex()
+          .h_full()
+          .items_center()
+          .gap_1()
+          .child(top_bar_button("top-file", "File"))
+          .child(top_bar_button("top-styles", "Styles"))
+          .child(top_bar_button("top-themes", "Themes"))
+          .child(top_bar_button("top-settings", "Settings")),
+      )
       .child(div().flex_1())
       .child(self.render_window_controls(window, cx))
   }
@@ -1014,6 +1029,24 @@ fn window_control_button(
     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     .on_click(on_click)
     .child(icon)
+}
+
+fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
+  // The top bar itself starts native window dragging on mouse down. Each
+  // button owns its mouse-down event so it behaves like a control instead of
+  // dragging the window.
+  div()
+    .h_full()
+    .flex_none()
+    .items_center()
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .child(
+      Button::new(id)
+        .label(label)
+        .xsmall()
+        .ghost()
+        .on_click(|_, _, cx| cx.stop_propagation()),
+    )
 }
 
 fn safe_prefix_boundary(text: &str, max: usize) -> usize {
