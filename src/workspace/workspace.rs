@@ -1,15 +1,21 @@
-use std::{cell::Cell, collections::HashSet, path::PathBuf, rc::Rc};
+use std::{
+  cell::Cell,
+  collections::{HashMap, HashSet},
+  path::PathBuf,
+  rc::Rc,
+};
 
 use gpui::{
   App, Bounds, Context, Entity, InteractiveElement, IntoElement, MouseButton, PromptButton, PromptLevel, Render, ScrollHandle,
-  SharedString, Subscription, Window, WindowBounds, WindowOptions, PathPromptOptions, div, prelude::*,
+  SharedString, Subscription, Window, WindowBounds, WindowOptions, PathPromptOptions, Pixels, canvas, div, prelude::*,
   px, rgb, size,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::list::ListItem;
+use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{Disableable, IconName, Selectable, Sizable, h_flex, v_flex};
+use gpui_component::{Disableable, IconName, PixelsExt, Selectable, Sizable, h_flex, v_flex};
 use uuid::Uuid;
 
 use crate::rich_text_element::{Document, ParagraphStyle, RichTextEditor, demo_document, load_or_create_document};
@@ -22,9 +28,11 @@ pub struct Workspace {
   active_editor: Option<Entity<RichTextEditor>>,
   ribbon_collapsed: bool,
   tab_bar_scroll_handle: ScrollHandle,
+  body_resizable_state: Entity<ResizableState>,
   outline_tree: Entity<TreeState>,
   outline_cache: Option<(Uuid, u64, u64)>,
   collapsed_outline_items: HashSet<usize>,
+  outline_label_widths: HashMap<usize, Pixels>,
   outline_revision: u64,
   outline_caret_paragraph: Option<usize>,
   editor_subscriptions: Vec<Subscription>,
@@ -49,9 +57,11 @@ impl Workspace {
       active_editor: None,
       ribbon_collapsed: false,
       tab_bar_scroll_handle: ScrollHandle::new(),
+      body_resizable_state: cx.new(|_| ResizableState::default()),
       outline_tree: cx.new(|cx| TreeState::new(cx)),
       outline_cache: None,
       collapsed_outline_items: HashSet::new(),
+      outline_label_widths: HashMap::new(),
       outline_revision: 0,
       outline_caret_paragraph: None,
       editor_subscriptions: Vec::new(),
@@ -247,6 +257,17 @@ impl Workspace {
     }
   }
 
+  fn record_outline_label_width(&mut self, depth: usize, width: Pixels, cx: &mut Context<Self>) {
+    if width <= px(0.0) {
+      return;
+    }
+
+    let previous = self.outline_label_widths.insert(depth, width);
+    if previous.is_none_or(|previous| (previous - width).abs().as_f64() > 0.5) {
+      cx.notify();
+    }
+  }
+
   fn toggle_outline_item(&mut self, paragraph_ix: usize, cx: &mut Context<Self>) {
     if !self.collapsed_outline_items.insert(paragraph_ix) {
       self.collapsed_outline_items.remove(&paragraph_ix);
@@ -365,23 +386,38 @@ impl Workspace {
   }
 
   fn render_workspace_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    h_flex()
-      .flex_1()
-      .w_full()
-      .h_full()
-      .overflow_hidden()
-      .child(self.render_left_nav(cx))
-      .child(self.render_document_pane(cx))
-      .child(self.render_toolkit())
+    let panel_sizes = self.body_resizable_state.read(cx).sizes().clone();
+    let nav_width = panel_sizes.first().copied().unwrap_or(px(240.0));
+
+    h_resizable("workspace-body-resizable")
+      .with_state(&self.body_resizable_state)
+      .child(
+        resizable_panel()
+          .size(px(240.0))
+          .size_range(px(180.0)..px(420.0))
+          .child(self.render_left_nav(nav_width, cx)),
+      )
+      .child(
+        resizable_panel()
+          .size_range(px(360.0)..Pixels::MAX)
+          .child(self.render_document_pane(cx)),
+      )
+      .child(
+        resizable_panel()
+          .size(px(300.0))
+          .size_range(px(220.0)..px(520.0))
+          .child(self.render_toolkit()),
+      )
   }
 
-  fn render_left_nav(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_left_nav(&mut self, nav_width: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
     self.refresh_outline_tree(cx);
     self.refresh_outline_caret(cx);
     let workspace = cx.entity().downgrade();
     let active_outline_paragraph = self.active_outline_paragraph(cx);
+    let measured_label_widths = self.outline_label_widths.clone();
     v_flex()
-      .w(px(240.0))
+      .size_full()
       .h_full()
       .gap_1()
       .p_2()
@@ -394,12 +430,17 @@ impl Workspace {
           .flex_1()
           .w_full()
           .overflow_hidden()
-          .child(tree(&self.outline_tree, move |ix, entry, _selected, _window, _cx| {
+          .child(tree(&self.outline_tree, move |ix, entry, _selected, window, cx| {
             let paragraph_ix = outline_paragraph_ix(entry.item().id.as_ref());
-            let label = entry.item().label.clone();
             let is_folder = entry.is_folder();
             let is_expanded = entry.is_expanded();
             let is_active_outline = paragraph_ix == active_outline_paragraph;
+            let depth = entry.depth();
+            let label_width = measured_label_widths
+              .get(&depth)
+              .copied()
+              .unwrap_or_else(|| fallback_outline_label_width(nav_width, depth));
+            let label = truncate_outline_label(entry.item().label.as_ref(), outline_label_text_width(label_width, window), window, cx);
             let workspace = workspace.clone();
             ListItem::new(("outline-tree-item", ix))
               .w_full()
@@ -443,8 +484,22 @@ impl Workspace {
                       .px_1()
                       .overflow_hidden()
                       .text_color(rgb(0x0f172a))
-                      .text_ellipsis()
                       .whitespace_nowrap()
+                      .child(
+                        canvas(
+                          {
+                            let workspace = workspace.clone();
+                            move |bounds, _, cx| {
+                              let _ = workspace.update(cx, |workspace, cx| {
+                                workspace.record_outline_label_width(depth, bounds.size.width, cx);
+                              });
+                            }
+                          },
+                          |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                      )
                       .when(is_active_outline, |this| {
                         this.child(
                           div()
@@ -551,7 +606,7 @@ impl Workspace {
 
   fn render_toolkit(&self) -> impl IntoElement {
     v_flex()
-      .w(px(300.0))
+      .size_full()
       .h_full()
       .gap_2()
       .p_3()
@@ -817,6 +872,33 @@ fn outline_paragraph_label(document: &Document, paragraph_ix: usize) -> String {
   } else {
     text.to_string()
   }
+}
+
+fn fallback_outline_label_width(nav_width: Pixels, depth: usize) -> Pixels {
+  // First paint fallback only. Once GPUI reports the real label slot bounds,
+  // outline truncation uses that measured width instead of this estimate.
+  (nav_width - px(56.0) - px(12.0) * depth).max(px(32.0))
+}
+
+fn outline_label_text_width(label_width: Pixels, window: &Window) -> Pixels {
+  // The measured blue label rect includes `.px_1()` padding on both sides.
+  // Truncation must target the inner text box, with a small paint tolerance so
+  // the suffix glyph does not get clipped by the label's overflow boundary.
+  (label_width - window.rem_size() * 0.5 - px(2.0)).max(px(1.0))
+}
+
+fn truncate_outline_label(label: &str, width: Pixels, window: &mut Window, cx: &mut App) -> SharedString {
+  let text_style = window.text_style();
+  // Keep this in sync with the outline row's `.text_xs()` style. GPUI's text
+  // helper defines text_xs as 0.75rem; using the default 1rem style here makes
+  // the app-level truncator think the label is much wider than it renders.
+  let font_size = window.rem_size() * 0.75;
+  let mut runs = vec![text_style.to_run(label.len())];
+  cx
+    .text_system()
+    .line_wrapper(text_style.font(), font_size)
+    .truncate_line(label.to_string().into(), width, "…", &mut runs)
+    .into()
 }
 
 fn safe_prefix_boundary(text: &str, max: usize) -> usize {
