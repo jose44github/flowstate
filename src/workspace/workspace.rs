@@ -1,21 +1,16 @@
-use std::{
-  cell::Cell,
-  collections::{HashMap, HashSet},
-  path::PathBuf,
-  rc::Rc,
-};
+use std::{cell::Cell, collections::HashSet, path::PathBuf, rc::Rc};
 
 use gpui::{
-  App, Bounds, Context, Entity, InteractiveElement, IntoElement, MouseButton, PromptButton, PromptLevel, Render, ScrollHandle,
-  SharedString, Subscription, Window, WindowBounds, WindowOptions, PathPromptOptions, Pixels, canvas, div, prelude::*,
-  px, rgb, size,
+  App, Bounds, ClickEvent, Context, Entity, InteractiveElement, IntoElement, MouseButton, PromptButton, PromptLevel, Render, ScrollHandle,
+  SharedString, Subscription, Window, WindowBounds, WindowControlArea, WindowOptions, PathPromptOptions, Pixels, TitlebarOptions, div, prelude::*,
+  point, px, rgb, size,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::list::ListItem;
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{Disableable, IconName, PixelsExt, Selectable, Sizable, h_flex, v_flex};
+use gpui_component::{Disableable, IconName, Selectable, Sizable, h_flex, v_flex};
 use uuid::Uuid;
 
 use crate::rich_text_element::{Document, ParagraphStyle, RichTextEditor, demo_document, load_or_create_document};
@@ -33,7 +28,6 @@ pub struct Workspace {
   outline_tree: Entity<TreeState>,
   outline_cache: Option<(Uuid, u64, u64)>,
   collapsed_outline_items: HashSet<usize>,
-  outline_label_widths: HashMap<usize, Pixels>,
   outline_revision: u64,
   outline_caret_paragraph: Option<usize>,
   editor_subscriptions: Vec<Subscription>,
@@ -63,7 +57,6 @@ impl Workspace {
       outline_tree: cx.new(|cx| TreeState::new(cx)),
       outline_cache: None,
       collapsed_outline_items: HashSet::new(),
-      outline_label_widths: HashMap::new(),
       outline_revision: 0,
       outline_caret_paragraph: None,
       editor_subscriptions: Vec::new(),
@@ -212,6 +205,67 @@ impl Workspace {
     .detach();
   }
 
+  fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let dirty_editors = self.dirty_editors(cx);
+    if dirty_editors.is_empty() {
+      window.remove_window();
+      return;
+    }
+
+    let message = if dirty_editors.len() == 1 {
+      "This document has unsaved changes."
+    } else {
+      "One or more documents have unsaved changes."
+    };
+    let answer = window.prompt(
+      PromptLevel::Warning,
+      "Save changes before closing?",
+      Some(message),
+      &[PromptButton::ok("Save"), PromptButton::new("Don't Save"), PromptButton::cancel("Cancel")],
+      cx,
+    );
+    let window_handle = window.window_handle();
+
+    cx.spawn(async move |_, cx| {
+      let should_close = match answer.await {
+        Ok(0) => {
+          let mut ok = true;
+          for editor in dirty_editors {
+            match editor.update(cx, |editor, cx| editor.save(cx)) {
+              Ok(Ok(())) => {}
+              Ok(Err(error)) => {
+                ok = false;
+                let detail = error.to_string();
+                let _ = window_handle.update(cx, |_, window, cx| {
+                  window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
+                });
+                break;
+              },
+              Err(error) => {
+                ok = false;
+                eprintln!("failed to access editor before close: {error}");
+                break;
+              },
+            }
+          }
+          ok
+        },
+        Ok(1) => {
+          for editor in dirty_editors {
+            let _ = editor.update(cx, |editor, _| editor.discard_recovery_file());
+          }
+          true
+        },
+        _ => false,
+      };
+
+      if should_close {
+        let _ = window_handle.update(cx, |_, window, _| window.remove_window());
+      }
+    })
+    .detach();
+  }
+
   pub fn save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let Some(editor) = self.active_editor.clone() else {
       return;
@@ -256,17 +310,6 @@ impl Workspace {
   pub fn scroll_active_editor_to_paragraph(&mut self, paragraph_ix: usize, window: &mut Window, cx: &mut Context<Self>) {
     if let Some(editor) = &self.active_editor {
       editor.update(cx, |editor, cx| editor.scroll_to_paragraph(paragraph_ix, window, cx));
-    }
-  }
-
-  fn record_outline_label_width(&mut self, depth: usize, width: Pixels, cx: &mut Context<Self>) {
-    if width <= px(0.0) {
-      return;
-    }
-
-    let previous = self.outline_label_widths.insert(depth, width);
-    if previous.is_none_or(|previous| (previous - width).abs().as_f64() > 0.5) {
-      cx.notify();
     }
   }
 
@@ -349,11 +392,11 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     v_flex()
       .size_full()
       .bg(rgb(0xf1f5f9))
-      .child(self.render_top_bar(cx))
+      .child(self.render_top_bar(window, cx))
       .when(!self.ribbon_collapsed, |this| this.child(self.render_ribbon()))
       .child(self.render_workspace_body(cx))
       .child(self.render_status_bar(cx))
@@ -361,18 +404,57 @@ impl Render for Workspace {
 }
 
 impl Workspace {
-  fn render_top_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let _ = cx;
-
+  fn render_top_bar(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     h_flex()
       .h(px(36.0))
       .w_full()
       .items_center()
-      .px_2()
+      .pl_2()
       .border_b_1()
       .border_color(rgb(0xdbe3ee))
       .bg(rgb(0xffffff))
+      // With a transparent system titlebar, this GPUI-drawn bar becomes the
+      // visual titlebar. Let empty space in it drag the native window.
+      .on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move())
       .child(div().text_xs().text_color(rgb(0x64748b)).child("Top bar placeholder"))
+      .child(div().flex_1())
+      .child(self.render_window_controls(window, cx))
+  }
+
+  fn render_window_controls(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
+    h_flex()
+      .h_full()
+      .flex_none()
+      .child(window_control_button(
+        "window-minimize",
+        IconName::WindowMinimize,
+        WindowControlArea::Min,
+        cx.listener(|_, _, window, cx| {
+          cx.stop_propagation();
+          window.minimize_window();
+        }),
+        false,
+      ))
+      .child(window_control_button(
+        "window-maximize",
+        if window.is_maximized() { IconName::WindowRestore } else { IconName::WindowMaximize },
+        WindowControlArea::Max,
+        cx.listener(|_, _, window, cx| {
+          cx.stop_propagation();
+          window.zoom_window();
+        }),
+        false,
+      ))
+      .child(window_control_button(
+        "window-close",
+        IconName::WindowClose,
+        WindowControlArea::Close,
+        cx.listener(|workspace, _, window, cx| {
+          cx.stop_propagation();
+          workspace.request_close_window(window, cx);
+        }),
+        true,
+      ))
   }
 
   fn render_ribbon(&self) -> impl IntoElement {
@@ -401,6 +483,7 @@ impl Workspace {
       )
       .child(
         resizable_panel()
+          .size(px(860.0))
           .size_range(px(580.0)..Pixels::MAX)
           .child(self.render_content_area(cx)),
       )
@@ -411,6 +494,7 @@ impl Workspace {
       .with_state(&self.content_resizable_state)
       .child(
         resizable_panel()
+          .size(px(560.0))
           .size_range(px(360.0)..Pixels::MAX)
           .child(self.render_document_pane(cx)),
       )
@@ -427,7 +511,6 @@ impl Workspace {
     self.refresh_outline_caret(cx);
     let workspace = cx.entity().downgrade();
     let active_outline_paragraph = self.active_outline_paragraph(cx);
-    let measured_label_widths = self.outline_label_widths.clone();
     v_flex()
       .size_full()
       .h_full()
@@ -448,10 +531,7 @@ impl Workspace {
             let is_expanded = entry.is_expanded();
             let is_active_outline = paragraph_ix == active_outline_paragraph;
             let depth = entry.depth();
-            let label_width = measured_label_widths
-              .get(&depth)
-              .copied()
-              .unwrap_or_else(|| fallback_outline_label_width(nav_width, depth));
+            let label_width = outline_label_width(nav_width, depth);
             let label = truncate_outline_label(entry.item().label.as_ref(), outline_label_text_width(label_width, window), window, cx);
             let workspace = workspace.clone();
             ListItem::new(("outline-tree-item", ix))
@@ -497,21 +577,6 @@ impl Workspace {
                       .overflow_hidden()
                       .text_color(rgb(0x0f172a))
                       .whitespace_nowrap()
-                      .child(
-                        canvas(
-                          {
-                            let workspace = workspace.clone();
-                            move |bounds, _, cx| {
-                              let _ = workspace.update(cx, |workspace, cx| {
-                                workspace.record_outline_label_width(depth, bounds.size.width, cx);
-                              });
-                            }
-                          },
-                          |_, _, _, _| {},
-                        )
-                        .absolute()
-                        .size_full(),
-                      )
                       .when(is_active_outline, |this| {
                         this.child(
                           div()
@@ -728,7 +793,12 @@ pub fn open_workspace_window(document_path: PathBuf, cx: &mut App) {
   cx
     .open_window(
       WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        window_bounds: Some(WindowBounds::Maximized(bounds)),
+        titlebar: Some(TitlebarOptions {
+          title: Some("Odrenrir - Debate Processor".into()),
+          appears_transparent: true,
+          traffic_light_position: Some(point(px(12.0), px(18.0))),
+        }),
         ..Default::default()
       },
       |window, cx| {
@@ -886,9 +956,11 @@ fn outline_paragraph_label(document: &Document, paragraph_ix: usize) -> String {
   }
 }
 
-fn fallback_outline_label_width(nav_width: Pixels, depth: usize) -> Pixels {
-  // First paint fallback only. Once GPUI reports the real label slot bounds,
-  // outline truncation uses that measured width instead of this estimate.
+fn outline_label_width(nav_width: Pixels, depth: usize) -> Pixels {
+  // Mirrors the outline row layout: nav padding, row indentation, disclosure
+  // slot, row gap, and right padding are fixed, so the remaining width is the
+  // label rect. Keeping this deterministic avoids a first-paint measure/notify
+  // cycle that visibly moves the tree after startup.
   (nav_width - px(56.0) - px(12.0) * depth).max(px(32.0))
 }
 
@@ -911,6 +983,35 @@ fn truncate_outline_label(label: &str, width: Pixels, window: &mut Window, cx: &
     .line_wrapper(text_style.font(), font_size)
     .truncate_line(label.to_string().into(), width, "…", &mut runs)
     .into()
+}
+
+fn window_control_button(
+  id: &'static str,
+  icon: IconName,
+  area: WindowControlArea,
+  on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+  destructive: bool,
+) -> impl IntoElement {
+  div()
+    .id(id)
+    .window_control_area(area)
+    .w(px(46.0))
+    .h_full()
+    .flex()
+    .items_center()
+    .justify_center()
+    .text_size(px(12.0))
+    .text_color(rgb(0x475569))
+    .hover(|this| {
+      if destructive {
+        this.bg(rgb(0xdc2626)).text_color(rgb(0xffffff))
+      } else {
+        this.bg(rgb(0xe2e8f0)).text_color(rgb(0x0f172a))
+      }
+    })
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .on_click(on_click)
+    .child(icon)
 }
 
 fn safe_prefix_boundary(text: &str, max: usize) -> usize {
