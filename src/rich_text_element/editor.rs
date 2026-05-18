@@ -402,7 +402,9 @@ pub struct RichTextEditor {
   paragraph_height_cache_revision: u64,
   item_sizes_cache: Option<ItemSizesCache>,
   height_prefix_index: HeightPrefixIndex,
+  measured_item_width: Option<Pixels>,
   pending_viewport_size_refresh: bool,
+  initial_layout_hidden: bool,
   pending_snap_to_paragraph: Option<(usize, u8)>,
   visible_layout_generation: u64,
   visible_layout_range: Range<usize>,
@@ -451,7 +453,9 @@ impl RichTextEditor {
       paragraph_height_cache_revision: 0,
       item_sizes_cache: None,
       height_prefix_index: HeightPrefixIndex::default(),
+      measured_item_width: None,
       pending_viewport_size_refresh: false,
+      initial_layout_hidden: true,
       pending_snap_to_paragraph: None,
       visible_layout_generation: 0,
       visible_layout_range: 0..0,
@@ -1209,7 +1213,12 @@ impl RichTextEditor {
     if !has_measured_viewport {
       self.schedule_viewport_size_refresh(window, cx);
     }
-    let width = if has_measured_viewport { viewport_width } else { px(900.0) };
+    let width = self
+      .measured_item_width
+      .unwrap_or(if has_measured_viewport { viewport_width } else { px(900.0) });
+    if has_measured_viewport && self.initial_layout_hidden {
+      self.ensure_exact_initial_viewport_heights(width, window, cx);
+    }
     self.ensure_exact_interaction_paragraph_heights(width, window, cx);
     if let Some(cache) = &self.item_sizes_cache
       && cache.width == width
@@ -1260,6 +1269,33 @@ impl RichTextEditor {
     for range in ranges {
       for paragraph_ix in range {
         self.ensure_exact_paragraph_height(paragraph_ix, width, window, cx);
+      }
+    }
+  }
+
+  fn ensure_exact_initial_viewport_heights(&mut self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) {
+    let paragraph_count = self.document.paragraphs.len();
+    if paragraph_count == 0 {
+      return;
+    }
+
+    let viewport_height = self.scroll_handle.bounds().size.height.max(px(700.0));
+    let target_height = viewport_height + px(512.0);
+    let mut accumulated = px(0.0);
+
+    for paragraph_ix in 0..paragraph_count {
+      self.ensure_exact_paragraph_height(paragraph_ix, width, window, cx);
+      let Some(height) = self
+        .paragraph_height_cache
+        .get(paragraph_ix)
+        .and_then(|entry| *entry)
+        .map(|entry| entry.height)
+      else {
+        continue;
+      };
+      accumulated += height;
+      if accumulated >= target_height {
+        break;
       }
     }
   }
@@ -1371,6 +1407,9 @@ impl RichTextEditor {
   }
 
   fn current_layout_width(&self) -> Pixels {
+    if let Some(width) = self.measured_item_width {
+      return width;
+    }
     let viewport_width = self.scroll_handle.bounds().size.width;
     if viewport_width > px(1.0) { viewport_width } else { px(900.0) }
   }
@@ -1466,6 +1505,7 @@ impl RichTextEditor {
     height: Pixels,
     cx: &mut Context<Self>,
   ) {
+    self.note_measured_item_width(width, cx);
     self
       .paragraph_height_cache
       .resize(self.document.paragraphs.len(), None);
@@ -1484,7 +1524,29 @@ impl RichTextEditor {
     cx.notify();
   }
 
+  pub(super) fn note_measured_item_width(&mut self, width: Pixels, cx: &mut Context<Self>) {
+    if self.measured_item_width == Some(width) {
+      return;
+    }
+    self.measured_item_width = Some(width);
+    self.item_sizes_cache = None;
+    cx.notify();
+  }
+
   fn begin_visible_layout(&mut self, range: Range<usize>) -> u64 {
+    if self.initial_layout_hidden
+      && range.start == 0
+      && range.end == 1
+      && self.document.paragraphs.len() > 1
+      && self.scroll_handle.bounds().size.height <= px(1.0)
+    {
+      // gpui-component's VirtualList measures item 0 in request_layout before
+      // prepaint computes the real visible range. Do not let that measurement
+      // pass stand in for the startup viewport, or the document can reveal
+      // while most visible rows still use estimated heights.
+      return self.visible_layout_generation;
+    }
+
     self.visible_layout_generation = self.visible_layout_generation.wrapping_add(1);
     self.visible_layout_range = range.clone();
     self.visible_layout_parts = vec![None; range.end.saturating_sub(range.start)];
@@ -2467,6 +2529,14 @@ impl Render for RichTextEditor {
     self.ensure_focus_subscriptions(window, cx);
     let hide_until_viewport_measured = self.scroll_handle.bounds().size.width <= px(1.0);
     let item_sizes = self.paragraph_item_sizes(window, cx);
+    let has_startup_layout_width = self.measured_item_width.is_some() || self.document.paragraphs.is_empty();
+    if !hide_until_viewport_measured && self.initial_layout_hidden && has_startup_layout_width {
+      // The VirtualList row positions and the paragraph layouts now agree on
+      // width, so the first visible frame can use the same geometry that later
+      // interaction frames use.
+      self.initial_layout_hidden = false;
+    }
+    let hide_initial_layout = hide_until_viewport_measured || self.initial_layout_hidden;
     self.apply_pending_paragraph_snap(cx);
     let scroll_handle = self.scroll_handle.clone();
     div()
@@ -2547,7 +2617,7 @@ impl Render for RichTextEditor {
             .collect::<Vec<_>>()
         })
         .track_scroll(&scroll_handle)
-        .when(hide_until_viewport_measured, |this| this.opacity(0.0)),
+        .when(hide_initial_layout, |this| this.opacity(0.0)),
       )
       .child(
         div()

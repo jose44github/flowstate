@@ -129,6 +129,7 @@ impl Element for VirtualParagraphElement {
           _ => Some(px(900.0)),
         })
         .unwrap_or(px(900.0));
+      editor.update(cx, |editor, cx| editor.note_measured_item_width(width, cx));
       let previous_layout = layout_cell.0.borrow().clone();
       let layout = editor.update(cx, |editor, cx| {
         build_single_paragraph_layout(&editor.document, paragraph_ix, width, previous_layout.as_deref(), window, cx)
