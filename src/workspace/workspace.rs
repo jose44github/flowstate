@@ -479,6 +479,7 @@ impl Workspace {
         resizable_panel()
           .size(px(240.0))
           .size_range(px(180.0)..px(420.0))
+          .grow(false)
           .child(self.render_left_nav(nav_width, cx)),
       )
       .child(
@@ -502,6 +503,7 @@ impl Workspace {
         resizable_panel()
           .size(px(300.0))
           .size_range(px(220.0)..px(520.0))
+          .grow(false)
           .child(self.render_toolkit()),
       )
   }

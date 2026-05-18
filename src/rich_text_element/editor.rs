@@ -402,6 +402,7 @@ pub struct RichTextEditor {
   paragraph_height_cache_revision: u64,
   item_sizes_cache: Option<ItemSizesCache>,
   height_prefix_index: HeightPrefixIndex,
+  pending_viewport_size_refresh: bool,
   pending_snap_to_paragraph: Option<(usize, u8)>,
   visible_layout_generation: u64,
   visible_layout_range: Range<usize>,
@@ -450,6 +451,7 @@ impl RichTextEditor {
       paragraph_height_cache_revision: 0,
       item_sizes_cache: None,
       height_prefix_index: HeightPrefixIndex::default(),
+      pending_viewport_size_refresh: false,
       pending_snap_to_paragraph: None,
       visible_layout_generation: 0,
       visible_layout_range: 0..0,
@@ -1203,7 +1205,11 @@ impl RichTextEditor {
       .paragraph_layout_cache
       .resize(self.document.paragraphs.len(), None);
     let viewport_width = self.scroll_handle.bounds().size.width;
-    let width = if viewport_width > px(1.0) { viewport_width } else { px(900.0) };
+    let has_measured_viewport = viewport_width > px(1.0);
+    if !has_measured_viewport {
+      self.schedule_viewport_size_refresh(window, cx);
+    }
+    let width = if has_measured_viewport { viewport_width } else { px(900.0) };
     self.ensure_exact_interaction_paragraph_heights(width, window, cx);
     if let Some(cache) = &self.item_sizes_cache
       && cache.width == width
@@ -1279,6 +1285,18 @@ impl RichTextEditor {
       height: layout.size.height,
     });
     self.paragraph_height_cache_revision = self.paragraph_height_cache_revision.wrapping_add(1);
+  }
+
+  fn schedule_viewport_size_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if self.pending_viewport_size_refresh {
+      return;
+    }
+    self.pending_viewport_size_refresh = true;
+    cx.on_next_frame(window, |editor, _, cx| {
+      editor.pending_viewport_size_refresh = false;
+      editor.item_sizes_cache = None;
+      cx.notify();
+    });
   }
 
   fn cache_paragraph_layout(&mut self, paragraph_ix: usize, width: Pixels, layout: Rc<LayoutState>) {
@@ -2447,6 +2465,7 @@ impl Focusable for RichTextEditor {
 impl Render for RichTextEditor {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.ensure_focus_subscriptions(window, cx);
+    let hide_until_viewport_measured = self.scroll_handle.bounds().size.width <= px(1.0);
     let item_sizes = self.paragraph_item_sizes(window, cx);
     self.apply_pending_paragraph_snap(cx);
     let scroll_handle = self.scroll_handle.clone();
@@ -2527,7 +2546,8 @@ impl Render for RichTextEditor {
             })
             .collect::<Vec<_>>()
         })
-        .track_scroll(&scroll_handle),
+        .track_scroll(&scroll_handle)
+        .when(hide_until_viewport_measured, |this| this.opacity(0.0)),
       )
       .child(
         div()
