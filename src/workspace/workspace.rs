@@ -29,6 +29,7 @@ pub struct Workspace {
   ribbon_collapsed: bool,
   tab_bar_scroll_handle: ScrollHandle,
   body_resizable_state: Entity<ResizableState>,
+  content_resizable_state: Entity<ResizableState>,
   outline_tree: Entity<TreeState>,
   outline_cache: Option<(Uuid, u64, u64)>,
   collapsed_outline_items: HashSet<usize>,
@@ -58,6 +59,7 @@ impl Workspace {
       ribbon_collapsed: false,
       tab_bar_scroll_handle: ScrollHandle::new(),
       body_resizable_state: cx.new(|_| ResizableState::default()),
+      content_resizable_state: cx.new(|_| ResizableState::default()),
       outline_tree: cx.new(|cx| TreeState::new(cx)),
       outline_cache: None,
       collapsed_outline_items: HashSet::new(),
@@ -397,6 +399,16 @@ impl Workspace {
           .size_range(px(180.0)..px(420.0))
           .child(self.render_left_nav(nav_width, cx)),
       )
+      .child(
+        resizable_panel()
+          .size_range(px(580.0)..Pixels::MAX)
+          .child(self.render_content_area(cx)),
+      )
+  }
+
+  fn render_content_area(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    h_resizable("workspace-content-resizable")
+      .with_state(&self.content_resizable_state)
       .child(
         resizable_panel()
           .size_range(px(360.0)..Pixels::MAX)
