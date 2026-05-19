@@ -1278,9 +1278,11 @@ fn render_font_family_row(workspace: WeakEntity<Workspace>, window: &mut Window,
     let current = current.clone();
     let fonts = fonts.clone();
     move |window, cx| {
-      let mut select = SelectState::new(SearchableVec::new(fonts), None, window, cx).searchable(true);
-      select.set_selected_value(&current, window, cx);
-      let select = cx.new(|_| select);
+      let select = cx.new(|cx| {
+        let mut select = SelectState::new(SearchableVec::new(fonts), None, window, cx).searchable(true);
+        select.set_selected_value(&current, window, cx);
+        select
+      });
       let _subscription = cx.subscribe_in(&select, window, {
         let workspace = workspace.clone();
         move |_, _, event: &SelectEvent<FontFamilySelectDelegate>, _, cx| {
