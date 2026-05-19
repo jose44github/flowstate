@@ -1038,7 +1038,9 @@ fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
   div()
     .h_full()
     .flex_none()
+    .flex()
     .items_center()
+    .justify_center()
     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     .child(
       Button::new(id)
