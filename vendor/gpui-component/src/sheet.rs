@@ -1,7 +1,7 @@
 use std::{rc::Rc, time::Duration};
 
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App,ClickEvent, DefiniteLength, DismissEvent, Div,
+    AbsoluteLength, Animation, AnimationExt as _, AnyElement, App,ClickEvent, DefiniteLength, DismissEvent, Div,
     EventEmitter, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding, MouseButton,
     ParentElement, Pixels, RenderOnce, Styled, Window, anchored, div, point,
     prelude::FluentBuilder as _, px,
@@ -133,6 +133,13 @@ impl RenderOnce for Sheet {
                 window_paddings.left + window_paddings.right,
                 window_paddings.top + window_paddings.bottom,
             );
+        let slide_distance = if placement.is_horizontal() {
+            self.size
+                .to_pixels(AbsoluteLength::Pixels(size.width), window.rem_size())
+        } else {
+            self.size
+                .to_pixels(AbsoluteLength::Pixels(size.height), window.rem_size())
+        };
         let on_close = self.on_close.clone();
 
         anchored()
@@ -219,7 +226,10 @@ impl RenderOnce for Sheet {
                             )
                             .child(
                                 // Body
-                                div().flex_1().overflow_scrollbar().child(self.content),
+                                div()
+                                    .flex_1()
+                                    .overflow_scrollbar()
+                                    .child(self.content.size_full()),
                             )
                             .when_some(self.footer, |this, footer| {
                                 // Footer
@@ -236,7 +246,7 @@ impl RenderOnce for Sheet {
                                 "slide",
                                 Animation::new(Duration::from_secs_f64(0.15)),
                                 move |this, delta| {
-                                    let y = px(-100.) + delta * px(100.);
+                                    let y = -slide_distance + delta * slide_distance;
                                     this.map(|this| match placement {
                                         Placement::Top => this.top(y),
                                         Placement::Right => this.right(y),

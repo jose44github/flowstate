@@ -1,6 +1,6 @@
 use gpui::{
-    App, Entity, InteractiveElement as _, IntoElement, ListAlignment, ListState,
-    ParentElement as _, SharedString, Styled, Window, div, list, prelude::FluentBuilder as _, px,
+    App, Entity, InteractiveElement as _, IntoElement, ParentElement as _, SharedString, Styled,
+    Window, div, prelude::FluentBuilder as _,
 };
 use rust_i18n::t;
 
@@ -99,27 +99,10 @@ impl SettingPage {
             .filter(|group| group.is_match(&query))
             .cloned()
             .collect::<Vec<_>>();
-        let groups_count = groups.len();
-
-        let list_state = window
-            .use_keyed_state(
-                SharedString::from(format!("list-state:{}", ix)),
-                cx,
-                |_, _| ListState::new(groups_count, ListAlignment::Top, px(100.)),
-            )
-            .read(cx)
-            .clone();
-
-        if list_state.item_count() != groups_count {
-            list_state.reset(groups_count);
-        }
-
-        let deferred_scroll_group_ix = state.read(cx).deferred_scroll_group_ix;
-        if let Some(ix) = deferred_scroll_group_ix {
+        if state.read(cx).deferred_scroll_group_ix.is_some() {
             state.update(cx, |state, _| {
                 state.deferred_scroll_group_ix = None;
             });
-            list_state.scroll_to_reveal_item(ix);
         }
 
         v_flex()
@@ -163,12 +146,11 @@ impl SettingPage {
                     .relative()
                     .flex_1()
                     .w_full()
+                    .overflow_y_scrollbar()
                     .child(
-                        list(list_state.clone(), {
-                            let query = query.clone();
-                            let options = *options;
-                            move |group_ix, window, cx| {
-                                let group = groups[group_ix].clone();
+                        v_flex()
+                            .w_full()
+                            .children(groups.into_iter().enumerate().map(|(group_ix, group)| {
                                 group
                                     .py_4()
                                     .render(
@@ -176,17 +158,14 @@ impl SettingPage {
                                         &RenderOptions {
                                             page_ix: ix,
                                             group_ix,
-                                            ..options
+                                            ..*options
                                         },
                                         window,
                                         cx,
                                     )
                                     .into_any_element()
-                            }
-                        })
-                        .size_full(),
-                    )
-                    .vertical_scrollbar(&list_state),
+                            })),
+                    ),
             )
     }
 }
