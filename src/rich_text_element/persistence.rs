@@ -45,7 +45,10 @@ pub fn read_db8(path: impl AsRef<Path>) -> io::Result<Document> {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid DB8 magic"));
   }
   let version = read_u32(&mut cursor)?;
-  if !matches!(version, 1 | DB8_VERSION) {
+  // Version 3 briefly existed during development with document appearance
+  // appended after semantic content. Appearance is intentionally app-local, so
+  // v3 input is accepted but the trailing appearance payload is ignored.
+  if !matches!(version, 1 | 2 | 3) {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported DB8 version"));
   }
 

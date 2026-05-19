@@ -527,6 +527,25 @@ impl RichTextEditor {
     self.edit_generation
   }
 
+  pub fn update_document_theme(
+    &mut self,
+    update: impl FnOnce(&mut DocumentTheme),
+    cx: &mut Context<Self>,
+  ) {
+    update(&mut self.document.theme);
+    self.invalidate_document_theme_layout(cx);
+  }
+
+  fn invalidate_document_theme_layout(&mut self, cx: &mut Context<Self>) {
+    self.last_layout = None;
+    self.paragraph_layout_cache.clear();
+    self.paragraph_height_cache = vec![None; self.document.paragraphs.len()];
+    self.paragraph_height_cache_revision = self.paragraph_height_cache_revision.wrapping_add(1);
+    self.item_sizes_cache = None;
+    self.height_prefix_index = HeightPrefixIndex::default();
+    cx.notify();
+  }
+
   pub fn save(&mut self, cx: &mut Context<Self>) -> io::Result<()> {
     let Some(path) = self.document_path.clone() else {
       return Ok(());

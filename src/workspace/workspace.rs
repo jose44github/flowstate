@@ -1,21 +1,24 @@
 use std::{cell::Cell, collections::HashSet, path::PathBuf, rc::Rc};
 
 use gpui::{
-  App, Bounds, ClickEvent, Context, Entity, InteractiveElement, IntoElement, MouseButton, PromptButton, PromptLevel, Render, ScrollHandle,
-  SharedString, Subscription, Window, WindowBounds, WindowControlArea, WindowOptions, PathPromptOptions, Pixels, TitlebarOptions, div, prelude::*,
-  black, point, px, size, white,
+  AnyElement, App, Axis, Bounds, ClickEvent, Context, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, PromptButton, PromptLevel, Render,
+  ScrollHandle, SharedString, Subscription, WeakEntity, Window, WindowBounds, WindowControlArea, WindowOptions, PathPromptOptions, Pixels,
+  TitlebarOptions, div, prelude::*,
+  black, point, px, rgb, size, white,
 };
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_component::input::{Input, InputState};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
+use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{ActiveTheme as _, Disableable, IconName, Selectable, Sizable, Theme, ThemeRegistry, h_flex, v_flex};
+use gpui_component::{ActiveTheme as _, Disableable, IconName, PixelsExt, Selectable, Sizable, Theme, ThemeRegistry, h_flex, v_flex};
 use uuid::Uuid;
 
-use crate::app_settings::save_theme_name;
-use crate::rich_text_element::{Document, ParagraphStyle, RichTextEditor, demo_document, load_or_create_document};
+use crate::app_settings::{load_document_theme, save_document_theme, save_theme_name};
+use crate::rich_text_element::{Document, DocumentTheme, ParagraphStyle, RichTextEditor, demo_document, load_or_create_document};
 use crate::workspace::document_panel::DocumentPanel;
 use crate::workspace::icons::{AppIcon, icon_button};
 
@@ -33,6 +36,7 @@ pub struct Workspace {
   outline_revision: u64,
   outline_caret_paragraph: Option<usize>,
   editor_subscriptions: Vec<Subscription>,
+  styles_settings_open: bool,
 }
 
 #[derive(Clone)]
@@ -62,6 +66,7 @@ impl Workspace {
       outline_revision: 0,
       outline_caret_paragraph: None,
       editor_subscriptions: Vec::new(),
+      styles_settings_open: false,
     };
 
     if let Some(path) = initial_path {
@@ -80,11 +85,14 @@ impl Workspace {
 
   fn create_document_panel(
     &mut self,
-    document: Document,
+    mut document: Document,
     path: Option<PathBuf>,
     _window: &mut Window,
     cx: &mut Context<Self>,
   ) -> Entity<DocumentPanel> {
+    // DB8 stores style assignments, not style appearance. The render theme is
+    // local user preference loaded from app settings.
+    document.theme = load_document_theme();
     let editor = cx.new(|cx| RichTextEditor::new_with_path(document, path.clone(), cx));
     self.editor_subscriptions.push(cx.observe(&editor, |workspace, editor, cx| {
       let caret_paragraph = Some(editor.read(cx).caret_paragraph());
@@ -356,6 +364,17 @@ impl Workspace {
     self.document_panels.iter().position(|panel| panel.read(cx).id() == active_id)
   }
 
+  fn apply_document_theme_to_open_editors(&mut self, theme: DocumentTheme, cx: &mut Context<Self>) {
+    for panel in &self.document_panels {
+      let editor = panel.read(cx).editor();
+      let theme = theme.clone();
+      editor.update(cx, |editor, cx| {
+        editor.update_document_theme(|document_theme| *document_theme = theme, cx);
+      });
+    }
+    cx.notify();
+  }
+
   fn document_tabs(&self, cx: &App) -> Vec<DocumentTab> {
     self
       .document_panels
@@ -401,17 +420,248 @@ impl Workspace {
 
 impl Render for Workspace {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
+    div()
+      .relative()
       .size_full()
       .bg(cx.theme().background)
-      .child(self.render_top_bar(window, cx))
-      .when(!self.ribbon_collapsed, |this| this.child(self.render_ribbon(cx)))
-      .child(self.render_workspace_body(cx))
-      .child(self.render_status_bar(cx))
+      .child(
+        v_flex()
+          .size_full()
+          .child(self.render_top_bar(window, cx))
+          .when(!self.ribbon_collapsed, |this| this.child(self.render_ribbon(cx)))
+          .child(self.render_workspace_body(cx))
+          .child(self.render_status_bar(cx)),
+      )
+      .when(self.styles_settings_open, |this| this.child(self.render_styles_settings_overlay(cx)))
   }
 }
 
 impl Workspace {
+  fn render_styles_settings_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let workspace = cx.entity().downgrade();
+    let has_document = self.active_editor.is_some();
+
+    div()
+      .absolute()
+      .size_full()
+      .bg(black().opacity(0.32))
+      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .child(
+        v_flex()
+          .absolute()
+          .top(px(52.0))
+          .left(px(56.0))
+          .right(px(56.0))
+          .bottom(px(40.0))
+          .bg(cx.theme().background)
+          .border_1()
+          .border_color(cx.theme().border)
+          .rounded_lg()
+          .shadow_lg()
+          .overflow_hidden()
+          .child(
+            h_flex()
+              .h(px(44.0))
+              .flex_none()
+              .items_center()
+              .justify_between()
+              .px_4()
+              .border_b_1()
+              .border_color(cx.theme().border)
+              .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("Document Styles"))
+              .child(
+                icon_button("close-style-settings", AppIcon::Close)
+                  .tooltip("Close")
+                  .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.styles_settings_open = false;
+                    cx.notify();
+                  })),
+              ),
+          )
+          .child(
+            div()
+              .flex_1()
+              .overflow_hidden()
+              .child(
+                Settings::new("document-style-settings")
+                  .sidebar_width(px(180.0))
+                  .page(self.document_styles_page(workspace, has_document)),
+              ),
+          ),
+      )
+  }
+
+  fn document_styles_page(&self, workspace: WeakEntity<Workspace>, has_document: bool) -> SettingPage {
+    SettingPage::new("Styles")
+      .description("Customize the active document's style geometry, colors, and text metrics.")
+      .resettable(false)
+      .group(
+        SettingGroup::new()
+          .title("Apply to All")
+          .description("Blank fields are left unchanged when Apply is pressed.")
+          .item(SettingItem::render({
+            let workspace = workspace.clone();
+            move |_, window, cx| render_apply_all_styles(workspace.clone(), window, cx)
+          })),
+      )
+      .group(
+        SettingGroup::new()
+          .title("Text")
+          .description(if has_document { "Base font, color, and paragraph rhythm." } else { "Open a document to edit style values." })
+          .item(style_string_item(workspace.clone(), "Font family", |theme| theme.default_font_family.clone(), |theme, value| {
+            theme.default_font_family = value;
+          }))
+          .item(style_color_item(workspace.clone(), "Text color", |theme| theme.default_text_color, |theme, value| {
+            theme.default_text_color = value;
+          }))
+          .item(style_number_item(workspace.clone(), "Body size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.body_font_size), |theme, value| {
+            theme.body_font_size = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Line spacing", 0.25, 5.0, 0.01, |theme| theme.line_spacing as f64, |theme, value| {
+            theme.line_spacing = value as f32;
+          }))
+          .item(style_number_item(workspace.clone(), "Paragraph after (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.paragraph_after), |theme, value| {
+            theme.paragraph_after = pt_to_pixels(value);
+          })),
+      )
+      .group(
+        SettingGroup::new()
+          .title("Page")
+          .description("Pageless document viewport insets.")
+          .item(style_number_item(workspace.clone(), "Inset X (pt)", 0.0, 300.0, 0.25, |theme| pixels_to_pt(theme.pageless_inset_x), |theme, value| {
+            theme.pageless_inset_x = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Inset top (pt)", 0.0, 300.0, 0.25, |theme| pixels_to_pt(theme.pageless_inset_top), |theme, value| {
+            theme.pageless_inset_top = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Inset bottom (pt)", 0.0, 300.0, 0.25, |theme| pixels_to_pt(theme.pageless_inset_bottom), |theme, value| {
+            theme.pageless_inset_bottom = pt_to_pixels(value);
+          })),
+      )
+      .group(
+        SettingGroup::new()
+          .title("Hierarchy Sizes")
+          .item(style_number_item(workspace.clone(), "Pocket size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.pocket_font_size), |theme, value| {
+            theme.pocket_font_size = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Hat size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.hat_font_size), |theme, value| {
+            theme.hat_font_size = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Block size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.block_font_size), |theme, value| {
+            theme.block_font_size = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Tag size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.tag_font_size), |theme, value| {
+            theme.tag_font_size = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Undertag size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.undertag_font_size), |theme, value| {
+            theme.undertag_font_size = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Cite size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.cite_font_size), |theme, value| {
+            theme.cite_font_size = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Condensed size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.condensed_font_size), |theme, value| {
+            theme.condensed_font_size = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Ultra-condensed size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.ultracondensed_font_size), |theme, value| {
+            theme.ultracondensed_font_size = pt_to_pixels(value);
+          })),
+      )
+      .group(
+        SettingGroup::new()
+          .title("Hierarchy Spacing")
+          .item(style_number_item(workspace.clone(), "Pocket before (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.pocket_before), |theme, value| {
+            theme.pocket_before = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Hat before (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.hat_before), |theme, value| {
+            theme.hat_before = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Block before (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.block_before), |theme, value| {
+            theme.block_before = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Tag before (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.tag_before), |theme, value| {
+            theme.tag_before = pt_to_pixels(value);
+          })),
+      )
+      .group(
+        SettingGroup::new()
+          .title("Borders and Highlights")
+          .item(style_number_item(workspace.clone(), "Pocket border width (pt)", 0.0, 20.0, 0.125, |theme| pixels_to_pt(theme.pocket_border_width), |theme, value| {
+            theme.pocket_border_width = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Pocket border X space (pt)", 0.0, 40.0, 0.25, |theme| pixels_to_pt(theme.pocket_border_space_x), |theme, value| {
+            theme.pocket_border_space_x = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Pocket border Y space (pt)", 0.0, 40.0, 0.25, |theme| pixels_to_pt(theme.pocket_border_space_y), |theme, value| {
+            theme.pocket_border_space_y = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Emphasis border width (pt)", 0.0, 20.0, 0.125, |theme| pixels_to_pt(theme.emphasis_border_width), |theme, value| {
+            theme.emphasis_border_width = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Emphasis paint width (pt)", 0.0, 20.0, 0.125, |theme| pixels_to_pt(theme.emphasis_border_paint_width), |theme, value| {
+            theme.emphasis_border_paint_width = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Box padding left (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.box_padding_left), |theme, value| {
+            theme.box_padding_left = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Box padding right (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.box_padding_right), |theme, value| {
+            theme.box_padding_right = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Box padding top (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.box_padding_top), |theme, value| {
+            theme.box_padding_top = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Box padding bottom (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.box_padding_bottom), |theme, value| {
+            theme.box_padding_bottom = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Highlight pad X (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.highlight_pad_x), |theme, value| {
+            theme.highlight_pad_x = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Highlight top extra", 0.0, 2.0, 0.01, |theme| theme.highlight_top_extra_fraction as f64, |theme, value| {
+            theme.highlight_top_extra_fraction = value as f32;
+          }))
+          .item(style_number_item(workspace.clone(), "Highlight bottom extra", 0.0, 2.0, 0.01, |theme| theme.highlight_bottom_extra_fraction as f64, |theme, value| {
+            theme.highlight_bottom_extra_fraction = value as f32;
+          }))
+          .item(style_color_item(workspace.clone(), "Spoken highlight", |theme| theme.highlight_spoken, |theme, value| {
+            theme.highlight_spoken = value;
+          }))
+          .item(style_color_item(workspace.clone(), "Insert highlight", |theme| theme.highlight_insert, |theme, value| {
+            theme.highlight_insert = value;
+          }))
+          .item(style_color_item(workspace.clone(), "Alternative highlight", |theme| theme.highlight_alternative, |theme, value| {
+            theme.highlight_alternative = value;
+          })),
+      )
+      .group(
+        SettingGroup::new()
+          .title("Underlines")
+          .item(style_number_item(workspace.clone(), "Fallback top from baseline (pt)", -80.0, 80.0, 0.25, |theme| pixels_to_pt(theme.underline_fallback_top_from_baseline), |theme, value| {
+            theme.underline_fallback_top_from_baseline = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Rule thickness (pt)", 0.0, 20.0, 0.125, |theme| pixels_to_pt(theme.underline_rule_thickness), |theme, value| {
+            theme.underline_rule_thickness = pt_to_pixels(value);
+          }))
+          .item(style_bool_item(workspace.clone(), "Snap rules to pixels", |theme| theme.snap_underline_rules_to_pixels, |theme, value| {
+            theme.snap_underline_rules_to_pixels = value;
+          }))
+          .item(style_number_item(workspace.clone(), "Double top from baseline (pt)", -80.0, 80.0, 0.25, |theme| pixels_to_pt(theme.double_underline_top_from_baseline), |theme, value| {
+            theme.double_underline_top_from_baseline = pt_to_pixels(value);
+          }))
+          .item(style_number_item(workspace.clone(), "Double underline gap (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.double_underline_gap), |theme, value| {
+            theme.double_underline_gap = pt_to_pixels(value);
+          })),
+      )
+      .group(
+        SettingGroup::new()
+          .title("Special Colors")
+          .item(style_color_item(workspace.clone(), "Analytic text", |theme| theme.analytic_color, |theme, value| {
+            theme.analytic_color = value;
+          }))
+          .item(style_color_item(workspace, "Undertag text", |theme| theme.undertag_color, |theme, value| {
+            theme.undertag_color = value;
+          })),
+      )
+  }
+
   fn render_top_bar(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
     h_flex()
       .h(px(36.0))
@@ -430,7 +680,7 @@ impl Workspace {
           .items_center()
           .gap_1()
           .child(top_bar_button("top-file", "File"))
-          .child(top_bar_button("top-styles", "Styles"))
+          .child(styles_top_bar_button(cx))
           .child(theme_top_bar_button(cx))
           .child(top_bar_button("top-settings", "Settings")),
       )
@@ -1051,6 +1301,27 @@ fn window_control_button(
     .child(icon)
 }
 
+fn styles_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
+  div()
+    .h_full()
+    .flex_none()
+    .flex()
+    .items_center()
+    .justify_center()
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .child(
+      Button::new("top-styles")
+        .label("Styles")
+        .xsmall()
+        .ghost()
+        .on_click(cx.listener(|workspace, _, _, cx| {
+          workspace.styles_settings_open = true;
+          cx.stop_propagation();
+          cx.notify();
+        })),
+    )
+}
+
 fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
   // The top bar itself starts native window dragging on mouse down. Each
   // button owns its mouse-down event so it behaves like a control instead of
@@ -1069,6 +1340,218 @@ fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
         .ghost()
         .on_click(|_, _, cx| cx.stop_propagation()),
     )
+}
+
+fn style_number_item(
+  workspace: WeakEntity<Workspace>,
+  title: &'static str,
+  min: f64,
+  max: f64,
+  step: f64,
+  get: fn(&DocumentTheme) -> f64,
+  set: fn(&mut DocumentTheme, f64),
+) -> SettingItem {
+  let read_workspace = workspace.clone();
+  let write_workspace = workspace;
+  SettingItem::new(
+    title,
+    SettingField::number_input(
+      NumberFieldOptions { min, max, step },
+      move |cx| active_theme_value(cx, &read_workspace, get).unwrap_or_default(),
+      move |value, cx| update_active_document_theme(cx, &write_workspace, move |theme| set(theme, value)),
+    ),
+  )
+  .layout(Axis::Horizontal)
+}
+
+fn style_string_item(
+  workspace: WeakEntity<Workspace>,
+  title: &'static str,
+  get: fn(&DocumentTheme) -> SharedString,
+  set: fn(&mut DocumentTheme, SharedString),
+) -> SettingItem {
+  let read_workspace = workspace.clone();
+  let write_workspace = workspace;
+  SettingItem::new(
+    title,
+    SettingField::input(
+      move |cx| active_theme_value(cx, &read_workspace, get).unwrap_or_default(),
+      move |value, cx| update_active_document_theme(cx, &write_workspace, move |theme| set(theme, value)),
+    ),
+  )
+  .layout(Axis::Horizontal)
+}
+
+fn style_bool_item(
+  workspace: WeakEntity<Workspace>,
+  title: &'static str,
+  get: fn(&DocumentTheme) -> bool,
+  set: fn(&mut DocumentTheme, bool),
+) -> SettingItem {
+  let read_workspace = workspace.clone();
+  let write_workspace = workspace;
+  SettingItem::new(
+    title,
+    SettingField::switch(
+      move |cx| active_theme_value(cx, &read_workspace, get).unwrap_or_default(),
+      move |value, cx| update_active_document_theme(cx, &write_workspace, move |theme| set(theme, value)),
+    ),
+  )
+  .layout(Axis::Horizontal)
+}
+
+fn style_color_item(
+  workspace: WeakEntity<Workspace>,
+  title: &'static str,
+  get: fn(&DocumentTheme) -> Hsla,
+  set: fn(&mut DocumentTheme, Hsla),
+) -> SettingItem {
+  let read_workspace = workspace.clone();
+  let write_workspace = workspace;
+  SettingItem::new(
+    title,
+    SettingField::input(
+      move |cx| active_theme_value(cx, &read_workspace, get).map(color_to_hex).unwrap_or_default().into(),
+      move |value, cx| {
+        if let Some(color) = parse_hex_color(&value) {
+          update_active_document_theme(cx, &write_workspace, move |theme| set(theme, color));
+        }
+      },
+    ),
+  )
+  .description("Hex color, e.g. #1f3864.")
+  .layout(Axis::Horizontal)
+}
+
+fn active_theme_value<T>(cx: &App, workspace: &WeakEntity<Workspace>, get: fn(&DocumentTheme) -> T) -> Option<T> {
+  let workspace = workspace.upgrade()?;
+  let workspace = workspace.read(cx);
+  if let Some(editor) = workspace.active_editor.clone() {
+    Some(get(&editor.read(cx).document().theme))
+  } else {
+    Some(get(&load_document_theme()))
+  }
+}
+
+fn update_active_document_theme(cx: &mut App, workspace: &WeakEntity<Workspace>, update: impl FnOnce(&mut DocumentTheme)) {
+  let _ = workspace.update(cx, |workspace, cx| {
+    let mut theme = workspace
+      .active_editor
+      .as_ref()
+      .map(|editor| editor.read(cx).document().theme.clone())
+      .unwrap_or_else(load_document_theme);
+    update(&mut theme);
+
+    if let Err(error) = save_document_theme(&theme) {
+      eprintln!("failed to save document style settings: {error}");
+    }
+
+    workspace.apply_document_theme_to_open_editors(theme, cx);
+  });
+}
+
+fn render_apply_all_styles(workspace: WeakEntity<Workspace>, window: &mut Window, cx: &mut App) -> AnyElement {
+  let font_size = window.use_keyed_state("style-apply-all-font-size", cx, |window, cx| {
+    cx.new(|cx| InputState::new(window, cx).placeholder("Font size pt").default_value(""))
+  });
+  let before = window.use_keyed_state("style-apply-all-before", cx, |window, cx| {
+    cx.new(|cx| InputState::new(window, cx).placeholder("Before spacing pt").default_value(""))
+  });
+  let text_color = window.use_keyed_state("style-apply-all-text-color", cx, |window, cx| {
+    cx.new(|cx| InputState::new(window, cx).placeholder("Text color").default_value(""))
+  });
+  let font_size_state = font_size.read(cx).clone();
+  let before_state = before.read(cx).clone();
+  let text_color_state = text_color.read(cx).clone();
+
+  h_flex()
+    .w_full()
+    .gap_2()
+    .items_center()
+    .child(Input::new(&font_size_state).w_32())
+    .child(Input::new(&before_state).w_32())
+    .child(Input::new(&text_color_state).w_32())
+    .child(
+      Button::new("apply-all-document-styles")
+        .label("Apply")
+        .primary()
+        .small()
+        .on_click(move |_, _, cx| {
+          let font_size = optional_f64(&font_size_state.read(cx).value());
+          let before = optional_f64(&before_state.read(cx).value());
+          let text_color = optional_hex_color(&text_color_state.read(cx).value());
+
+          update_active_document_theme(cx, &workspace, move |theme| {
+            if let Some(font_size) = font_size {
+              let size = pt_to_pixels(font_size);
+              theme.body_font_size = size;
+              theme.cite_font_size = size;
+              theme.condensed_font_size = size;
+              theme.ultracondensed_font_size = size;
+              theme.pocket_font_size = size;
+              theme.hat_font_size = size;
+              theme.block_font_size = size;
+              theme.tag_font_size = size;
+              theme.undertag_font_size = size;
+            }
+            if let Some(before) = before {
+              let spacing = pt_to_pixels(before);
+              theme.pocket_before = spacing;
+              theme.hat_before = spacing;
+              theme.block_before = spacing;
+              theme.tag_before = spacing;
+            }
+            if let Some(color) = text_color {
+              theme.default_text_color = color;
+              theme.analytic_color = color;
+              theme.undertag_color = color;
+            }
+          });
+        }),
+    )
+    .into_any_element()
+}
+
+fn pixels_to_pt(value: Pixels) -> f64 {
+  value.as_f64() * 72.0 / 96.0
+}
+
+fn pt_to_pixels(value: f64) -> Pixels {
+  px((value as f32) * 96.0 / 72.0)
+}
+
+fn color_to_hex(color: Hsla) -> String {
+  let rgba = color.to_rgb();
+  let r = (rgba.r.clamp(0.0, 1.0) * 255.0).round() as u8;
+  let g = (rgba.g.clamp(0.0, 1.0) * 255.0).round() as u8;
+  let b = (rgba.b.clamp(0.0, 1.0) * 255.0).round() as u8;
+  format!("#{r:02x}{g:02x}{b:02x}")
+}
+
+fn parse_hex_color(value: &str) -> Option<Hsla> {
+  let value = value.trim().trim_start_matches('#');
+  if value.len() != 6 {
+    return None;
+  }
+  u32::from_str_radix(value, 16).ok().map(|hex| rgb(hex).into())
+}
+
+fn optional_f64(value: &str) -> Option<f64> {
+  let value = value.trim();
+  if value.is_empty() {
+    None
+  } else {
+    value.parse::<f64>().ok()
+  }
+}
+
+fn optional_hex_color(value: &str) -> Option<Hsla> {
+  let value = value.trim();
+  if value.is_empty() {
+    None
+  } else {
+    parse_hex_color(value)
+  }
 }
 
 fn theme_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
