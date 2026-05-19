@@ -5,7 +5,7 @@ use gpui::{
   SharedString, Subscription, Window, WindowBounds, WindowControlArea, WindowOptions, PathPromptOptions, Pixels, TitlebarOptions, div, prelude::*,
   black, point, px, size, white,
 };
-use gpui_component::button::{Button, ButtonVariants};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
@@ -673,19 +673,26 @@ impl Workspace {
       })
       .children(tabs.into_iter().map(|tab| {
         let panel_id = tab.id;
+        let close_button = icon_button(("close-tab", panel_id.as_u128() as u64), AppIcon::Close)
+          .tooltip("Close document")
+          .when(tab.active, |this| {
+            this.custom(
+              ButtonCustomVariant::new(cx)
+                .foreground(active_tab_fg)
+                .hover(active_tab_fg.opacity(0.12))
+                .active(active_tab_fg.opacity(0.18)),
+            )
+          })
+          .on_click(cx.listener(move |workspace, _, window, cx| {
+            cx.stop_propagation();
+            workspace.close_document_panel(panel_id, window, cx);
+          }));
         Tab::new()
           // GPUI-component tabs size to their labels. Keep tab labels bounded
           // before rendering so long filenames cannot break the tab strip.
           .label(tab.label)
           .selected(tab.active)
-          .suffix(
-            icon_button(("close-tab", panel_id.as_u128() as u64), AppIcon::Close)
-              .tooltip("Close document")
-              .on_click(cx.listener(move |workspace, _, window, cx| {
-                cx.stop_propagation();
-                workspace.close_document_panel(panel_id, window, cx);
-              })),
-          )
+          .suffix(close_button)
       }))
       .last_empty_space(div().flex_1().h_full())
   }

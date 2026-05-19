@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use gpui::{App, Application, Context, Entity, IntoElement, Render, Window, div, prelude::*, rgb};
 use gpui_component::{Theme, ThemeRegistry};
@@ -65,11 +65,24 @@ pub fn write_demo_document() -> anyhow::Result<()> {
 pub fn run_standalone(document_path: PathBuf) {
   Application::new().with_assets(gpui_component_assets::Assets).run(|cx: &mut App| {
     gpui_component::init(cx);
+    init_theme_registry(cx);
     apply_saved_theme(cx);
     register_rich_text_editor_keybindings(cx);
     open_workspace_window(document_path, cx);
     cx.activate(true);
   });
+}
+
+fn init_theme_registry(cx: &mut App) {
+  let themes_dir = vendored_themes_dir();
+  if let Err(error) = ThemeRegistry::watch_dir(themes_dir, cx, apply_saved_theme) {
+    eprintln!("failed to load GPUI component themes: {error}");
+  }
+}
+
+fn vendored_themes_dir() -> PathBuf {
+  let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+  manifest_dir.join("vendor").join("gpui-component").join("themes")
 }
 
 fn apply_saved_theme(cx: &mut App) {
