@@ -7,8 +7,8 @@ use gpui_component::button::{
 use gpui_component::{Selectable as _, Sizable as _};
 
 use crate::rich_text_element::{
-  HighlightStyle, ParagraphStyle, RichTextEditor, RichTextEditorStyleState, RunSemanticStyle,
-  SelectionState,
+  ArmedInlineTool, HighlightStyle, ParagraphStyle, RichTextEditor, RichTextEditorStyleState,
+  RunSemanticStyle, SelectionState,
 };
 use crate::ribbon::style_catalog::{
   HIGHLIGHT_STYLE_SPECS, PARAGRAPH_STYLE_SPECS, SEMANTIC_STYLE_SPECS,
@@ -31,22 +31,39 @@ impl EditorRibbon {
     matches!(state.paragraph_style, SelectionState::Uniform(current) if current == style)
   }
 
-  fn semantic_selected(state: &RichTextEditorStyleState, style: RunSemanticStyle) -> bool {
-    matches!(state.semantic, SelectionState::Uniform(current) if current == style)
+  fn semantic_selected(
+    state: &RichTextEditorStyleState,
+    armed_tool: Option<ArmedInlineTool>,
+    style: RunSemanticStyle,
+  ) -> bool {
+    matches!(armed_tool, Some(ArmedInlineTool::Semantic(current)) if current == style)
+      || matches!(state.semantic, SelectionState::Uniform(current) if current == style)
   }
 
-  fn underline_selected(state: &RichTextEditorStyleState) -> bool {
-    matches!(state.underline, SelectionState::Uniform(true))
+  fn underline_selected(
+    state: &RichTextEditorStyleState,
+    armed_tool: Option<ArmedInlineTool>,
+  ) -> bool {
+    matches!(armed_tool, Some(ArmedInlineTool::Underline))
+      || matches!(state.underline, SelectionState::Uniform(true))
   }
 
-  fn highlight_selected(state: &RichTextEditorStyleState, style: HighlightStyle) -> bool {
-    matches!(state.highlight, SelectionState::Uniform(Some(current)) if current == style)
+  fn highlight_selected(
+    state: &RichTextEditorStyleState,
+    armed_tool: Option<ArmedInlineTool>,
+    style: HighlightStyle,
+  ) -> bool {
+    matches!(armed_tool, Some(ArmedInlineTool::Highlight(current)) if current == style)
+      || matches!(state.highlight, SelectionState::Uniform(Some(current)) if current == style)
   }
 }
 
 impl Render for EditorRibbon {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let style_state = self.editor.read(cx).style_state();
+    let (style_state, armed_tool) = {
+      let editor = self.editor.read(cx);
+      (editor.style_state(), editor.armed_inline_tool())
+    };
 
     div()
       .w_full()
@@ -92,10 +109,10 @@ impl Render for EditorRibbon {
               .label(spec.label)
               .small()
               .outline()
-              .checked(Self::semantic_selected(&style_state, style))
+              .checked(Self::semantic_selected(&style_state, armed_tool, style))
               .on_click(move |_, _, cx| {
                 editor.update(cx, |editor, cx| {
-                  editor.toggle_semantic_style_for_selection(style, cx);
+                  editor.activate_inline_tool(ArmedInlineTool::Semantic(style), cx);
                 });
               })
           }))
@@ -105,10 +122,10 @@ impl Render for EditorRibbon {
               .label("Underline")
               .small()
               .outline()
-              .checked(Self::underline_selected(&style_state))
+              .checked(Self::underline_selected(&style_state, armed_tool))
               .on_click(move |_, _, cx| {
                 editor.update(cx, |editor, cx| {
-                  editor.toggle_underline(cx);
+                  editor.activate_inline_tool(ArmedInlineTool::Underline, cx);
                 });
               })
           }),
@@ -127,10 +144,10 @@ impl Render for EditorRibbon {
               .label(spec.label)
               .small()
               .outline()
-              .checked(Self::highlight_selected(&style_state, highlight))
+              .checked(Self::highlight_selected(&style_state, armed_tool, highlight))
               .on_click(move |_, _, cx| {
                 editor.update(cx, |editor, cx| {
-                  editor.set_highlight_for_selection(Some(highlight), cx);
+                  editor.activate_inline_tool(ArmedInlineTool::Highlight(highlight), cx);
                 });
               })
           }))
@@ -142,6 +159,7 @@ impl Render for EditorRibbon {
               .ghost()
               .on_click(move |_, _, cx| {
                 editor.update(cx, |editor, cx| {
+                  editor.clear_armed_inline_tool(cx);
                   editor.set_highlight_for_selection(None, cx);
                 });
               })

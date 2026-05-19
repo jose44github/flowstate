@@ -387,7 +387,8 @@ pub struct RichTextEditor {
   recovery_write_pending: bool,
   last_recovery_generation: u64,
   paste_cache: Option<PasteCache>,
-  pending_styles: Option<RunStyles>,
+  pub(super) pending_styles: Option<RunStyles>,
+  pub(super) armed_inline_tool: Option<ArmedInlineTool>,
   selecting: bool,
   drag_granularity: SelectionGranularity,
   last_drag_position: Option<Point<Pixels>>,
@@ -439,6 +440,7 @@ impl RichTextEditor {
       last_recovery_generation: 0,
       paste_cache: None,
       pending_styles: None,
+      armed_inline_tool: None,
       selecting: false,
       drag_granularity: SelectionGranularity::Character,
       last_drag_position: None,
@@ -1153,7 +1155,7 @@ impl RichTextEditor {
     }
   }
 
-  fn apply_document_edit(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Self, &mut Context<Self>)) {
+  pub(super) fn apply_document_edit(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Self, &mut Context<Self>)) {
     self.apply_document_edit_with_capture_range(cx, None, edit);
   }
 
@@ -1748,7 +1750,7 @@ impl RichTextEditor {
     self.move_to_offset(target, extend, cx);
   }
 
-  fn after_text_mutation(&mut self, cx: &mut Context<Self>) {
+  pub(super) fn after_text_mutation(&mut self, cx: &mut Context<Self>) {
     self.pending_styles = None;
     self.goal_x = None;
     self.scroll_head_into_view();
@@ -1885,7 +1887,7 @@ impl RichTextEditor {
     });
   }
 
-  fn styles_at_caret(&self) -> RunStyles {
+  pub(super) fn styles_at_caret(&self) -> RunStyles {
     if let Some(styles) = self.pending_styles {
       return styles;
     }
@@ -2391,6 +2393,9 @@ impl RichTextEditor {
       self.reset_caret_blink(cx);
       cx.notify();
     }
+    if self.selecting {
+      self.apply_armed_inline_tool_to_selection(cx);
+    }
     self.selecting = false;
     self.drag_granularity = SelectionGranularity::Character;
     self.last_drag_position = None;
@@ -2440,7 +2445,7 @@ impl RichTextEditor {
     self.mark_document_changed(after_generation, cx);
   }
 
-  fn reset_caret_blink(&mut self, cx: &mut Context<Self>) {
+  pub(super) fn reset_caret_blink(&mut self, cx: &mut Context<Self>) {
     self.caret_visible = true;
     self.ensure_caret_blink_task(cx);
   }
