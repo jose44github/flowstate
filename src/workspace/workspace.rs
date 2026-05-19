@@ -14,11 +14,11 @@ use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{ActiveTheme as _, Disableable, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, WindowExt as _, h_flex, v_flex};
+use gpui_component::{ActiveTheme as _, Disableable, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, h_flex, v_flex};
 use uuid::Uuid;
 
 use crate::app_settings::{load_document_theme, save_document_theme, save_theme_name};
-use crate::rich_text_element::{Document, DocumentTheme, ParagraphStyle, RichTextEditor, demo_document, load_or_create_document};
+use crate::rich_text_element::{Document, DocumentTheme, ParagraphStyle, RichTextEditor, ThemeUnderline, demo_document, load_or_create_document};
 use crate::workspace::document_panel::DocumentPanel;
 use crate::workspace::icons::{AppIcon, icon_button};
 
@@ -36,6 +36,7 @@ pub struct Workspace {
   outline_revision: u64,
   outline_caret_paragraph: Option<usize>,
   editor_subscriptions: Vec<Subscription>,
+  styles_settings_open: bool,
 }
 
 #[derive(Clone)]
@@ -65,6 +66,7 @@ impl Workspace {
       outline_revision: 0,
       outline_caret_paragraph: None,
       editor_subscriptions: Vec::new(),
+      styles_settings_open: false,
     };
 
     if let Some(path) = initial_path {
@@ -422,16 +424,65 @@ impl Render for Workspace {
       .size_full()
       .bg(cx.theme().background)
       .child(self.render_top_bar(window, cx))
-      .when(!self.ribbon_collapsed, |this| this.child(self.render_ribbon(cx)))
-      .child(self.render_workspace_body(cx))
-      .child(self.render_status_bar(cx))
+      .when(self.styles_settings_open, |this| this.child(self.render_styles_settings_view(cx)))
+      .when(!self.styles_settings_open, |this| {
+        this
+          .when(!self.ribbon_collapsed, |this| this.child(self.render_ribbon(cx)))
+          .child(self.render_workspace_body(cx))
+          .child(self.render_status_bar(cx))
+      })
   }
 }
 
 impl Workspace {
-  fn document_styles_page(&self, workspace: WeakEntity<Workspace>, has_document: bool) -> SettingPage {
-    SettingPage::new("Styles")
-      .description("Customize the active document's style geometry, colors, and text metrics.")
+  fn render_styles_settings_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let workspace = cx.entity().downgrade();
+    let has_document = self.active_editor.is_some();
+
+    v_flex()
+      .flex_1()
+      .size_full()
+      .overflow_hidden()
+      .bg(cx.theme().background)
+      .child(
+        h_flex()
+          .h(px(44.0))
+          .flex_none()
+          .items_center()
+          .justify_between()
+          .px_4()
+          .border_b_1()
+          .border_color(cx.theme().border)
+          .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("Document Style Settings"))
+          .child(
+            Button::new("close-styles-settings")
+              .icon(IconName::Close)
+              .label("Close")
+              .small()
+              .ghost()
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.styles_settings_open = false;
+                cx.notify();
+              })),
+          ),
+      )
+      .child(
+        div()
+          .flex_1()
+          .overflow_hidden()
+          .child(
+            Settings::new("document-style-settings")
+              .sidebar_width(px(220.0))
+              .pages(self.document_style_pages(workspace, has_document)),
+          ),
+      )
+  }
+
+  fn document_style_pages(&self, workspace: WeakEntity<Workspace>, has_document: bool) -> Vec<SettingPage> {
+    vec![
+      SettingPage::new("Base")
+        .default_open(true)
+        .description(if has_document { "Base font and normal text." } else { "Open a document to preview style values." })
       .resettable(false)
       .group(
         SettingGroup::new()
@@ -445,7 +496,7 @@ impl Workspace {
       .group(
         SettingGroup::new()
           .title("Text")
-          .description(if has_document { "Base font, color, and paragraph rhythm." } else { "Open a document to edit style values." })
+          .description(if has_document { "Base font and normal text." } else { "Open a document to preview style values." })
           .item(style_string_item(workspace.clone(), "Font family", |theme| theme.default_font_family.clone(), |theme, value| {
             theme.default_font_family = value;
           }))
@@ -455,110 +506,95 @@ impl Workspace {
           .item(style_number_item(workspace.clone(), "Body size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.body_font_size), |theme, value| {
             theme.body_font_size = pt_to_pixels(value);
           }))
-          .item(style_number_item(workspace.clone(), "Line spacing", 0.25, 5.0, 0.01, |theme| theme.line_spacing as f64, |theme, value| {
-            theme.line_spacing = value as f32;
-          }))
-          .item(style_number_item(workspace.clone(), "Paragraph after (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.paragraph_after), |theme, value| {
-            theme.paragraph_after = pt_to_pixels(value);
+          .items(style_face_items(workspace.clone(), "Normal", |theme| (theme.normal_bold, theme.normal_italic, theme.normal_underline), |theme, bold, italic, underline| {
+            theme.normal_bold = bold;
+            theme.normal_italic = italic;
+            theme.normal_underline = underline;
           })),
-      )
-      .group(
+      ),
+      SettingPage::new("Paragraph")
+        .description("Visual treatment for paragraph-level semantic styles.")
+        .resettable(false)
+        .group(
         SettingGroup::new()
-          .title("Page")
-          .description("Pageless document viewport insets.")
-          .item(style_number_item(workspace.clone(), "Inset X (pt)", 0.0, 300.0, 0.25, |theme| pixels_to_pt(theme.pageless_inset_x), |theme, value| {
-            theme.pageless_inset_x = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Inset top (pt)", 0.0, 300.0, 0.25, |theme| pixels_to_pt(theme.pageless_inset_top), |theme, value| {
-            theme.pageless_inset_top = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Inset bottom (pt)", 0.0, 300.0, 0.25, |theme| pixels_to_pt(theme.pageless_inset_bottom), |theme, value| {
-            theme.pageless_inset_bottom = pt_to_pixels(value);
-          })),
-      )
-      .group(
-        SettingGroup::new()
-          .title("Hierarchy Sizes")
+          .title("Paragraph Styles")
           .item(style_number_item(workspace.clone(), "Pocket size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.pocket_font_size), |theme, value| {
             theme.pocket_font_size = pt_to_pixels(value);
+          }))
+          .items(style_face_items(workspace.clone(), "Pocket", |theme| (theme.pocket_bold, theme.pocket_italic, theme.pocket_underline), |theme, bold, italic, underline| {
+            theme.pocket_bold = bold; theme.pocket_italic = italic; theme.pocket_underline = underline;
           }))
           .item(style_number_item(workspace.clone(), "Hat size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.hat_font_size), |theme, value| {
             theme.hat_font_size = pt_to_pixels(value);
           }))
+          .items(style_face_items(workspace.clone(), "Hat", |theme| (theme.hat_bold, theme.hat_italic, theme.hat_underline), |theme, bold, italic, underline| {
+            theme.hat_bold = bold; theme.hat_italic = italic; theme.hat_underline = underline;
+          }))
           .item(style_number_item(workspace.clone(), "Block size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.block_font_size), |theme, value| {
             theme.block_font_size = pt_to_pixels(value);
+          }))
+          .items(style_face_items(workspace.clone(), "Block", |theme| (theme.block_bold, theme.block_italic, theme.block_underline), |theme, bold, italic, underline| {
+            theme.block_bold = bold; theme.block_italic = italic; theme.block_underline = underline;
           }))
           .item(style_number_item(workspace.clone(), "Tag size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.tag_font_size), |theme, value| {
             theme.tag_font_size = pt_to_pixels(value);
           }))
+          .items(style_face_items(workspace.clone(), "Tag", |theme| (theme.tag_bold, theme.tag_italic, theme.tag_underline), |theme, bold, italic, underline| {
+            theme.tag_bold = bold; theme.tag_italic = italic; theme.tag_underline = underline;
+          }))
+          .item(style_color_item(workspace.clone(), "Analytic color", |theme| theme.analytic_color, |theme, value| {
+            theme.analytic_color = value;
+          }))
+          .items(style_face_items(workspace.clone(), "Analytic", |theme| (theme.analytic_bold, theme.analytic_italic, theme.analytic_underline), |theme, bold, italic, underline| {
+            theme.analytic_bold = bold; theme.analytic_italic = italic; theme.analytic_underline = underline;
+          }))
           .item(style_number_item(workspace.clone(), "Undertag size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.undertag_font_size), |theme, value| {
             theme.undertag_font_size = pt_to_pixels(value);
           }))
+          .item(style_color_item(workspace.clone(), "Undertag color", |theme| theme.undertag_color, |theme, value| {
+            theme.undertag_color = value;
+          }))
+          .items(style_face_items(workspace.clone(), "Undertag", |theme| (theme.undertag_bold, theme.undertag_italic, theme.undertag_underline), |theme, bold, italic, underline| {
+            theme.undertag_bold = bold; theme.undertag_italic = italic; theme.undertag_underline = underline;
+          })),
+      ),
+      SettingPage::new("Run")
+        .description("Visual treatment for inline semantic styles.")
+        .resettable(false)
+        .group(
+        SettingGroup::new()
+          .title("Run Styles")
           .item(style_number_item(workspace.clone(), "Cite size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.cite_font_size), |theme, value| {
             theme.cite_font_size = pt_to_pixels(value);
+          }))
+          .items(style_face_items(workspace.clone(), "Cite", |theme| (theme.cite_bold, theme.cite_italic, theme.cite_underline), |theme, bold, italic, underline| {
+            theme.cite_bold = bold; theme.cite_italic = italic; theme.cite_underline = underline;
+          }))
+          .items(style_face_items(workspace.clone(), "Underline", |theme| (theme.underline_bold, theme.underline_italic, theme.underline_underline), |theme, bold, italic, underline| {
+            theme.underline_bold = bold; theme.underline_italic = italic; theme.underline_underline = underline;
+          }))
+          .items(style_face_items(workspace.clone(), "Emphasis", |theme| (theme.emphasis_bold, theme.emphasis_italic, theme.emphasis_underline), |theme, bold, italic, underline| {
+            theme.emphasis_bold = bold; theme.emphasis_italic = italic; theme.emphasis_underline = underline;
           }))
           .item(style_number_item(workspace.clone(), "Condensed size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.condensed_font_size), |theme, value| {
             theme.condensed_font_size = pt_to_pixels(value);
           }))
+          .items(style_face_items(workspace.clone(), "Condensed", |theme| (theme.condensed_bold, theme.condensed_italic, theme.condensed_underline), |theme, bold, italic, underline| {
+            theme.condensed_bold = bold; theme.condensed_italic = italic; theme.condensed_underline = underline;
+          }))
           .item(style_number_item(workspace.clone(), "Ultra-condensed size (pt)", 1.0, 200.0, 0.25, |theme| pixels_to_pt(theme.ultracondensed_font_size), |theme, value| {
             theme.ultracondensed_font_size = pt_to_pixels(value);
+          }))
+          .items(style_face_items(workspace.clone(), "Ultra-condensed", |theme| (theme.ultracondensed_bold, theme.ultracondensed_italic, theme.ultracondensed_underline), |theme, bold, italic, underline| {
+            theme.ultracondensed_bold = bold; theme.ultracondensed_italic = italic; theme.ultracondensed_underline = underline;
           })),
-      )
-      .group(
+      ),
+      SettingPage::new("Highlights")
+        .description("Colors used by highlight semantic styles.")
+        .resettable(false)
+        .group(
         SettingGroup::new()
-          .title("Hierarchy Spacing")
-          .item(style_number_item(workspace.clone(), "Pocket before (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.pocket_before), |theme, value| {
-            theme.pocket_before = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Hat before (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.hat_before), |theme, value| {
-            theme.hat_before = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Block before (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.block_before), |theme, value| {
-            theme.block_before = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Tag before (pt)", 0.0, 200.0, 0.25, |theme| pixels_to_pt(theme.tag_before), |theme, value| {
-            theme.tag_before = pt_to_pixels(value);
-          })),
-      )
-      .group(
-        SettingGroup::new()
-          .title("Borders and Highlights")
-          .item(style_number_item(workspace.clone(), "Pocket border width (pt)", 0.0, 20.0, 0.125, |theme| pixels_to_pt(theme.pocket_border_width), |theme, value| {
-            theme.pocket_border_width = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Pocket border X space (pt)", 0.0, 40.0, 0.25, |theme| pixels_to_pt(theme.pocket_border_space_x), |theme, value| {
-            theme.pocket_border_space_x = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Pocket border Y space (pt)", 0.0, 40.0, 0.25, |theme| pixels_to_pt(theme.pocket_border_space_y), |theme, value| {
-            theme.pocket_border_space_y = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Emphasis border width (pt)", 0.0, 20.0, 0.125, |theme| pixels_to_pt(theme.emphasis_border_width), |theme, value| {
-            theme.emphasis_border_width = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Emphasis paint width (pt)", 0.0, 20.0, 0.125, |theme| pixels_to_pt(theme.emphasis_border_paint_width), |theme, value| {
-            theme.emphasis_border_paint_width = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Box padding left (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.box_padding_left), |theme, value| {
-            theme.box_padding_left = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Box padding right (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.box_padding_right), |theme, value| {
-            theme.box_padding_right = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Box padding top (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.box_padding_top), |theme, value| {
-            theme.box_padding_top = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Box padding bottom (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.box_padding_bottom), |theme, value| {
-            theme.box_padding_bottom = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Highlight pad X (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.highlight_pad_x), |theme, value| {
-            theme.highlight_pad_x = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Highlight top extra", 0.0, 2.0, 0.01, |theme| theme.highlight_top_extra_fraction as f64, |theme, value| {
-            theme.highlight_top_extra_fraction = value as f32;
-          }))
-          .item(style_number_item(workspace.clone(), "Highlight bottom extra", 0.0, 2.0, 0.01, |theme| theme.highlight_bottom_extra_fraction as f64, |theme, value| {
-            theme.highlight_bottom_extra_fraction = value as f32;
-          }))
+          .title("Highlights")
           .item(style_color_item(workspace.clone(), "Spoken highlight", |theme| theme.highlight_spoken, |theme, value| {
             theme.highlight_spoken = value;
           }))
@@ -568,36 +604,8 @@ impl Workspace {
           .item(style_color_item(workspace.clone(), "Alternative highlight", |theme| theme.highlight_alternative, |theme, value| {
             theme.highlight_alternative = value;
           })),
-      )
-      .group(
-        SettingGroup::new()
-          .title("Underlines")
-          .item(style_number_item(workspace.clone(), "Fallback top from baseline (pt)", -80.0, 80.0, 0.25, |theme| pixels_to_pt(theme.underline_fallback_top_from_baseline), |theme, value| {
-            theme.underline_fallback_top_from_baseline = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Rule thickness (pt)", 0.0, 20.0, 0.125, |theme| pixels_to_pt(theme.underline_rule_thickness), |theme, value| {
-            theme.underline_rule_thickness = pt_to_pixels(value);
-          }))
-          .item(style_bool_item(workspace.clone(), "Snap rules to pixels", |theme| theme.snap_underline_rules_to_pixels, |theme, value| {
-            theme.snap_underline_rules_to_pixels = value;
-          }))
-          .item(style_number_item(workspace.clone(), "Double top from baseline (pt)", -80.0, 80.0, 0.25, |theme| pixels_to_pt(theme.double_underline_top_from_baseline), |theme, value| {
-            theme.double_underline_top_from_baseline = pt_to_pixels(value);
-          }))
-          .item(style_number_item(workspace.clone(), "Double underline gap (pt)", 0.0, 80.0, 0.25, |theme| pixels_to_pt(theme.double_underline_gap), |theme, value| {
-            theme.double_underline_gap = pt_to_pixels(value);
-          })),
-      )
-      .group(
-        SettingGroup::new()
-          .title("Special Colors")
-          .item(style_color_item(workspace.clone(), "Analytic text", |theme| theme.analytic_color, |theme, value| {
-            theme.analytic_color = value;
-          }))
-          .item(style_color_item(workspace, "Undertag text", |theme| theme.undertag_color, |theme, value| {
-            theme.undertag_color = value;
-          })),
-      )
+      ),
+    ]
   }
 
   fn render_top_bar(&mut self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1252,22 +1260,10 @@ fn styles_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
         .label("Styles")
         .xsmall()
         .ghost()
-        .on_click(cx.listener(|workspace, _, window, cx| {
-          let workspace_entity = cx.entity().downgrade();
-          let has_document = workspace.active_editor.is_some();
-          let page = workspace.document_styles_page(workspace_entity, has_document);
+        .on_click(cx.listener(|workspace, _, _, cx| {
+          workspace.styles_settings_open = true;
           cx.stop_propagation();
-          window.open_sheet(cx, move |sheet, _, _| {
-            sheet
-              .title("Document Styles")
-              .size(px(820.0))
-              .margin_top(px(36.0))
-              .child(
-                Settings::new("document-style-settings")
-                  .sidebar_width(px(180.0))
-                  .page(page.clone()),
-              )
-          });
+          cx.notify();
         })),
     )
 }
@@ -1334,20 +1330,92 @@ fn style_string_item(
 
 fn style_bool_item(
   workspace: WeakEntity<Workspace>,
-  title: &'static str,
-  get: fn(&DocumentTheme) -> bool,
-  set: fn(&mut DocumentTheme, bool),
+  title: impl Into<SharedString>,
+  get: impl Fn(&DocumentTheme) -> bool + Clone + 'static,
+  set: impl Fn(&mut DocumentTheme, bool) + Clone + 'static,
 ) -> SettingItem {
   let read_workspace = workspace.clone();
   let write_workspace = workspace;
+  let read_get = get.clone();
   SettingItem::new(
     title,
     SettingField::switch(
-      move |cx| active_theme_value(cx, &read_workspace, get).unwrap_or_default(),
-      move |value, cx| update_active_document_theme(cx, &write_workspace, move |theme| set(theme, value)),
+      move |cx| active_theme_value_with(cx, &read_workspace, &read_get).unwrap_or_default(),
+      move |value, cx| {
+        let set = set.clone();
+        update_active_document_theme(cx, &write_workspace, move |theme| set(theme, value));
+      },
     ),
   )
   .layout(Axis::Horizontal)
+}
+
+fn style_underline_item(
+  workspace: WeakEntity<Workspace>,
+  title: String,
+  get: impl Fn(&DocumentTheme) -> ThemeUnderline + Clone + 'static,
+  set: impl Fn(&mut DocumentTheme, ThemeUnderline) + Clone + 'static,
+) -> SettingItem {
+  let read_workspace = workspace.clone();
+  let write_workspace = workspace;
+  let read_get = get.clone();
+  SettingItem::new(
+    title,
+    SettingField::dropdown(
+      vec![
+        ("none".into(), "None".into()),
+        ("single".into(), "Single".into()),
+        ("double".into(), "Double".into()),
+      ],
+      move |cx| underline_to_setting(active_theme_value_with(cx, &read_workspace, &read_get).unwrap_or_default()).into(),
+      move |value, cx| {
+        let underline = setting_to_underline(&value);
+        let set = set.clone();
+        update_active_document_theme(cx, &write_workspace, move |theme| set(theme, underline));
+      },
+    ),
+  )
+  .layout(Axis::Horizontal)
+}
+
+fn style_face_items(
+  workspace: WeakEntity<Workspace>,
+  label: &'static str,
+  get: fn(&DocumentTheme) -> (bool, bool, ThemeUnderline),
+  set: fn(&mut DocumentTheme, bool, bool, ThemeUnderline),
+) -> Vec<SettingItem> {
+  let bold_get = get;
+  let italic_get = get;
+  let underline_get = get;
+  vec![
+    style_bool_item(
+      workspace.clone(),
+      format!("{label} bold"),
+      move |theme| bold_get(theme).0,
+      move |theme, value| {
+        let (_, italic, underline) = get(theme);
+        set(theme, value, italic, underline);
+      },
+    ),
+    style_bool_item(
+      workspace.clone(),
+      format!("{label} italic"),
+      move |theme| italic_get(theme).1,
+      move |theme, value| {
+        let (bold, _, underline) = get(theme);
+        set(theme, bold, value, underline);
+      },
+    ),
+    style_underline_item(
+      workspace,
+      format!("{label} underline"),
+      move |theme| underline_get(theme).2,
+      move |theme, value| {
+        let (bold, italic, _) = get(theme);
+        set(theme, bold, italic, value);
+      },
+    ),
+  ]
 }
 
 fn style_color_item(
@@ -1373,7 +1441,27 @@ fn style_color_item(
   .layout(Axis::Horizontal)
 }
 
+fn underline_to_setting(underline: ThemeUnderline) -> &'static str {
+  match underline {
+    ThemeUnderline::None => "none",
+    ThemeUnderline::Single => "single",
+    ThemeUnderline::Double => "double",
+  }
+}
+
+fn setting_to_underline(value: &str) -> ThemeUnderline {
+  match value {
+    "single" => ThemeUnderline::Single,
+    "double" => ThemeUnderline::Double,
+    _ => ThemeUnderline::None,
+  }
+}
+
 fn active_theme_value<T>(cx: &App, workspace: &WeakEntity<Workspace>, get: fn(&DocumentTheme) -> T) -> Option<T> {
+  active_theme_value_with(cx, workspace, &get)
+}
+
+fn active_theme_value_with<T>(cx: &App, workspace: &WeakEntity<Workspace>, get: &dyn Fn(&DocumentTheme) -> T) -> Option<T> {
   let workspace = workspace.upgrade()?;
   let workspace = workspace.read(cx);
   if let Some(editor) = workspace.active_editor.clone() {

@@ -4,7 +4,7 @@ use gpui::{Hsla, px};
 use gpui_component::PixelsExt;
 use serde::{Deserialize, Serialize};
 
-use crate::rich_text_element::DocumentTheme;
+use crate::rich_text_element::{DocumentTheme, ThemeUnderline};
 
 #[derive(Default, Deserialize, Serialize)]
 pub struct AppSettings {
@@ -13,6 +13,7 @@ pub struct AppSettings {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
+#[serde(default)]
 pub struct DocumentThemeSettings {
   pub default_font_family: String,
   pub default_text_color: StoredHsla,
@@ -57,6 +58,42 @@ pub struct DocumentThemeSettings {
   pub highlight_alternative: StoredHsla,
   pub analytic_color: StoredHsla,
   pub undertag_color: StoredHsla,
+  pub normal_bold: bool,
+  pub normal_italic: bool,
+  pub normal_underline: ThemeUnderlineSetting,
+  pub pocket_bold: bool,
+  pub pocket_italic: bool,
+  pub pocket_underline: ThemeUnderlineSetting,
+  pub hat_bold: bool,
+  pub hat_italic: bool,
+  pub hat_underline: ThemeUnderlineSetting,
+  pub block_bold: bool,
+  pub block_italic: bool,
+  pub block_underline: ThemeUnderlineSetting,
+  pub tag_bold: bool,
+  pub tag_italic: bool,
+  pub tag_underline: ThemeUnderlineSetting,
+  pub analytic_bold: bool,
+  pub analytic_italic: bool,
+  pub analytic_underline: ThemeUnderlineSetting,
+  pub undertag_bold: bool,
+  pub undertag_italic: bool,
+  pub undertag_underline: ThemeUnderlineSetting,
+  pub cite_bold: bool,
+  pub cite_italic: bool,
+  pub cite_underline: ThemeUnderlineSetting,
+  pub underline_bold: bool,
+  pub underline_italic: bool,
+  pub underline_underline: ThemeUnderlineSetting,
+  pub emphasis_bold: bool,
+  pub emphasis_italic: bool,
+  pub emphasis_underline: ThemeUnderlineSetting,
+  pub condensed_bold: bool,
+  pub condensed_italic: bool,
+  pub condensed_underline: ThemeUnderlineSetting,
+  pub ultracondensed_bold: bool,
+  pub ultracondensed_italic: bool,
+  pub ultracondensed_underline: ThemeUnderlineSetting,
 }
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
@@ -65,6 +102,25 @@ pub struct StoredHsla {
   s: f32,
   l: f32,
   a: f32,
+}
+
+#[derive(Clone, Copy, Deserialize, Serialize)]
+pub enum ThemeUnderlineSetting {
+  None,
+  Single,
+  Double,
+}
+
+impl Default for DocumentThemeSettings {
+  fn default() -> Self {
+    Self::from(&DocumentTheme::default())
+  }
+}
+
+impl Default for ThemeUnderlineSetting {
+  fn default() -> Self {
+    Self::None
+  }
 }
 
 pub fn load_app_settings() -> AppSettings {
@@ -150,6 +206,42 @@ impl From<&DocumentTheme> for DocumentThemeSettings {
       highlight_alternative: theme.highlight_alternative.into(),
       analytic_color: theme.analytic_color.into(),
       undertag_color: theme.undertag_color.into(),
+      normal_bold: theme.normal_bold,
+      normal_italic: theme.normal_italic,
+      normal_underline: theme.normal_underline.into(),
+      pocket_bold: theme.pocket_bold,
+      pocket_italic: theme.pocket_italic,
+      pocket_underline: theme.pocket_underline.into(),
+      hat_bold: theme.hat_bold,
+      hat_italic: theme.hat_italic,
+      hat_underline: theme.hat_underline.into(),
+      block_bold: theme.block_bold,
+      block_italic: theme.block_italic,
+      block_underline: theme.block_underline.into(),
+      tag_bold: theme.tag_bold,
+      tag_italic: theme.tag_italic,
+      tag_underline: theme.tag_underline.into(),
+      analytic_bold: theme.analytic_bold,
+      analytic_italic: theme.analytic_italic,
+      analytic_underline: theme.analytic_underline.into(),
+      undertag_bold: theme.undertag_bold,
+      undertag_italic: theme.undertag_italic,
+      undertag_underline: theme.undertag_underline.into(),
+      cite_bold: theme.cite_bold,
+      cite_italic: theme.cite_italic,
+      cite_underline: theme.cite_underline.into(),
+      underline_bold: theme.underline_bold,
+      underline_italic: theme.underline_italic,
+      underline_underline: theme.underline_underline.into(),
+      emphasis_bold: theme.emphasis_bold,
+      emphasis_italic: theme.emphasis_italic,
+      emphasis_underline: theme.emphasis_underline.into(),
+      condensed_bold: theme.condensed_bold,
+      condensed_italic: theme.condensed_italic,
+      condensed_underline: theme.condensed_underline.into(),
+      ultracondensed_bold: theme.ultracondensed_bold,
+      ultracondensed_italic: theme.ultracondensed_italic,
+      ultracondensed_underline: theme.ultracondensed_underline.into(),
     }
   }
 }
@@ -200,6 +292,42 @@ impl From<DocumentThemeSettings> for DocumentTheme {
       highlight_alternative: settings.highlight_alternative.into(),
       analytic_color: settings.analytic_color.into(),
       undertag_color: settings.undertag_color.into(),
+      normal_bold: settings.normal_bold,
+      normal_italic: settings.normal_italic,
+      normal_underline: settings.normal_underline.into(),
+      pocket_bold: settings.pocket_bold,
+      pocket_italic: settings.pocket_italic,
+      pocket_underline: settings.pocket_underline.into(),
+      hat_bold: settings.hat_bold,
+      hat_italic: settings.hat_italic,
+      hat_underline: settings.hat_underline.into(),
+      block_bold: settings.block_bold,
+      block_italic: settings.block_italic,
+      block_underline: settings.block_underline.into(),
+      tag_bold: settings.tag_bold,
+      tag_italic: settings.tag_italic,
+      tag_underline: settings.tag_underline.into(),
+      analytic_bold: settings.analytic_bold,
+      analytic_italic: settings.analytic_italic,
+      analytic_underline: settings.analytic_underline.into(),
+      undertag_bold: settings.undertag_bold,
+      undertag_italic: settings.undertag_italic,
+      undertag_underline: settings.undertag_underline.into(),
+      cite_bold: settings.cite_bold,
+      cite_italic: settings.cite_italic,
+      cite_underline: settings.cite_underline.into(),
+      underline_bold: settings.underline_bold,
+      underline_italic: settings.underline_italic,
+      underline_underline: settings.underline_underline.into(),
+      emphasis_bold: settings.emphasis_bold,
+      emphasis_italic: settings.emphasis_italic,
+      emphasis_underline: settings.emphasis_underline.into(),
+      condensed_bold: settings.condensed_bold,
+      condensed_italic: settings.condensed_italic,
+      condensed_underline: settings.condensed_underline.into(),
+      ultracondensed_bold: settings.ultracondensed_bold,
+      ultracondensed_italic: settings.ultracondensed_italic,
+      ultracondensed_underline: settings.ultracondensed_underline.into(),
     }
   }
 }
@@ -222,6 +350,26 @@ impl From<StoredHsla> for Hsla {
       s: color.s,
       l: color.l,
       a: color.a,
+    }
+  }
+}
+
+impl From<ThemeUnderline> for ThemeUnderlineSetting {
+  fn from(value: ThemeUnderline) -> Self {
+    match value {
+      ThemeUnderline::None => Self::None,
+      ThemeUnderline::Single => Self::Single,
+      ThemeUnderline::Double => Self::Double,
+    }
+  }
+}
+
+impl From<ThemeUnderlineSetting> for ThemeUnderline {
+  fn from(value: ThemeUnderlineSetting) -> Self {
+    match value {
+      ThemeUnderlineSetting::None => Self::None,
+      ThemeUnderlineSetting::Single => Self::Single,
+      ThemeUnderlineSetting::Double => Self::Double,
     }
   }
 }
