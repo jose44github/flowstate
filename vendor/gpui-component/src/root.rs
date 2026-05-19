@@ -397,6 +397,15 @@ impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         window.set_rem_size(cx.theme().font_size);
 
+        let sheet_layer = self.active_sheet.clone().map(|active_sheet| {
+            let mut sheet = Sheet::new(window, cx);
+            sheet = (active_sheet.builder)(sheet, window, cx);
+            sheet.focus_handle = active_sheet.focus_handle.clone();
+            sheet.placement = active_sheet.placement;
+
+            div().relative().child(sheet)
+        });
+
         window_border().child(
             div()
                 .id("root")
@@ -408,7 +417,8 @@ impl Render for Root {
                 .font_family(cx.theme().font_family.clone())
                 .bg(cx.theme().background)
                 .text_color(cx.theme().foreground)
-                .child(self.view.clone()),
+                .child(self.view.clone())
+                .when_some(sheet_layer, |this, sheet_layer| this.child(sheet_layer)),
         )
     }
 }

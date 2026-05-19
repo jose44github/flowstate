@@ -14,7 +14,7 @@ use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{ActiveTheme as _, Disableable, IconName, PixelsExt, Selectable, Sizable, Theme, ThemeRegistry, h_flex, v_flex};
+use gpui_component::{ActiveTheme as _, Disableable, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, WindowExt as _, h_flex, v_flex};
 use uuid::Uuid;
 
 use crate::app_settings::{load_document_theme, save_document_theme, save_theme_name};
@@ -36,7 +36,6 @@ pub struct Workspace {
   outline_revision: u64,
   outline_caret_paragraph: Option<usize>,
   editor_subscriptions: Vec<Subscription>,
-  styles_settings_open: bool,
 }
 
 #[derive(Clone)]
@@ -66,7 +65,6 @@ impl Workspace {
       outline_revision: 0,
       outline_caret_paragraph: None,
       editor_subscriptions: Vec::new(),
-      styles_settings_open: false,
     };
 
     if let Some(path) = initial_path {
@@ -420,77 +418,17 @@ impl Workspace {
 
 impl Render for Workspace {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    div()
-      .relative()
+    v_flex()
       .size_full()
       .bg(cx.theme().background)
-      .child(
-        v_flex()
-          .size_full()
-          .child(self.render_top_bar(window, cx))
-          .when(!self.ribbon_collapsed, |this| this.child(self.render_ribbon(cx)))
-          .child(self.render_workspace_body(cx))
-          .child(self.render_status_bar(cx)),
-      )
-      .when(self.styles_settings_open, |this| this.child(self.render_styles_settings_overlay(cx)))
+      .child(self.render_top_bar(window, cx))
+      .when(!self.ribbon_collapsed, |this| this.child(self.render_ribbon(cx)))
+      .child(self.render_workspace_body(cx))
+      .child(self.render_status_bar(cx))
   }
 }
 
 impl Workspace {
-  fn render_styles_settings_overlay(&self, cx: &mut Context<Self>) -> impl IntoElement {
-    let workspace = cx.entity().downgrade();
-    let has_document = self.active_editor.is_some();
-
-    div()
-      .absolute()
-      .size_full()
-      .bg(black().opacity(0.32))
-      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-      .child(
-        v_flex()
-          .absolute()
-          .top(px(52.0))
-          .left(px(56.0))
-          .right(px(56.0))
-          .bottom(px(40.0))
-          .bg(cx.theme().background)
-          .border_1()
-          .border_color(cx.theme().border)
-          .rounded_lg()
-          .shadow_lg()
-          .overflow_hidden()
-          .child(
-            h_flex()
-              .h(px(44.0))
-              .flex_none()
-              .items_center()
-              .justify_between()
-              .px_4()
-              .border_b_1()
-              .border_color(cx.theme().border)
-              .child(div().font_weight(gpui::FontWeight::SEMIBOLD).child("Document Styles"))
-              .child(
-                icon_button("close-style-settings", AppIcon::Close)
-                  .tooltip("Close")
-                  .on_click(cx.listener(|workspace, _, _, cx| {
-                    workspace.styles_settings_open = false;
-                    cx.notify();
-                  })),
-              ),
-          )
-          .child(
-            div()
-              .flex_1()
-              .overflow_hidden()
-              .child(
-                Settings::new("document-style-settings")
-                  .sidebar_width(px(180.0))
-                  .page(self.document_styles_page(workspace, has_document)),
-              ),
-          ),
-      )
-  }
-
   fn document_styles_page(&self, workspace: WeakEntity<Workspace>, has_document: bool) -> SettingPage {
     SettingPage::new("Styles")
       .description("Customize the active document's style geometry, colors, and text metrics.")
@@ -1091,7 +1029,7 @@ pub fn open_workspace_window(document_path: PathBuf, cx: &mut App) {
         window.set_window_title("Odrenrir - Debate Processor");
         let workspace = cx.new(|cx| Workspace::new(Some(document_path), window, cx));
         install_workspace_close_prompt(workspace.clone(), window, cx);
-        workspace
+        cx.new(|cx| Root::new(workspace, window, cx))
       },
     )
     .unwrap();
@@ -1314,10 +1252,22 @@ fn styles_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
         .label("Styles")
         .xsmall()
         .ghost()
-        .on_click(cx.listener(|workspace, _, _, cx| {
-          workspace.styles_settings_open = true;
+        .on_click(cx.listener(|workspace, _, window, cx| {
+          let workspace_entity = cx.entity().downgrade();
+          let has_document = workspace.active_editor.is_some();
+          let page = workspace.document_styles_page(workspace_entity, has_document);
           cx.stop_propagation();
-          cx.notify();
+          window.open_sheet(cx, move |sheet, _, _| {
+            sheet
+              .title("Document Styles")
+              .size(px(820.0))
+              .margin_top(px(36.0))
+              .child(
+                Settings::new("document-style-settings")
+                  .sidebar_width(px(180.0))
+                  .page(page.clone()),
+              )
+          });
         })),
     )
 }
