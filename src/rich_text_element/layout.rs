@@ -244,6 +244,7 @@ pub(super) fn paragraph_format(document: &Document, style: ParagraphStyle) -> Ef
     ParagraphStyle::Normal => normal,
     ParagraphStyle::Pocket => EffectiveParagraphFormat {
       font_size: theme.pocket_font_size,
+      color: theme.pocket_color,
       bold: theme.pocket_bold,
       italic: theme.pocket_italic,
       align: ParagraphAlign::Center,
@@ -259,6 +260,7 @@ pub(super) fn paragraph_format(document: &Document, style: ParagraphStyle) -> Ef
     },
     ParagraphStyle::Hat => EffectiveParagraphFormat {
       font_size: theme.hat_font_size,
+      color: theme.hat_color,
       bold: theme.hat_bold,
       italic: theme.hat_italic,
       align: ParagraphAlign::Center,
@@ -269,6 +271,7 @@ pub(super) fn paragraph_format(document: &Document, style: ParagraphStyle) -> Ef
     },
     ParagraphStyle::Block => EffectiveParagraphFormat {
       font_size: theme.block_font_size,
+      color: theme.block_color,
       bold: theme.block_bold,
       italic: theme.block_italic,
       align: ParagraphAlign::Center,
@@ -279,6 +282,7 @@ pub(super) fn paragraph_format(document: &Document, style: ParagraphStyle) -> Ef
     },
     ParagraphStyle::Tag => EffectiveParagraphFormat {
       font_size: theme.tag_font_size,
+      color: theme.tag_color,
       bold: theme.tag_bold,
       italic: theme.tag_italic,
       underline: theme.tag_underline.into(),
@@ -330,12 +334,14 @@ pub(super) fn run_format(document: &Document, paragraph: EffectiveParagraphForma
     RunSemanticStyle::Plain => {},
     RunSemanticStyle::Underline => {
     format.font_size = theme.body_font_size;
+    format.color = theme.underline_color;
     format.bold = theme.underline_bold;
     format.italic = theme.underline_italic;
     format.underline = theme.underline_underline.into();
     },
     RunSemanticStyle::Cite => {
       format.font_size = theme.cite_font_size;
+      format.color = theme.cite_color;
       format.bold = theme.cite_bold;
       format.italic = theme.cite_italic;
       format.underline = theme.cite_underline.into();
@@ -343,6 +349,7 @@ pub(super) fn run_format(document: &Document, paragraph: EffectiveParagraphForma
     RunSemanticStyle::Emphasis => {
       format.font_family = theme.default_font_family.clone();
       format.font_size = theme.cite_font_size;
+      format.color = theme.emphasis_color;
       format.bold = theme.emphasis_bold;
       format.italic = theme.emphasis_italic;
       format.underline = theme.emphasis_underline.into();
@@ -350,12 +357,14 @@ pub(super) fn run_format(document: &Document, paragraph: EffectiveParagraphForma
     },
     RunSemanticStyle::Condensed => {
       format.font_size = theme.condensed_font_size;
+      format.color = theme.condensed_color;
       format.bold = theme.condensed_bold;
       format.italic = theme.condensed_italic;
       format.underline = theme.condensed_underline.into();
     },
     RunSemanticStyle::Ultracondensed => {
       format.font_size = theme.ultracondensed_font_size;
+      format.color = theme.ultracondensed_color;
       format.bold = theme.ultracondensed_bold;
       format.italic = theme.ultracondensed_italic;
       format.underline = theme.ultracondensed_underline.into();
