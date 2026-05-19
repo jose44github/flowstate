@@ -58,6 +58,10 @@ impl DocumentPanel {
     self.editor.clone()
   }
 
+  pub fn ribbon(&self) -> Entity<EditorRibbon> {
+    self.ribbon.clone()
+  }
+
   pub fn title_text(&self) -> SharedString {
     self.title.clone()
   }
@@ -155,10 +159,7 @@ impl Render for DocumentPanel {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     div()
       .size_full()
-      .flex()
-      .flex_col()
       .bg(cx.theme().background)
-      .child(self.ribbon.clone())
       .child(self.editor.clone())
   }
 }
