@@ -637,9 +637,9 @@ impl Workspace {
     let show_placeholder = active_ribbon.is_none();
 
     h_flex()
-      .h(px(76.0))
+      .min_h(px(104.0))
       .w_full()
-      .items_center()
+      .items_start()
       .border_b_1()
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
