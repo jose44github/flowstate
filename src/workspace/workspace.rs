@@ -995,6 +995,7 @@ impl Workspace {
     let show_placeholder = active_ribbon.is_none();
 
     h_flex()
+      .relative()
       .h(ribbon_height)
       .min_h(px(56.0))
       .w_full()
@@ -1002,23 +1003,6 @@ impl Workspace {
       .border_b_1()
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
-      .child(
-        v_flex()
-          .h_full()
-          .flex_none()
-          .justify_end()
-          .pb_1()
-          .child(
-            Button::new("collapse-ribbon-panel")
-              .icon(Icon::default().path("icons/panel-top-close.svg"))
-              .xsmall()
-              .ghost()
-              .tooltip("Collapse ribbon")
-              .on_click(cx.listener(|workspace, _, _, cx| {
-                workspace.toggle_ribbon(cx);
-              })),
-          ),
-      )
       .when_some(active_ribbon, |this, ribbon| {
         ribbon.update(cx, |ribbon, cx| {
           ribbon.set_height(ribbon_height, cx);
@@ -1033,6 +1017,24 @@ impl Workspace {
             .child("Ribbon placeholder"),
         )
       })
+      .child(
+        div()
+          .absolute()
+          .bottom_0()
+          .right_0()
+          .p_1()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+          .child(
+            Button::new("collapse-ribbon-panel")
+              .icon(Icon::default().path("icons/panel-top-close.svg"))
+              .xsmall()
+              .ghost()
+              .tooltip("Collapse ribbon")
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.toggle_ribbon(cx);
+              })),
+          ),
+      )
   }
 
   fn render_resizable_workspace(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1140,6 +1142,7 @@ impl Workspace {
       .flex_none()
       .w_full()
       .items_center()
+      .justify_end()
       .px_2()
       .border_b_1()
       .border_color(cx.theme().border)
