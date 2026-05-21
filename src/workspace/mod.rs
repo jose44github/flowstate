@@ -1,5 +1,6 @@
 mod document_panel;
 mod file_management;
+mod file_search_overlay;
 mod icons;
 mod workspace;
 

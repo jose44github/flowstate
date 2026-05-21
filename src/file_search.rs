@@ -21,6 +21,36 @@ pub struct FileSearchHit {
   pub path: PathBuf,
 }
 
+pub struct Db8FileSearch {
+  picker: FilePicker,
+}
+
+impl Db8FileSearch {
+  pub fn new(root: PathBuf) -> anyhow::Result<Self> {
+    let root = normalize_search_root(root)?;
+    let mut picker = FilePicker::new(FilePickerOptions {
+      base_path: root.to_string_lossy().to_string(),
+      mode: FFFMode::Ai,
+      watch: false,
+      ..Default::default()
+    })?;
+    picker.collect_files()?;
+    Ok(Self { picker })
+  }
+
+  pub fn root(&self) -> &Path {
+    self.picker.base_path()
+  }
+
+  pub fn indexed_file_count(&self) -> usize {
+    self.picker.live_file_count()
+  }
+
+  pub fn search(&self, query: &str, limit: usize) -> Vec<FileSearchHit> {
+    search_db8_files(&self.picker, query, limit)
+  }
+}
+
 pub fn default_global_search_root() -> PathBuf {
   std::env::var_os("HOME")
     .map(PathBuf::from)
@@ -28,25 +58,18 @@ pub fn default_global_search_root() -> PathBuf {
 }
 
 pub fn run_db8_search_cli(root: PathBuf) -> anyhow::Result<Option<PathBuf>> {
-  let root = normalize_search_root(root)?;
   let started = Instant::now();
-  let mut picker = FilePicker::new(FilePickerOptions {
-    base_path: root.to_string_lossy().to_string(),
-    mode: FFFMode::Ai,
-    watch: false,
-    ..Default::default()
-  })?;
-  picker.collect_files()?;
+  let search = Db8FileSearch::new(root)?;
 
   let scan_message = format!(
     "Indexed {} files under {} in {:?}",
-    picker.live_file_count(),
-    picker.base_path().display(),
+    search.indexed_file_count(),
+    search.root().display(),
     started.elapsed()
   );
 
   let mut terminal = SearchTerminal::enter()?;
-  let result = interactive_search_loop(&picker, &scan_message, &mut terminal.stdout);
+  let result = interactive_search_loop(&search, &scan_message, &mut terminal.stdout);
   terminal.leave()?;
   result
 }
@@ -62,12 +85,12 @@ fn normalize_search_root(root: PathBuf) -> anyhow::Result<PathBuf> {
   Ok(root)
 }
 
-fn interactive_search_loop(picker: &FilePicker, scan_message: &str, stdout: &mut io::Stdout) -> anyhow::Result<Option<PathBuf>> {
+fn interactive_search_loop(search: &Db8FileSearch, scan_message: &str, stdout: &mut io::Stdout) -> anyhow::Result<Option<PathBuf>> {
   let mut query = String::new();
   let mut selected = 0usize;
 
   loop {
-    let hits = search_db8_files(picker, &query);
+    let hits = search.search(&query, RESULT_LIMIT);
     if selected >= hits.len() {
       selected = hits.len().saturating_sub(1);
     }
@@ -103,7 +126,7 @@ fn interactive_search_loop(picker: &FilePicker, scan_message: &str, stdout: &mut
   }
 }
 
-fn search_db8_files(picker: &FilePicker, typed_query: &str) -> Vec<FileSearchHit> {
+fn search_db8_files(picker: &FilePicker, typed_query: &str, limit: usize) -> Vec<FileSearchHit> {
   let parser = QueryParser::default();
   let query_text = if typed_query.trim().is_empty() {
     DB8_FILTER.to_string()
@@ -118,10 +141,7 @@ fn search_db8_files(picker: &FilePicker, typed_query: &str) -> Vec<FileSearchHit
       max_threads: 0,
       current_file: None,
       project_path: Some(picker.base_path()),
-      pagination: PaginationArgs {
-        offset: 0,
-        limit: RESULT_LIMIT,
-      },
+      pagination: PaginationArgs { offset: 0, limit },
       ..Default::default()
     },
   );

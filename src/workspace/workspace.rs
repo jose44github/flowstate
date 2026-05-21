@@ -24,6 +24,7 @@ use crate::rich_text_element::{
 };
 use crate::workspace::document_panel::DocumentPanel;
 use crate::workspace::file_management::{UNTITLED_DOCUMENT_NAME, default_save_directory, new_blank_document, normalize_db8_path};
+use crate::workspace::file_search_overlay::FileSearchOverlay;
 use crate::workspace::icons::{AppIcon, icon_button};
 
 pub struct Workspace {
@@ -43,6 +44,7 @@ pub struct Workspace {
   outline_caret_paragraph: Option<usize>,
   editor_subscriptions: Vec<Subscription>,
   styles_settings_open: bool,
+  file_search_overlay: Option<Entity<FileSearchOverlay>>,
 }
 
 #[derive(Clone)]
@@ -82,6 +84,7 @@ impl Workspace {
       outline_caret_paragraph: None,
       editor_subscriptions: Vec::new(),
       styles_settings_open: false,
+      file_search_overlay: None,
     };
 
     if let Some(path) = initial_path {
@@ -155,6 +158,16 @@ impl Workspace {
     let path = PathBuf::from("data/demo.db8");
     let document = load_or_create_document(&path).unwrap_or_else(|_| demo_document());
     self.add_document_panel(document, Some(path), window, cx);
+  }
+
+  pub fn open_document_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    match load_or_create_document(&path) {
+      Ok(document) => self.add_document_panel(document, Some(path), window, cx),
+      Err(error) => {
+        let detail = format!("Failed to open {}: {error}", path.display());
+        let _ = window.prompt(PromptLevel::Critical, "Open failed", Some(&detail), &[PromptButton::ok("Ok")], cx);
+      },
+    }
   }
 
   pub fn prompt_open_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -341,6 +354,24 @@ impl Workspace {
     self.close_document_panel(panel_id, window, cx);
   }
 
+  pub fn open_file_search_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(overlay) = self.file_search_overlay.clone() {
+      overlay.update(cx, |overlay, cx| overlay.focus_search(window, cx));
+      return;
+    }
+
+    let workspace = cx.entity().downgrade();
+    let overlay = cx.new(|cx| FileSearchOverlay::new(workspace, window, cx));
+    overlay.update(cx, |overlay, cx| overlay.focus_search(window, cx));
+    self.file_search_overlay = Some(overlay);
+    cx.notify();
+  }
+
+  pub fn close_file_search_overlay(&mut self, cx: &mut Context<Self>) {
+    self.file_search_overlay = None;
+    cx.notify();
+  }
+
   fn prompt_save_active_as(&mut self, editor: Entity<RichTextEditor>, window: &mut Window, cx: &mut Context<Self>) {
     let Some(panel_id) = self.active_document_id else {
       return;
@@ -521,17 +552,23 @@ impl Workspace {
 
 impl Render for Workspace {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
-      .on_action(cx.listener(Self::on_save))
+    div()
       .size_full()
-      .bg(cx.theme().background)
-      .child(self.render_top_bar(window, cx))
-      .when(self.styles_settings_open, |this| this.child(self.render_styles_settings_view(cx)))
-      .when(!self.styles_settings_open, |this| {
-        this
-          .child(self.render_resizable_workspace(cx))
-          .child(self.render_status_bar(cx))
-      })
+      .relative()
+      .child(
+        v_flex()
+          .on_action(cx.listener(Self::on_save))
+          .size_full()
+          .bg(cx.theme().background)
+          .child(self.render_top_bar(window, cx))
+          .when(self.styles_settings_open, |this| this.child(self.render_styles_settings_view(cx)))
+          .when(!self.styles_settings_open, |this| {
+            this
+              .child(self.render_resizable_workspace(cx))
+              .child(self.render_status_bar(cx))
+          }),
+      )
+      .when_some(self.file_search_overlay.clone(), |this, overlay| this.child(overlay))
   }
 }
 
@@ -1245,6 +1282,7 @@ impl Workspace {
   }
 
   fn render_toolkit(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let open_file_search = cx.listener(|workspace, _, window, cx| workspace.open_file_search_overlay(window, cx));
     v_flex()
       .size_full()
       .h_full()
@@ -1258,6 +1296,13 @@ impl Workspace {
           .text_sm()
           .font_weight(gpui::FontWeight::SEMIBOLD)
           .child("Toolkit"),
+      )
+      .child(
+        Button::new("toolkit-global-db8-search")
+          .icon(IconName::Search)
+          .label("Find DB8 File")
+          .small()
+          .on_click(open_file_search),
       )
       .child(
         div()
