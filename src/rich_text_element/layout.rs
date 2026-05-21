@@ -149,7 +149,7 @@ impl LaidOutParagraph {
     }
   }
 
-  fn hit_test(&self, position: Point<Pixels>) -> DocumentOffset {
+  pub(super) fn hit_test(&self, position: Point<Pixels>) -> DocumentOffset {
     let line_ix = first_line_with_bottom_at_or_after(&self.lines, position.y);
     if let Some(line) = self.lines.get(line_ix) {
       return DocumentOffset {
@@ -176,6 +176,7 @@ pub(super) struct LaidOutLine {
   pub(super) segments: Vec<LaidOutSegment>,
   pub(super) rects: Vec<RunRect>,
   pub(super) underlines: Vec<Decoration>,
+  pub(super) strikethroughs: Vec<Decoration>,
 }
 
 impl LaidOutLine {
@@ -279,6 +280,7 @@ pub(super) struct EffectiveRunFormat {
   pub(super) italic: bool,
   pub(super) color: Hsla,
   pub(super) underline: UnderlineKind,
+  pub(super) strikethrough: bool,
   pub(super) highlight: Option<Hsla>,
   pub(super) border_width: Pixels,
 }
@@ -381,6 +383,7 @@ pub(super) fn run_format(document: &Document, paragraph: EffectiveParagraphForma
     italic: paragraph.italic,
     color: paragraph.color,
     underline: paragraph.underline,
+    strikethrough: styles.strikethrough,
     highlight: styles.highlight.map(|highlight| match highlight {
       HighlightStyle::Spoken => theme.highlight_spoken,
       HighlightStyle::Insert => theme.highlight_insert,
@@ -629,8 +632,8 @@ fn image_height_for_width(intrinsic: Option<(Pixels, Pixels)>, width: Pixels) ->
 
 fn equation_placeholder_height(document: &Document, equation: &EquationBlock) -> Pixels {
   match equation.display {
-    EquationDisplay::Display => (document.theme.body_font_size * 2.5).max(px(40.0)),
-    EquationDisplay::InlineLikeParagraph => (document.theme.body_font_size * 1.5).max(px(24.0)),
+    EquationDisplay::Display => (document.theme.body_font_size * 3.7).max(px(72.0)),
+    EquationDisplay::InlineLikeParagraph => (document.theme.body_font_size * 2.75).max(px(56.0)),
   }
 }
 
@@ -1499,9 +1502,11 @@ pub(super) fn shape_line(
     segments,
     rects: Vec::new(),
     underlines: Vec::new(),
+    strikethroughs: Vec::new(),
   };
   line.rects = rects_for_line(document, &line);
   line.underlines = underlines_for_line(document, &line, cx);
+  line.strikethroughs = strikethroughs_for_line(document, &line);
   line
 }
 
@@ -1725,6 +1730,23 @@ pub(super) fn underlines_for_line(document: &Document, line: &LaidOutLine, cx: &
   underlines
 }
 
+pub(super) fn strikethroughs_for_line(document: &Document, line: &LaidOutLine) -> Vec<Decoration> {
+  let baseline = line.baseline_y();
+  line
+    .segments
+    .iter()
+    .filter(|segment| segment.format.strikethrough)
+    .map(|segment| {
+      let thickness = document.theme.underline_rule_thickness.max(px(1.0));
+      let y = baseline - segment.font_size * 0.30;
+      Decoration {
+        bounds: Bounds::new(point(segment.x, y), size(segment.width.max(px(1.0)), thickness)),
+        color: document.theme.default_text_color,
+      }
+    })
+    .collect()
+}
+
 pub(super) fn single_underline_metrics_for_segment(segment: &LaidOutSegment, document: &Document, cx: &mut App) -> (Pixels, Pixels) {
   // GPUI exposes glyph bounds in font coordinates. For Calibri, the
   // underscore bbox is below the baseline. The origin is the lower
@@ -1821,6 +1843,13 @@ pub(super) fn caret_bounds(layout: &LayoutState, offset: DocumentOffset, origin:
   Some(Bounds::new(origin + line.origin + point(x, px(0.0)), size(px(1.0), line.line_height)))
 }
 
+pub(super) fn caret_bounds_in_paragraph(paragraph: &LaidOutParagraph, byte: usize, origin: Point<Pixels>) -> Option<Bounds<Pixels>> {
+  let line_ix = line_ix_for_byte(paragraph, byte)?;
+  let line = paragraph.lines.get(line_ix)?;
+  let x = x_for_byte(line, byte);
+  Some(Bounds::new(origin + line.origin + point(x, px(0.0)), size(px(1.0), line.line_height)))
+}
+
 pub(super) fn x_for_byte(line: &LaidOutLine, byte: usize) -> Pixels {
   for segment in &line.segments {
     let segment_end = segment.start_byte + segment.shaped.len();
@@ -1832,6 +1861,29 @@ pub(super) fn x_for_byte(line: &LaidOutLine, byte: usize) -> Pixels {
     }
   }
   line.width
+}
+
+fn line_ix_for_byte(paragraph: &LaidOutParagraph, byte: usize) -> Option<usize> {
+  let mut low = 0;
+  let mut high = paragraph.lines.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if paragraph.lines[mid].end_byte < byte {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  if let Some(line) = paragraph.lines.get(low)
+    && byte >= line.start_byte
+    && byte <= line.end_byte
+  {
+    if byte == line.end_byte && low + 1 < paragraph.lines.len() && paragraph.lines[low + 1].start_byte == byte {
+      return Some(low + 1);
+    }
+    return Some(low);
+  }
+  paragraph.lines.len().checked_sub(1)
 }
 
 // Locate the `LaidOutLine` containing the given offset. Returns

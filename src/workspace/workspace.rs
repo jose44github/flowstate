@@ -15,7 +15,7 @@ use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{ActiveTheme as _, Disableable, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, h_flex, v_flex};
+use gpui_component::{ActiveTheme as _, Disableable, Icon, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, h_flex, v_flex};
 use uuid::Uuid;
 
 use crate::app_settings::{load_document_theme, save_document_theme, save_theme_name};
@@ -32,6 +32,8 @@ pub struct Workspace {
   active_document_id: Option<Uuid>,
   active_editor: Option<Entity<RichTextEditor>>,
   ribbon_collapsed: bool,
+  outline_collapsed: bool,
+  toolkit_collapsed: bool,
   tab_bar_scroll_handle: ScrollHandle,
   body_resizable_state: Entity<ResizableState>,
   content_resizable_state: Entity<ResizableState>,
@@ -72,6 +74,8 @@ impl Workspace {
       active_document_id: None,
       active_editor: None,
       ribbon_collapsed: false,
+      outline_collapsed: false,
+      toolkit_collapsed: false,
       tab_bar_scroll_handle: ScrollHandle::new(),
       body_resizable_state: cx.new(|_| ResizableState::default()),
       content_resizable_state: cx.new(|_| ResizableState::default()),
@@ -122,7 +126,12 @@ impl Workspace {
         }
       }));
     let workspace = cx.entity().downgrade();
-    let panel = cx.new(|cx| DocumentPanel::new(path, editor.clone(), workspace, cx));
+    let title = path
+      .as_ref()
+      .and_then(|path| path.file_name())
+      .map(|name| name.to_string_lossy().to_string())
+      .or_else(|| Some(self.next_untitled_title(cx)));
+    let panel = cx.new(|cx| DocumentPanel::new_with_title(title, path, editor.clone(), workspace, cx));
     let id = panel.read(cx).id();
     self.active_document_id = Some(id);
     self.active_editor = Some(editor);
@@ -427,6 +436,16 @@ impl Workspace {
     cx.notify();
   }
 
+  pub fn toggle_outline(&mut self, cx: &mut Context<Self>) {
+    self.outline_collapsed = !self.outline_collapsed;
+    cx.notify();
+  }
+
+  pub fn toggle_toolkit(&mut self, cx: &mut Context<Self>) {
+    self.toolkit_collapsed = !self.toolkit_collapsed;
+    cx.notify();
+  }
+
   fn refresh_outline_tree(&mut self, cx: &mut Context<Self>) {
     let Some(active_id) = self.active_document_id else {
       if self.outline_cache.is_some() {
@@ -499,6 +518,30 @@ impl Workspace {
       .document_panels
       .iter()
       .position(|panel| panel.read(cx).id() == active_id)
+  }
+
+  fn activate_document_at_index(&mut self, index: usize, cx: &mut Context<Self>) {
+    let Some(panel) = self.document_panels.get(index) else {
+      return;
+    };
+    let panel = panel.read(cx);
+    self.active_document_id = Some(panel.id());
+    self.active_editor = Some(panel.editor());
+    cx.notify();
+  }
+
+  fn navigate_active_tab(&mut self, offset: isize, cx: &mut Context<Self>) {
+    let Some(active_index) = self.active_document_index(cx) else {
+      return;
+    };
+    let target = if offset.is_negative() {
+      active_index.checked_sub(offset.unsigned_abs())
+    } else {
+      active_index.checked_add(offset as usize)
+    };
+    if let Some(target) = target.filter(|target| *target < self.document_panels.len()) {
+      self.activate_document_at_index(target, cx);
+    }
   }
 
   fn apply_document_theme_to_open_editors(&mut self, theme: DocumentTheme, cx: &mut Context<Self>) {
@@ -888,9 +931,11 @@ impl Workspace {
           .items_center()
           .gap_1()
           .child(file_top_bar_button(self.active_editor.is_some(), cx))
+          .child(insert_top_bar_button(cx, self.active_editor.is_some()))
           .child(styles_top_bar_button(cx))
           .child(theme_top_bar_button(cx))
-          .child(top_bar_button("top-settings", "Settings")),
+          .child(view_top_bar_button(cx, !self.outline_collapsed, !self.ribbon_collapsed, !self.toolkit_collapsed))
+          .child(top_bar_button("top-settings", "Settings"))
       )
       .child(div().flex_1())
       .child(self.render_window_controls(window, cx))
@@ -957,6 +1002,23 @@ impl Workspace {
       .border_b_1()
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
+      .child(
+        v_flex()
+          .h_full()
+          .flex_none()
+          .justify_end()
+          .pb_1()
+          .child(
+            Button::new("collapse-ribbon-panel")
+              .icon(Icon::default().path("icons/panel-top-close.svg"))
+              .xsmall()
+              .ghost()
+              .tooltip("Collapse ribbon")
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.toggle_ribbon(cx);
+              })),
+          ),
+      )
       .when_some(active_ribbon, |this, ribbon| {
         ribbon.update(cx, |ribbon, cx| {
           ribbon.set_height(ribbon_height, cx);
@@ -983,9 +1045,10 @@ impl Workspace {
     }
 
     if self.ribbon_collapsed {
-      return div()
+      return v_flex()
         .flex_1()
         .overflow_hidden()
+        .child(self.render_collapsed_ribbon_bar(cx))
         .child(self.render_workspace_body(cx))
         .into_any_element();
     }
@@ -1023,15 +1086,21 @@ impl Workspace {
   fn render_workspace_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
     let panel_sizes = self.body_resizable_state.read(cx).sizes().clone();
     let nav_width = panel_sizes.first().copied().unwrap_or(px(240.0));
+    let outline_width = if self.outline_collapsed { px(30.0) } else { px(240.0) };
+    let outline_range_end = if self.outline_collapsed { px(30.0) } else { px(420.0) };
 
     h_resizable("workspace-body-resizable")
       .with_state(&self.body_resizable_state)
       .child(
         resizable_panel()
-          .size(px(240.0))
-          .size_range(px(180.0)..px(420.0))
+          .size(outline_width)
+          .size_range(outline_width..outline_range_end)
           .grow(false)
-          .child(self.render_left_nav(nav_width, cx)),
+          .child(if self.outline_collapsed {
+            self.render_collapsed_side_panel("Show outline", IconName::PanelLeftOpen, |workspace, cx| workspace.toggle_outline(cx), cx).into_any_element()
+          } else {
+            self.render_left_nav(nav_width, cx).into_any_element()
+          }),
       )
       .child(
         resizable_panel()
@@ -1042,6 +1111,8 @@ impl Workspace {
   }
 
   fn render_content_area(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    let toolkit_width = if self.toolkit_collapsed { px(30.0) } else { px(300.0) };
+    let toolkit_range_end = if self.toolkit_collapsed { px(30.0) } else { px(520.0) };
     h_resizable("workspace-content-resizable")
       .with_state(&self.content_resizable_state)
       .child(
@@ -1052,10 +1123,63 @@ impl Workspace {
       )
       .child(
         resizable_panel()
-          .size(px(300.0))
-          .size_range(px(220.0)..px(520.0))
+          .size(toolkit_width)
+          .size_range(toolkit_width..toolkit_range_end)
           .grow(false)
-          .child(self.render_toolkit(cx)),
+          .child(if self.toolkit_collapsed {
+            self.render_collapsed_side_panel("Show toolkit", IconName::PanelRightOpen, |workspace, cx| workspace.toggle_toolkit(cx), cx).into_any_element()
+          } else {
+            self.render_toolkit(cx).into_any_element()
+          }),
+      )
+  }
+
+  fn render_collapsed_ribbon_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    h_flex()
+      .h(px(30.0))
+      .flex_none()
+      .w_full()
+      .items_center()
+      .px_2()
+      .border_b_1()
+      .border_color(cx.theme().border)
+      .bg(cx.theme().background)
+      .child(
+        Button::new("restore-ribbon-panel")
+          .icon(Icon::default().path("icons/panel-top-open.svg"))
+          .xsmall()
+          .ghost()
+          .tooltip("Show ribbon")
+          .on_click(cx.listener(|workspace, _, _, cx| {
+            workspace.toggle_ribbon(cx);
+          })),
+      )
+  }
+
+  fn render_collapsed_side_panel(
+    &self,
+    tooltip: &'static str,
+    icon: IconName,
+    toggle: fn(&mut Workspace, &mut Context<Workspace>),
+    cx: &mut Context<Self>,
+  ) -> impl IntoElement {
+    v_flex()
+      .size_full()
+      .items_center()
+      .pt_2()
+      .border_l_1()
+      .border_r_1()
+      .border_color(cx.theme().border)
+      .bg(cx.theme().background)
+      .child(
+        Button::new(tooltip)
+          .icon(icon)
+          .xsmall()
+          .ghost()
+          .tooltip(tooltip)
+          .on_click(cx.listener(move |workspace, _, _, cx| {
+            toggle(workspace, cx);
+          })),
       )
   }
 
@@ -1075,9 +1199,27 @@ impl Workspace {
       .text_color(cx.theme().sidebar_foreground)
       .child(
         div()
-          .text_sm()
-          .font_weight(gpui::FontWeight::SEMIBOLD)
-          .child("Outline"),
+          .w_full()
+          .flex()
+          .flex_row()
+          .items_center()
+          .justify_between()
+          .child(
+            div()
+              .text_sm()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .child("Outline"),
+          )
+          .child(
+            Button::new("collapse-outline-panel")
+              .icon(IconName::PanelLeftClose)
+              .xsmall()
+              .ghost()
+              .tooltip("Collapse outline")
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.toggle_outline(cx);
+              })),
+          ),
       )
       .child(
         div()
@@ -1200,6 +1342,8 @@ impl Workspace {
       .xsmall()
       .track_scroll(&self.tab_bar_scroll_handle)
       .menu(true)
+      .prefix(self.render_document_tab_bar_prefix(active_index, tabs.len(), cx))
+      .suffix(self.render_document_tab_bar_suffix())
       .active_tab_bg(white())
       .active_tab_fg(active_tab_fg)
       .selected_index(active_index)
@@ -1235,6 +1379,70 @@ impl Workspace {
           .suffix(close_button)
       }))
       .last_empty_space(div().flex_1().h_full())
+  }
+
+  fn next_untitled_title(&self, cx: &App) -> String {
+    let used = self
+      .document_panels
+      .iter()
+      .filter_map(|panel| untitled_index(panel.read(cx).title_text().as_ref()))
+      .collect::<HashSet<_>>();
+    let mut index = 1usize;
+    while used.contains(&index) {
+      index += 1;
+    }
+    format!("Untitled{index}.db8")
+  }
+
+  fn render_document_tab_bar_prefix(&self, active_index: usize, tab_count: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    h_flex()
+      .h_full()
+      .items_center()
+      .gap_1()
+      .px_1()
+      .child(
+        icon_button("tab-bar-new-file", AppIcon::NewFile)
+          .tooltip("New file")
+          .on_click(cx.listener(|workspace, _, window, cx| {
+            workspace.new_document(window, cx);
+          })),
+      )
+      .child(
+        icon_button("tab-bar-save-file", AppIcon::SaveFile)
+          .tooltip("Save current file")
+          .on_click(cx.listener(|workspace, _, window, cx| {
+            workspace.save_active(window, cx);
+          })),
+      )
+      .child(
+        icon_button("tab-bar-navigate-left", AppIcon::TabLeft)
+          .tooltip("Navigate tab left")
+          .disabled(active_index == 0)
+          .on_click(cx.listener(|workspace, _, _, cx| {
+            workspace.navigate_active_tab(-1, cx);
+          })),
+      )
+      .child(
+        icon_button("tab-bar-navigate-right", AppIcon::TabRight)
+          .tooltip("Navigate tab right")
+          .disabled(active_index + 1 >= tab_count)
+          .on_click(cx.listener(|workspace, _, _, cx| {
+            workspace.navigate_active_tab(1, cx);
+          })),
+      )
+  }
+
+  fn render_document_tab_bar_suffix(&self) -> impl IntoElement {
+    h_flex()
+      .h_full()
+      .items_center()
+      .gap_1()
+      .px_1()
+      .child(
+        icon_button("tab-bar-multipanel-placeholder", AppIcon::MultiPanel)
+          .tooltip("Multi-panel layout")
+          .disabled(true),
+      )
   }
 
   fn render_empty_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1293,9 +1501,27 @@ impl Workspace {
       .bg(cx.theme().background)
       .child(
         div()
-          .text_sm()
-          .font_weight(gpui::FontWeight::SEMIBOLD)
-          .child("Toolkit"),
+          .w_full()
+          .flex()
+          .flex_row()
+          .items_center()
+          .justify_between()
+          .child(
+            Button::new("collapse-toolkit-panel")
+              .icon(IconName::PanelRightClose)
+              .xsmall()
+              .ghost()
+              .tooltip("Collapse toolkit")
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.toggle_toolkit(cx);
+              })),
+          )
+          .child(
+            div()
+              .text_sm()
+              .font_weight(gpui::FontWeight::SEMIBOLD)
+              .child("Toolkit"),
+          ),
       )
       .child(
         Button::new("toolkit-global-db8-search")
@@ -1717,6 +1943,75 @@ fn file_menu_item(
     })
 }
 
+fn insert_top_bar_button(cx: &mut Context<Workspace>, has_document: bool) -> impl IntoElement {
+  let workspace = cx.entity().downgrade();
+  div()
+    .h_full()
+    .flex_none()
+    .flex()
+    .items_center()
+    .justify_center()
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .child(
+      Button::new("top-insert")
+        .label("Insert")
+        .xsmall()
+        .ghost()
+        .disabled(!has_document)
+        .dropdown_menu(move |menu, _, _| {
+          let image_workspace = workspace.clone();
+          let table_workspace = workspace.clone();
+          let equation_workspace = workspace.clone();
+          menu
+            .item(
+              PopupMenuItem::new("Image...")
+                .disabled(!has_document)
+                .on_click(move |_, _, cx| {
+                  insert_image_from_top_bar(&image_workspace, cx);
+                }),
+            )
+            .item(
+              PopupMenuItem::new("Table")
+                .disabled(!has_document)
+                .on_click(move |_, _, cx| {
+                  insert_default_table_from_top_bar(&table_workspace, cx);
+                }),
+            )
+            .item(
+              PopupMenuItem::new("Equation")
+                .disabled(!has_document)
+                .on_click(move |_, _, cx| {
+                  insert_default_equation_from_top_bar(&equation_workspace, cx);
+                }),
+            )
+        }),
+    )
+}
+
+fn insert_image_from_top_bar(workspace: &WeakEntity<Workspace>, cx: &mut App) {
+  let _ = workspace.update(cx, |workspace, cx| {
+    if let Some(editor) = workspace.active_editor.clone() {
+      let _ = editor.update(cx, |editor, cx| editor.prompt_insert_image(cx));
+    }
+  });
+}
+
+fn insert_default_table_from_top_bar(workspace: &WeakEntity<Workspace>, cx: &mut App) {
+  let _ = workspace.update(cx, |workspace, cx| {
+    if let Some(editor) = workspace.active_editor.clone() {
+      let _ = editor.update(cx, |editor, cx| editor.insert_default_table(2, 2, cx));
+    }
+  });
+}
+
+fn insert_default_equation_from_top_bar(workspace: &WeakEntity<Workspace>, cx: &mut App) {
+  let _ = workspace.update(cx, |workspace, cx| {
+    if let Some(editor) = workspace.active_editor.clone() {
+      let _ = editor.update(cx, |editor, cx| editor.insert_equation("x^2 + y^2 = z^2", cx));
+    }
+  });
+}
+
 fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
   // The top bar itself starts native window dragging on mouse down. Each
   // button owns its mouse-down event so it behaves like a control instead of
@@ -1734,6 +2029,56 @@ fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
         .xsmall()
         .ghost()
         .on_click(|_, _, cx| cx.stop_propagation()),
+    )
+}
+
+fn view_top_bar_button(
+  cx: &mut Context<Workspace>,
+  outline_open: bool,
+  ribbon_open: bool,
+  toolkit_open: bool,
+) -> impl IntoElement {
+  let workspace = cx.entity().downgrade();
+  div()
+    .h_full()
+    .flex_none()
+    .flex()
+    .items_center()
+    .justify_center()
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .child(
+      Button::new("top-view")
+        .label("View")
+        .xsmall()
+        .ghost()
+        .dropdown_menu(move |menu, _, _| {
+          let outline_workspace = workspace.clone();
+          let ribbon_workspace = workspace.clone();
+          let toolkit_workspace = workspace.clone();
+          menu
+            .item(
+              PopupMenuItem::new("Outline")
+                .checked(outline_open)
+                .on_click(move |_, _, cx| {
+                  let _ = outline_workspace.update(cx, |workspace, cx| workspace.toggle_outline(cx));
+                }),
+            )
+            .item(
+              PopupMenuItem::new("Ribbon")
+                .checked(ribbon_open)
+                .on_click(move |_, _, cx| {
+                  let _ = ribbon_workspace.update(cx, |workspace, cx| workspace.toggle_ribbon(cx));
+                }),
+            )
+            .item(
+              PopupMenuItem::new("Toolkit")
+                .checked(toolkit_open)
+                .on_click(move |_, _, cx| {
+                  let _ = toolkit_workspace.update(cx, |workspace, cx| workspace.toggle_toolkit(cx));
+                }),
+            )
+        })
+        .anchor(Corner::BottomLeft),
     )
 }
 
@@ -2236,4 +2581,13 @@ fn truncate_tab_title(title: &str, max_chars: usize) -> String {
     short.push_str("...");
   }
   short
+}
+
+fn untitled_index(title: &str) -> Option<usize> {
+  let title = title.strip_suffix(".db8").unwrap_or(title);
+  let number = title.strip_prefix("Untitled")?;
+  if number.is_empty() {
+    return None;
+  }
+  number.parse::<usize>().ok().filter(|index| *index > 0)
 }

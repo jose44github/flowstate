@@ -10,6 +10,7 @@ use super::*;
 pub enum ArmedInlineTool {
   Semantic(RunSemanticStyle),
   Underline,
+  Strikethrough,
   Highlight(HighlightStyle),
 }
 
@@ -98,6 +99,7 @@ impl RichTextEditor {
     match tool {
       ArmedInlineTool::Semantic(semantic) => self.toggle_semantic_style_for_selection(semantic, cx),
       ArmedInlineTool::Underline => self.toggle_underline(cx),
+      ArmedInlineTool::Strikethrough => self.toggle_strikethrough(cx),
       ArmedInlineTool::Highlight(highlight) => self.set_highlight(highlight, cx),
     }
   }
@@ -108,6 +110,9 @@ impl RichTextEditor {
 
   fn force_apply_inline_tool_to_current_target(&mut self, tool: ArmedInlineTool, cx: &mut Context<Self>) {
     if let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block {
+      let Some(selection_range) = self.table_cell_selection_range() else {
+        return;
+      };
       self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
         if paragraph.text.is_empty() {
           return;
@@ -118,11 +123,9 @@ impl RichTextEditor {
             styles: RunStyles::default(),
           });
         }
-        for run in &mut paragraph.paragraph.runs {
-          apply_inline_tool_to_styles(tool, &mut run.styles);
-        }
-        paragraph.paragraph.runs = merge_adjacent_runs(std::mem::take(&mut paragraph.paragraph.runs));
-        paragraph.paragraph.version = paragraph.paragraph.version.wrapping_add(1);
+        mutate_table_cell_runs_in_range(paragraph, selection_range.clone(), |styles| {
+          apply_inline_tool_to_styles(tool, styles);
+        });
       });
       return;
     }
@@ -163,6 +166,9 @@ fn apply_inline_tool_to_caret_styles(editor: &RichTextEditor, tool: ArmedInlineT
         styles.direct_underline = false;
       }
     },
+    ArmedInlineTool::Strikethrough => {
+      styles.strikethrough = !styles.strikethrough;
+    },
     ArmedInlineTool::Highlight(highlight) => {
       styles.highlight = if styles.highlight == Some(highlight) { None } else { Some(highlight) };
     },
@@ -180,6 +186,9 @@ fn apply_inline_tool_to_styles(tool: ArmedInlineTool, styles: &mut RunStyles) {
     ArmedInlineTool::Underline => {
       styles.semantic = RunSemanticStyle::Underline;
       styles.direct_underline = false;
+    },
+    ArmedInlineTool::Strikethrough => {
+      styles.strikethrough = true;
     },
     ArmedInlineTool::Highlight(highlight) => {
       styles.highlight = Some(highlight);

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 // `paragraph_widths` and `paragraph_width` are free helpers that still live in
 // the parent module. `ParagraphOffsetIndex`'s methods invoke them.
-use super::{paragraph_width, paragraph_widths};
+use super::{paragraph_text_len, paragraph_width, paragraph_widths};
 
 pub(super) const SOFT_LINE_BREAK: char = '\u{2028}';
 pub(super) const SOFT_LINE_BREAK_STR: &str = "\u{2028}";
@@ -61,6 +61,48 @@ pub(super) fn block_ix_for_paragraph(document: &Document, target_paragraph_ix: u
     }
   }
   None
+}
+
+pub(super) fn document_position_for_offset(document: &Document, offset: DocumentOffset) -> Option<DocumentPosition> {
+  let paragraph = document.paragraphs.get(offset.paragraph)?;
+  if offset.byte > paragraph_text_len(paragraph) {
+    return None;
+  }
+  Some(DocumentPosition::Text {
+    block_ix: block_ix_for_paragraph(document, offset.paragraph)?,
+    byte: offset.byte,
+  })
+}
+
+pub(super) fn document_offset_for_position(document: &Document, position: &DocumentPosition) -> Option<DocumentOffset> {
+  match position {
+    DocumentPosition::Text { block_ix, byte } => {
+      let mut paragraph_ix = 0usize;
+      for (ix, block) in document.blocks.iter().enumerate() {
+        match block {
+          Block::Paragraph(paragraph) => {
+            if ix == *block_ix {
+              if *byte <= paragraph_text_len(paragraph) {
+                return Some(DocumentOffset {
+                  paragraph: paragraph_ix,
+                  byte: *byte,
+                });
+              }
+              return None;
+            }
+            paragraph_ix += 1;
+          },
+          Block::Image(_) | Block::Equation(_) | Block::Table(_) => {
+            if ix == *block_ix {
+              return None;
+            }
+          },
+        }
+      }
+      None
+    },
+    DocumentPosition::Object { .. } | DocumentPosition::TableCell { .. } => None,
+  }
 }
 
 pub(super) fn update_paragraph_block(document: &mut Document, paragraph_ix: usize) {
@@ -315,6 +357,7 @@ pub(super) struct InputTableStyle {
 pub struct RunStyles {
   pub semantic: RunSemanticStyle,
   pub direct_underline: bool,
+  pub strikethrough: bool,
   pub highlight: Option<HighlightStyle>,
 }
 
@@ -494,6 +537,11 @@ impl RunStyles {
 
   pub fn with_direct_underline(mut self) -> Self {
     self.direct_underline = true;
+    self
+  }
+
+  pub fn with_strikethrough(mut self) -> Self {
+    self.strikethrough = true;
     self
   }
 }

@@ -33,8 +33,8 @@ pub use tools::ArmedInlineTool;
 use document::{
   InputAsset, InputBlock, InputBlockAlignment, InputEquationBlock, InputEquationDisplay, InputEquationSyntax, InputImageBlock, InputImageSizing,
   InputParagraph, InputRun, InputTableBlock, InputTableCell, InputTableCellBlock, InputTableColumnWidth, InputTableRow, InputTableStyle,
-  ParagraphOffsetIndex, RichClipboardFragment, SOFT_LINE_BREAK, SOFT_LINE_BREAK_STR, block_ix_for_paragraph, paragraph_blocks_from_paragraphs,
-  paragraphs_mut, replace_paragraph_blocks, update_paragraph_block,
+  ParagraphOffsetIndex, RichClipboardFragment, SOFT_LINE_BREAK, SOFT_LINE_BREAK_STR, block_ix_for_paragraph, document_offset_for_position,
+  document_position_for_offset, paragraph_blocks_from_paragraphs, paragraphs_mut, replace_paragraph_blocks, update_paragraph_block,
 };
 use edit_ops::*;
 use editor::{DocumentSpan, SelectionGranularity};
