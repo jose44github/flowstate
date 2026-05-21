@@ -64,6 +64,7 @@ actions!(
     SetParagraphAnalytic,
     ToggleCite,
     ToggleUnderline,
+    ToggleStrikethrough,
     ToggleEmphasis,
     SetHighlightSpoken,
     ClearFormatting,
@@ -322,6 +323,7 @@ pub struct RichTextEditorStyleState {
   pub paragraph_style: SelectionState<ParagraphStyle>,
   pub semantic: SelectionState<RunSemanticStyle>,
   pub underline: SelectionState<bool>,
+  pub strikethrough: SelectionState<bool>,
   pub highlight: SelectionState<Option<HighlightStyle>>,
 }
 
@@ -1204,6 +1206,7 @@ impl RichTextEditor {
             .iter()
             .map(|styles| styles.direct_underline || styles.semantic == RunSemanticStyle::Underline),
         ),
+        strikethrough: selection_state_from_values(run_styles.iter().map(|styles| styles.strikethrough)),
         highlight: selection_state_from_values(run_styles.iter().map(|styles| styles.highlight)),
       };
     }
@@ -1230,6 +1233,7 @@ impl RichTextEditor {
           .iter()
           .map(|styles| styles.direct_underline || styles.semantic == RunSemanticStyle::Underline),
       ),
+      strikethrough: selection_state_from_values(run_styles.iter().map(|styles| styles.strikethrough)),
       highlight: selection_state_from_values(run_styles.iter().map(|styles| styles.highlight)),
     }
   }
@@ -2748,6 +2752,46 @@ impl RichTextEditor {
     self.toggle_underline_kind(None, cx);
   }
 
+  pub fn toggle_strikethrough(&mut self, cx: &mut Context<Self>) {
+    if self.clear_matching_armed_inline_tool(ArmedInlineTool::Strikethrough, cx) {
+      return;
+    }
+    if let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block {
+      let Some(selection_range) = self.table_cell_selection_range() else {
+        self.armed_inline_tool = Some(ArmedInlineTool::Strikethrough);
+        cx.notify();
+        return;
+      };
+      let all_selected = self
+        .selected_table_cell_paragraph()
+        .map(|paragraph| table_cell_range_all_run_styles(paragraph, selection_range.clone(), |styles| styles.strikethrough))
+        .unwrap_or(false);
+      self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
+        if paragraph.paragraph.runs.is_empty() && !paragraph.text.is_empty() {
+          paragraph.paragraph.runs.push(TextRun {
+            len: paragraph.text.len(),
+            styles: RunStyles::default(),
+          });
+        }
+        mutate_table_cell_runs_in_range(paragraph, selection_range, |styles| styles.strikethrough = !all_selected);
+      });
+      return;
+    }
+    if self.selection.is_caret() {
+      let mut styles = self.styles_at_caret();
+      styles.strikethrough = !styles.strikethrough;
+      self.pending_styles = Some(styles);
+      cx.notify();
+      return;
+    }
+    let range = self.selection.normalized();
+    let all_selected = selection_all_run_styles(&self.document, range.clone(), |styles| styles.strikethrough);
+    self.apply_document_edit(cx, |editor, cx| {
+      mutate_runs_in_range(&mut editor.document, range, |styles| styles.strikethrough = !all_selected);
+      editor.after_text_mutation(cx);
+    });
+  }
+
   /// Toggle any semantic inline style for the current selection or caret.
   ///
   /// The ribbon can call this generic method instead of matching each style to
@@ -3012,6 +3056,9 @@ impl RichTextEditor {
   }
   fn on_toggle_underline(&mut self, _: &ToggleUnderline, _: &mut Window, cx: &mut Context<Self>) {
     self.toggle_underline(cx);
+  }
+  fn on_toggle_strikethrough(&mut self, _: &ToggleStrikethrough, _: &mut Window, cx: &mut Context<Self>) {
+    self.toggle_strikethrough(cx);
   }
   fn on_toggle_emphasis(&mut self, _: &ToggleEmphasis, _: &mut Window, cx: &mut Context<Self>) {
     self.toggle_emphasis(cx);
@@ -5304,6 +5351,7 @@ impl Render for RichTextEditor {
       .on_action(cx.listener(Self::on_set_paragraph_analytic))
       .on_action(cx.listener(Self::on_toggle_cite))
       .on_action(cx.listener(Self::on_toggle_underline))
+      .on_action(cx.listener(Self::on_toggle_strikethrough))
       .on_action(cx.listener(Self::on_toggle_emphasis))
       .on_action(cx.listener(Self::on_set_highlight_spoken))
       .on_action(cx.listener(Self::on_clear_formatting))

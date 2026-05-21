@@ -18,7 +18,7 @@ use super::*;
 // UTF-8 text blob, then per-paragraph run metadata. Keeping the format
 // length-prefixed makes the reader resilient against trailing junk.
 const DB8_MAGIC: &[u8; 4] = b"DB8\0";
-const DB8_VERSION: u32 = 4;
+const DB8_VERSION: u32 = 5;
 
 const BLOCK_PARAGRAPH: u8 = 0;
 const BLOCK_IMAGE: u8 = 1;
@@ -53,78 +53,10 @@ pub fn read_db8(path: impl AsRef<Path>) -> io::Result<Document> {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid DB8 magic"));
   }
   let version = read_u32(&mut cursor)?;
-  // Version 3 briefly existed during development with document appearance
-  // appended after semantic content. Appearance is intentionally app-local, so
-  // v3 input is accepted but the trailing appearance payload is ignored.
-  if !matches!(version, 1 | 2 | 3 | 4) {
+  if version != DB8_VERSION {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "unsupported DB8 version"));
   }
-
-  if version == 4 {
-    return read_db8_v4(cursor, timing);
-  }
-
-  let text_len = {
-    let raw = read_u64(&mut cursor)?;
-    usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 text length overflows usize"))?
-  };
-  let mut text_bytes = vec![0; text_len];
-  cursor.read_exact(&mut text_bytes)?;
-  let text = String::from_utf8(text_bytes).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 text is not UTF-8"))?;
-
-  let paragraph_count = {
-    let raw = read_u64(&mut cursor)?;
-    usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 paragraph count overflows usize"))?
-  };
-  let mut paragraphs = Vec::with_capacity(paragraph_count.min(4096));
-  for _ in 0..paragraph_count {
-    let style = decode_paragraph_style(read_u8(&mut cursor)?)?;
-    let start = {
-      let raw = read_u64(&mut cursor)?;
-      usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 paragraph start overflows usize"))?
-    };
-    let end = {
-      let raw = read_u64(&mut cursor)?;
-      usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 paragraph end overflows usize"))?
-    };
-    let run_count = {
-      let raw = read_u64(&mut cursor)?;
-      usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 run count overflows usize"))?
-    };
-    let mut runs = Vec::with_capacity(run_count.min(4096));
-    for _ in 0..run_count {
-      let len = {
-        let raw = read_u64(&mut cursor)?;
-        usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 run length overflows usize"))?
-      };
-      let styles = decode_run_styles(read_u8(&mut cursor)?, version)?;
-      runs.push(TextRun { len, styles });
-    }
-    paragraphs.push(Paragraph {
-      style,
-      byte_range: start..end,
-      runs: merge_adjacent_runs(runs),
-      version: 0,
-    });
-  }
-
-  let offset_index = ParagraphOffsetIndex::new(&paragraphs);
-  let blocks = paragraph_blocks_from_paragraphs(&paragraphs);
-  let document = Document {
-    text: Rope::from(text),
-    paragraphs: Arc::new(paragraphs),
-    blocks: Arc::new(blocks),
-    assets: AssetStore::default(),
-    offset_index,
-    theme: DocumentTheme::default(),
-  };
-  validate_document(&document)?;
-  log_timing(
-    "db8 read",
-    timing,
-    format!("bytes={} paragraphs={}", document.text.byte_len(), document.paragraphs.len()),
-  );
-  Ok(document)
+  read_db8_current(cursor, timing)
 }
 
 pub fn write_db8(path: impl AsRef<Path>, document: &Document) -> io::Result<()> {
@@ -231,7 +163,7 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     .map_err(|error| error.error)
 }
 
-fn read_db8_v4(mut cursor: Cursor<&[u8]>, timing: Instant) -> io::Result<Document> {
+fn read_db8_current(mut cursor: Cursor<&[u8]>, timing: Instant) -> io::Result<Document> {
   let text_len = {
     let raw = read_u64(&mut cursor)?;
     usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 text length overflows usize"))?
@@ -359,7 +291,7 @@ fn read_paragraph_payload(cursor: &mut Cursor<&[u8]>) -> io::Result<Paragraph> {
       let raw = read_u64(cursor)?;
       usize::try_from(raw).map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 run length overflows usize"))?
     };
-    let styles = decode_run_styles(read_u8(cursor)?, 4)?;
+    let styles = read_run_styles(cursor)?;
     runs.push(TextRun { len, styles });
   }
   Ok(Paragraph {
@@ -377,7 +309,7 @@ fn write_paragraph_payload(bytes: &mut Vec<u8>, paragraph: &Paragraph, range: Ra
   write_u64(bytes, paragraph.runs.len() as u64);
   for run in &paragraph.runs {
     write_u64(bytes, run.len as u64);
-    bytes.push(encode_run_styles(run.styles));
+    write_run_styles(bytes, run.styles);
   }
 }
 
@@ -894,38 +826,30 @@ fn decode_paragraph_style(value: u8) -> io::Result<ParagraphStyle> {
   }
 }
 
-fn encode_run_styles(styles: RunStyles) -> u8 {
-  let mut bits = encode_run_semantic_style(styles.semantic);
+fn write_run_styles(bytes: &mut Vec<u8>, styles: RunStyles) {
+  bytes.push(encode_run_semantic_style(styles.semantic));
+  let mut flags = 0u8;
   if styles.direct_underline {
-    bits |= 1 << 3;
+    flags |= 1 << 0;
   }
-  bits
-    | match styles.highlight {
-      None => 0,
-      Some(HighlightStyle::Spoken) => 1 << 4,
-      Some(HighlightStyle::Insert) => 2 << 4,
-      Some(HighlightStyle::Alternative) => 3 << 4,
-    }
+  if styles.strikethrough {
+    flags |= 1 << 1;
+  }
+  bytes.push(flags);
+  bytes.push(encode_highlight_style(styles.highlight));
 }
 
-fn decode_run_styles(bits: u8, version: u32) -> io::Result<RunStyles> {
-  if version == 1 {
-    return decode_v1_run_styles(bits);
-  }
-  let highlight = match (bits >> 4) & 0b11 {
-    0 => None,
-    1 => Some(HighlightStyle::Spoken),
-    2 => Some(HighlightStyle::Insert),
-    3 => Some(HighlightStyle::Alternative),
-    _ => unreachable!(),
-  };
-  if bits & 0b1100_0000 != 0 {
-    return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid run style bits"));
+fn read_run_styles(cursor: &mut Cursor<&[u8]>) -> io::Result<RunStyles> {
+  let semantic = decode_run_semantic_style(read_u8(cursor)?)?;
+  let flags = read_u8(cursor)?;
+  if flags & !0b0000_0011 != 0 {
+    return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid run style flags"));
   }
   Ok(RunStyles {
-    semantic: decode_run_semantic_style(bits & 0b0000_0111)?,
-    direct_underline: bits & (1 << 3) != 0,
-    highlight,
+    semantic,
+    direct_underline: flags & (1 << 0) != 0,
+    strikethrough: flags & (1 << 1) != 0,
+    highlight: decode_highlight_style(read_u8(cursor)?)?,
   })
 }
 
@@ -952,29 +876,29 @@ fn decode_run_semantic_style(value: u8) -> io::Result<RunSemanticStyle> {
   }
 }
 
-fn decode_v1_run_styles(bits: u8) -> io::Result<RunStyles> {
-  let highlight = match (bits >> 4) & 0b11 {
+fn encode_highlight_style(style: Option<HighlightStyle>) -> u8 {
+  match style {
+    None => 0,
+    Some(HighlightStyle::Spoken) => 1,
+    Some(HighlightStyle::Insert) => 2,
+    Some(HighlightStyle::Alternative) => 3,
+  }
+}
+
+fn decode_highlight_style(value: u8) -> io::Result<Option<HighlightStyle>> {
+  if value > 31 {
+    return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid highlight style slot"));
+  }
+  Ok(match value {
     0 => None,
     1 => Some(HighlightStyle::Spoken),
     2 => Some(HighlightStyle::Insert),
     3 => Some(HighlightStyle::Alternative),
-    _ => unreachable!(),
-  };
-  if bits & 0b1100_0000 != 0 {
-    return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid run style bits"));
-  }
-  let semantic = if bits & (1 << 3) != 0 {
-    RunSemanticStyle::Underline
-  } else if bits & (1 << 2) != 0 {
-    RunSemanticStyle::Emphasis
-  } else if bits & (1 << 0) != 0 {
-    RunSemanticStyle::Cite
-  } else {
-    RunSemanticStyle::Plain
-  };
-  Ok(RunStyles {
-    semantic,
-    direct_underline: bits & (1 << 1) != 0,
-    highlight,
+    _ => {
+      return Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "highlight slot is reserved but has no app style yet",
+      ))
+    },
   })
 }

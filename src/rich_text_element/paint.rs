@@ -76,6 +76,13 @@ pub(super) fn paint_layout(
         }
         window.paint_quad(fill(underline_bounds, Background::from(underline.color)));
       }
+      for strikethrough in &line.strikethroughs {
+        let mut strikethrough_bounds = strikethrough.bounds.shift(bounds.origin + line.origin);
+        if layout.snap_underline_rules_to_pixels {
+          strikethrough_bounds = snap_horizontal_rule_to_device_pixels(strikethrough_bounds, window);
+        }
+        window.paint_quad(fill(strikethrough_bounds, Background::from(strikethrough.color)));
+      }
     }
   }
   if let Some(selection) = selection
@@ -323,6 +330,12 @@ fn paint_table_paragraph(paragraph: &LaidOutParagraph, origin: Point<Pixels>, co
       window.paint_quad(fill(
         snap_horizontal_rule_to_device_pixels(underline.bounds.shift(origin + line.origin), window),
         Background::from(underline.color),
+      ));
+    }
+    for strikethrough in &line.strikethroughs {
+      window.paint_quad(fill(
+        snap_horizontal_rule_to_device_pixels(strikethrough.bounds.shift(origin + line.origin), window),
+        Background::from(strikethrough.color),
       ));
     }
   }

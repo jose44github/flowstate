@@ -176,6 +176,7 @@ pub(super) struct LaidOutLine {
   pub(super) segments: Vec<LaidOutSegment>,
   pub(super) rects: Vec<RunRect>,
   pub(super) underlines: Vec<Decoration>,
+  pub(super) strikethroughs: Vec<Decoration>,
 }
 
 impl LaidOutLine {
@@ -279,6 +280,7 @@ pub(super) struct EffectiveRunFormat {
   pub(super) italic: bool,
   pub(super) color: Hsla,
   pub(super) underline: UnderlineKind,
+  pub(super) strikethrough: bool,
   pub(super) highlight: Option<Hsla>,
   pub(super) border_width: Pixels,
 }
@@ -381,6 +383,7 @@ pub(super) fn run_format(document: &Document, paragraph: EffectiveParagraphForma
     italic: paragraph.italic,
     color: paragraph.color,
     underline: paragraph.underline,
+    strikethrough: styles.strikethrough,
     highlight: styles.highlight.map(|highlight| match highlight {
       HighlightStyle::Spoken => theme.highlight_spoken,
       HighlightStyle::Insert => theme.highlight_insert,
@@ -1499,9 +1502,11 @@ pub(super) fn shape_line(
     segments,
     rects: Vec::new(),
     underlines: Vec::new(),
+    strikethroughs: Vec::new(),
   };
   line.rects = rects_for_line(document, &line);
   line.underlines = underlines_for_line(document, &line, cx);
+  line.strikethroughs = strikethroughs_for_line(document, &line);
   line
 }
 
@@ -1723,6 +1728,23 @@ pub(super) fn underlines_for_line(document: &Document, line: &LaidOutLine, cx: &
     }
   }
   underlines
+}
+
+pub(super) fn strikethroughs_for_line(document: &Document, line: &LaidOutLine) -> Vec<Decoration> {
+  let baseline = line.baseline_y();
+  line
+    .segments
+    .iter()
+    .filter(|segment| segment.format.strikethrough)
+    .map(|segment| {
+      let thickness = document.theme.underline_rule_thickness.max(px(1.0));
+      let y = baseline - segment.font_size * 0.30;
+      Decoration {
+        bounds: Bounds::new(point(segment.x, y), size(segment.width.max(px(1.0)), thickness)),
+        color: document.theme.default_text_color,
+      }
+    })
+    .collect()
 }
 
 pub(super) fn single_underline_metrics_for_segment(segment: &LaidOutSegment, document: &Document, cx: &mut App) -> (Pixels, Pixels) {

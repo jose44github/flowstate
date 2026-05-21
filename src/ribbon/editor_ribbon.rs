@@ -121,6 +121,10 @@ impl EditorRibbon {
     matches!(armed_tool, Some(ArmedInlineTool::Underline)) || matches!(state.underline, SelectionState::Uniform(true))
   }
 
+  fn strikethrough_selected(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>) -> bool {
+    matches!(armed_tool, Some(ArmedInlineTool::Strikethrough)) || matches!(state.strikethrough, SelectionState::Uniform(true))
+  }
+
   fn highlight_selected(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>, style: HighlightStyle) -> bool {
     matches!(armed_tool, Some(ArmedInlineTool::Highlight(current)) if current == style)
       || matches!(state.highlight, SelectionState::Uniform(Some(current)) if current == style)
@@ -220,6 +224,19 @@ impl LegacyStylesRibbon {
               .on_click(move |_, _, cx| {
                 editor.update(cx, |editor, cx| {
                   editor.toggle_inline_tool(ArmedInlineTool::Underline, cx);
+                });
+              })
+          })
+          .child({
+            let editor = editor.clone();
+            Toggle::new("strikethrough-style")
+              .label("Strike")
+              .small()
+              .outline()
+              .checked(EditorRibbon::strikethrough_selected(style_state, armed_tool))
+              .on_click(move |_, _, cx| {
+                editor.update(cx, |editor, cx| {
+                  editor.toggle_inline_tool(ArmedInlineTool::Strikethrough, cx);
                 });
               })
           }),
@@ -334,6 +351,7 @@ pub enum RibbonCommandId {
   Paragraph(ParagraphStyle),
   Semantic(RunSemanticStyle),
   Underline,
+  Strikethrough,
   Highlight(HighlightStyle),
   ClearHighlight,
   ClearFormatting,
@@ -694,6 +712,18 @@ fn inline_commands(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInl
     disabled: false,
     overflow_behavior: OverflowBehavior::KeepVisible,
   });
+  commands.push(RibbonCommand {
+    id: RibbonCommandId::Strikethrough,
+    label: "Strike",
+    group_id: "inline",
+    shortcut: shortcut_for(CommandId::ToggleStrikethrough),
+    command_id: Some(CommandId::ToggleStrikethrough),
+    priority: 81,
+    accent: None,
+    selected: EditorRibbon::strikethrough_selected(state, armed_tool),
+    disabled: false,
+    overflow_behavior: OverflowBehavior::KeepVisible,
+  });
 
   commands
 }
@@ -748,6 +778,9 @@ fn perform_ribbon_command(editor: &mut RichTextEditor, command_id: RibbonCommand
     },
     RibbonCommandId::Underline => {
       editor.toggle_inline_tool(ArmedInlineTool::Underline, cx);
+    },
+    RibbonCommandId::Strikethrough => {
+      editor.toggle_inline_tool(ArmedInlineTool::Strikethrough, cx);
     },
     RibbonCommandId::Highlight(style) => {
       editor.toggle_inline_tool(ArmedInlineTool::Highlight(style), cx);
@@ -919,6 +952,7 @@ fn ribbon_command_key(command_id: RibbonCommandId) -> u64 {
     RibbonCommandId::Paragraph(style) => 1_000 + style as u64,
     RibbonCommandId::Semantic(style) => 2_000 + style as u64,
     RibbonCommandId::Underline => 3_000,
+    RibbonCommandId::Strikethrough => 3_100,
     RibbonCommandId::Highlight(style) => 4_000 + style as u64,
     RibbonCommandId::ClearHighlight => 5_000,
     RibbonCommandId::ClearFormatting => 5_001,

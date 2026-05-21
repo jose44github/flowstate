@@ -357,6 +357,7 @@ pub(super) struct InputTableStyle {
 pub struct RunStyles {
   pub semantic: RunSemanticStyle,
   pub direct_underline: bool,
+  pub strikethrough: bool,
   pub highlight: Option<HighlightStyle>,
 }
 
@@ -536,6 +537,11 @@ impl RunStyles {
 
   pub fn with_direct_underline(mut self) -> Self {
     self.direct_underline = true;
+    self
+  }
+
+  pub fn with_strikethrough(mut self) -> Self {
+    self.strikethrough = true;
     self
   }
 }
