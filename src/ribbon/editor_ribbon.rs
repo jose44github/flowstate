@@ -1,17 +1,10 @@
-use gpui::{
-  Context, Entity, IntoElement, ParentElement as _, Render, Window, div, prelude::*,
-};
-use gpui_component::button::{
-  Button, ButtonGroup, ButtonVariants as _, Toggle, ToggleVariants as _,
-};
+use gpui::{Context, Entity, IntoElement, ParentElement as _, Render, Window, div, prelude::*};
+use gpui_component::button::{Button, ButtonGroup, ButtonVariants as _, Toggle, ToggleVariants as _};
 use gpui_component::{ActiveTheme as _, Selectable as _, Sizable as _};
 
+use crate::ribbon::style_catalog::{HIGHLIGHT_STYLE_SPECS, PARAGRAPH_STYLE_SPECS, SEMANTIC_STYLE_SPECS};
 use crate::rich_text_element::{
-  ArmedInlineTool, HighlightStyle, ParagraphStyle, RichTextEditor, RichTextEditorStyleState,
-  RunSemanticStyle, SelectionState,
-};
-use crate::ribbon::style_catalog::{
-  HIGHLIGHT_STYLE_SPECS, PARAGRAPH_STYLE_SPECS, SEMANTIC_STYLE_SPECS,
+  ArmedInlineTool, HighlightStyle, ParagraphStyle, RichTextEditor, RichTextEditorStyleState, RunSemanticStyle, SelectionState,
 };
 
 /// Word-like formatting ribbon for a rich text editor.
@@ -31,28 +24,16 @@ impl EditorRibbon {
     matches!(state.paragraph_style, SelectionState::Uniform(current) if current == style)
   }
 
-  fn semantic_selected(
-    state: &RichTextEditorStyleState,
-    armed_tool: Option<ArmedInlineTool>,
-    style: RunSemanticStyle,
-  ) -> bool {
+  fn semantic_selected(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>, style: RunSemanticStyle) -> bool {
     matches!(armed_tool, Some(ArmedInlineTool::Semantic(current)) if current == style)
       || matches!(state.semantic, SelectionState::Uniform(current) if current == style)
   }
 
-  fn underline_selected(
-    state: &RichTextEditorStyleState,
-    armed_tool: Option<ArmedInlineTool>,
-  ) -> bool {
-    matches!(armed_tool, Some(ArmedInlineTool::Underline))
-      || matches!(state.underline, SelectionState::Uniform(true))
+  fn underline_selected(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>) -> bool {
+    matches!(armed_tool, Some(ArmedInlineTool::Underline)) || matches!(state.underline, SelectionState::Uniform(true))
   }
 
-  fn highlight_selected(
-    state: &RichTextEditorStyleState,
-    armed_tool: Option<ArmedInlineTool>,
-    style: HighlightStyle,
-  ) -> bool {
+  fn highlight_selected(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>, style: HighlightStyle) -> bool {
     matches!(armed_tool, Some(ArmedInlineTool::Highlight(current)) if current == style)
       || matches!(state.highlight, SelectionState::Uniform(Some(current)) if current == style)
   }
@@ -192,6 +173,11 @@ fn ribbon_group(label: &'static str, controls: impl IntoElement, cx: &mut Contex
     .flex()
     .flex_col()
     .gap_1()
-    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label))
+    .child(
+      div()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(label),
+    )
     .child(controls)
 }

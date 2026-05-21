@@ -63,14 +63,16 @@ pub fn write_demo_document() -> anyhow::Result<()> {
 
 /// Run the rich text processor by itself for focused component development.
 pub fn run_standalone(document_path: PathBuf) {
-  Application::new().with_assets(gpui_component_assets::Assets).run(|cx: &mut App| {
-    gpui_component::init(cx);
-    init_theme_registry(cx);
-    apply_saved_theme(cx);
-    register_rich_text_editor_keybindings(cx);
-    open_workspace_window(document_path, cx);
-    cx.activate(true);
-  });
+  Application::new()
+    .with_assets(gpui_component_assets::Assets)
+    .run(|cx: &mut App| {
+      gpui_component::init(cx);
+      init_theme_registry(cx);
+      apply_saved_theme(cx);
+      register_rich_text_editor_keybindings(cx);
+      open_workspace_window(document_path, cx);
+      cx.activate(true);
+    });
 }
 
 fn init_theme_registry(cx: &mut App) {
@@ -82,14 +84,21 @@ fn init_theme_registry(cx: &mut App) {
 
 fn vendored_themes_dir() -> PathBuf {
   let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-  manifest_dir.join("vendor").join("gpui-component").join("themes")
+  manifest_dir
+    .join("vendor")
+    .join("gpui-component")
+    .join("themes")
 }
 
 fn apply_saved_theme(cx: &mut App) {
   let Some(theme_name) = load_app_settings().theme_name else {
     return;
   };
-  let Some(theme) = ThemeRegistry::global(cx).themes().get(theme_name.as_str()).cloned() else {
+  let Some(theme) = ThemeRegistry::global(cx)
+    .themes()
+    .get(theme_name.as_str())
+    .cloned()
+  else {
     return;
   };
 
@@ -97,4 +106,3 @@ fn apply_saved_theme(cx: &mut App) {
   Theme::global_mut(cx).apply_config(&theme);
   Theme::change(mode, None, cx);
 }
-

@@ -1,17 +1,15 @@
 use std::path::PathBuf;
 
-use gpui::{
-  App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render, SharedString, WeakEntity, Window, div, prelude::*,
-};
-use gpui_component::dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState};
+use gpui::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render, SharedString, WeakEntity, Window, div, prelude::*};
 use gpui_component::ActiveTheme as _;
+use gpui_component::dock::{Panel, PanelControl, PanelEvent, PanelInfo, PanelState};
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::rich_text_element::RichTextEditor;
 use crate::ribbon::EditorRibbon;
-use crate::workspace::icons::{AppIcon, icon_button};
+use crate::rich_text_element::RichTextEditor;
 use crate::workspace::Workspace;
+use crate::workspace::icons::{AppIcon, icon_button};
 
 pub struct DocumentPanel {
   id: Uuid,
@@ -25,12 +23,7 @@ pub struct DocumentPanel {
 }
 
 impl DocumentPanel {
-  pub fn new(
-    path: Option<PathBuf>,
-    editor: Entity<RichTextEditor>,
-    workspace: WeakEntity<Workspace>,
-    cx: &mut Context<Self>,
-  ) -> Self {
+  pub fn new(path: Option<PathBuf>, editor: Entity<RichTextEditor>, workspace: WeakEntity<Workspace>, cx: &mut Context<Self>) -> Self {
     let ribbon = cx.new(|_| EditorRibbon::new(editor.clone()));
     let title = path
       .as_ref()

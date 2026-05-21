@@ -23,11 +23,7 @@ impl RichTextEditor {
   /// If text is selected, the tool is applied immediately and is not armed. If
   /// the caret is empty, the tool is armed for future mouse selections and also
   /// updates pending caret styles so typed text follows the selected style.
-  pub fn activate_inline_tool(
-    &mut self,
-    tool: ArmedInlineTool,
-    cx: &mut Context<Self>,
-  ) {
+  pub fn activate_inline_tool(&mut self, tool: ArmedInlineTool, cx: &mut Context<Self>) {
     if matches!(self.selected_block, Some(BlockSelection::TableCell { .. })) {
       self.armed_inline_tool = None;
       self.force_apply_inline_tool_to_current_target(tool, cx);
@@ -69,11 +65,7 @@ impl RichTextEditor {
     self.pending_styles = Some(styles);
   }
 
-  fn apply_inline_tool_to_selection_with_current_behavior(
-    &mut self,
-    tool: ArmedInlineTool,
-    cx: &mut Context<Self>,
-  ) {
+  fn apply_inline_tool_to_selection_with_current_behavior(&mut self, tool: ArmedInlineTool, cx: &mut Context<Self>) {
     match tool {
       ArmedInlineTool::Semantic(semantic) => self.toggle_semantic_style_for_selection(semantic, cx),
       ArmedInlineTool::Underline => self.toggle_underline(cx),
@@ -87,6 +79,9 @@ impl RichTextEditor {
 
   fn force_apply_inline_tool_to_current_target(&mut self, tool: ArmedInlineTool, cx: &mut Context<Self>) {
     if let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block {
+      let Some(selection_range) = self.table_cell_selection_range() else {
+        return;
+      };
       self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
         if paragraph.text.is_empty() {
           return;
@@ -97,11 +92,9 @@ impl RichTextEditor {
             styles: RunStyles::default(),
           });
         }
-        for run in &mut paragraph.paragraph.runs {
-          apply_inline_tool_to_styles(tool, &mut run.styles);
-        }
-        paragraph.paragraph.runs = merge_adjacent_runs(std::mem::take(&mut paragraph.paragraph.runs));
-        paragraph.paragraph.version = paragraph.paragraph.version.wrapping_add(1);
+        mutate_table_cell_runs_in_range(paragraph, selection_range.clone(), |styles| {
+          apply_inline_tool_to_styles(tool, styles);
+        });
       });
       return;
     }
@@ -118,11 +111,7 @@ impl RichTextEditor {
   }
 }
 
-fn apply_inline_tool_to_caret_styles(
-  editor: &RichTextEditor,
-  tool: ArmedInlineTool,
-  styles: &mut RunStyles,
-) {
+fn apply_inline_tool_to_caret_styles(editor: &RichTextEditor, tool: ArmedInlineTool, styles: &mut RunStyles) {
   match tool {
     ArmedInlineTool::Semantic(semantic) => {
       styles.semantic = if styles.semantic == semantic {

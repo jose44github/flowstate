@@ -149,7 +149,7 @@ impl LaidOutParagraph {
     }
   }
 
-  fn hit_test(&self, position: Point<Pixels>) -> DocumentOffset {
+  pub(super) fn hit_test(&self, position: Point<Pixels>) -> DocumentOffset {
     let line_ix = first_line_with_bottom_at_or_after(&self.lines, position.y);
     if let Some(line) = self.lines.get(line_ix) {
       return DocumentOffset {
@@ -392,11 +392,11 @@ pub(super) fn run_format(document: &Document, paragraph: EffectiveParagraphForma
   match styles.semantic {
     RunSemanticStyle::Plain => {},
     RunSemanticStyle::Underline => {
-    format.font_size = theme.body_font_size;
-    format.color = theme.underline_color;
-    format.bold = theme.underline_bold;
-    format.italic = theme.underline_italic;
-    format.underline = theme.underline_underline.into();
+      format.font_size = theme.body_font_size;
+      format.color = theme.underline_color;
+      format.bold = theme.underline_bold;
+      format.italic = theme.underline_italic;
+      format.underline = theme.underline_underline.into();
     },
     RunSemanticStyle::Cite => {
       format.font_size = theme.cite_font_size;
@@ -465,7 +465,11 @@ pub(super) fn build_layout(
   }
 
   let layout = LayoutState {
-    blocks: paragraphs.iter().cloned().map(LaidOutBlock::Paragraph).collect(),
+    blocks: paragraphs
+      .iter()
+      .cloned()
+      .map(LaidOutBlock::Paragraph)
+      .collect(),
     paragraph_to_block: (0..paragraphs.len()).collect(),
     block_to_paragraph: (0..paragraphs.len()).map(Some).collect(),
     paragraphs,
@@ -589,7 +593,9 @@ fn image_placeholder_height(document: &Document, image: &ImageBlock, width: Pixe
   let available_width = (width - document.theme.pageless_inset_x * 2.0).max(px(1.0));
   let intrinsic = image_intrinsic_size(document, image);
   match image.sizing {
-    ImageSizing::Fixed { height_px: Some(height_px), .. } => px(height_px as f32),
+    ImageSizing::Fixed {
+      height_px: Some(height_px), ..
+    } => px(height_px as f32),
     ImageSizing::Fixed { width_px, height_px: None } => image_height_for_width(intrinsic, px(width_px as f32)).unwrap_or(px(160.0)),
     ImageSizing::FitWidth => image_height_for_width(intrinsic, available_width).unwrap_or((available_width * 0.5625).max(px(72.0))),
     ImageSizing::Intrinsic => intrinsic.map(|(_, height)| height).unwrap_or(px(160.0)),
@@ -623,8 +629,8 @@ fn image_height_for_width(intrinsic: Option<(Pixels, Pixels)>, width: Pixels) ->
 
 fn equation_placeholder_height(document: &Document, equation: &EquationBlock) -> Pixels {
   match equation.display {
-    EquationDisplay::Display => (document.theme.body_font_size * 2.5).max(px(40.0)),
-    EquationDisplay::InlineLikeParagraph => (document.theme.body_font_size * 1.5).max(px(24.0)),
+    EquationDisplay::Display => (document.theme.body_font_size * 3.7).max(px(72.0)),
+    EquationDisplay::InlineLikeParagraph => (document.theme.body_font_size * 2.75).max(px(56.0)),
   }
 }
 
@@ -684,7 +690,14 @@ fn layout_table_block(
   let column_count = table
     .column_widths
     .len()
-    .max(table.rows.iter().map(|row| row.cells.len()).max().unwrap_or(1))
+    .max(
+      table
+        .rows
+        .iter()
+        .map(|row| row.cells.len())
+        .max()
+        .unwrap_or(1),
+    )
     .max(1);
   let column_widths = resolved_table_column_widths(table, table_width, column_count);
   let mut row_top = y;
@@ -742,7 +755,11 @@ fn resolved_table_column_widths(table: &TableBlock, table_width: Pixels, column_
   let mut fraction_total = 0u32;
   let mut auto_count = 0usize;
   for ix in 0..column_count {
-    match table.column_widths.get(ix).unwrap_or(&TableColumnWidth::Fraction(1)) {
+    match table
+      .column_widths
+      .get(ix)
+      .unwrap_or(&TableColumnWidth::Fraction(1))
+    {
       TableColumnWidth::FixedPx(width) => fixed_total += px(*width as f32),
       TableColumnWidth::Fraction(fraction) => fraction_total = fraction_total.saturating_add((*fraction).max(1)),
       TableColumnWidth::Auto => auto_count += 1,
@@ -751,10 +768,16 @@ fn resolved_table_column_widths(table: &TableBlock, table_width: Pixels, column_
   let remaining = (table_width - fixed_total).max(px(1.0));
   let denominator = fraction_total.saturating_add(auto_count as u32).max(1);
   (0..column_count)
-    .map(|ix| match table.column_widths.get(ix).unwrap_or(&TableColumnWidth::Fraction(1)) {
-      TableColumnWidth::FixedPx(width) => px(*width as f32).max(px(8.0)),
-      TableColumnWidth::Fraction(fraction) => remaining * ((*fraction).max(1) as f32 / denominator as f32),
-      TableColumnWidth::Auto => remaining * (1.0 / denominator as f32),
+    .map(|ix| {
+      match table
+        .column_widths
+        .get(ix)
+        .unwrap_or(&TableColumnWidth::Fraction(1))
+      {
+        TableColumnWidth::FixedPx(width) => px(*width as f32).max(px(8.0)),
+        TableColumnWidth::Fraction(fraction) => remaining * ((*fraction).max(1) as f32 / denominator as f32),
+        TableColumnWidth::Auto => remaining * (1.0 / denominator as f32),
+      }
     })
     .collect()
 }
@@ -949,8 +972,13 @@ pub(super) fn estimate_paragraph_item_height(document: &Document, paragraph_ix: 
   let avg_char_width = (p_format.font_size * 0.52).max(px(1.0));
   let chars_per_line = ((content_width / avg_char_width).floor() as usize).max(1);
   let text_len = paragraph_text_len(paragraph);
-  let forced_line_count = paragraph_text(document, paragraph_ix).matches(SOFT_LINE_BREAK).count();
-  let estimated_lines = (text_len / chars_per_line).saturating_add(1).saturating_add(forced_line_count).max(1);
+  let forced_line_count = paragraph_text(document, paragraph_ix)
+    .matches(SOFT_LINE_BREAK)
+    .count();
+  let estimated_lines = (text_len / chars_per_line)
+    .saturating_add(1)
+    .saturating_add(forced_line_count)
+    .max(1);
   let line_gap = p_format.font_size * document.theme.line_gap_fraction;
   let line_height = (p_format.font_size + line_gap) * p_format.line_spacing;
   let mut height = p_format.spacing_before + content_top + line_height * estimated_lines as f32 + content_top + p_format.spacing_after;
@@ -989,7 +1017,14 @@ fn table_placeholder_height(document: &Document, table: &TableBlock, width: Pixe
   let column_count = table
     .column_widths
     .len()
-    .max(table.rows.iter().map(|row| row.cells.len()).max().unwrap_or(1))
+    .max(
+      table
+        .rows
+        .iter()
+        .map(|row| row.cells.len())
+        .max()
+        .unwrap_or(1),
+    )
     .max(1);
   let content_width = (width - document.theme.pageless_inset_x * 2.0).max(px(1.0));
   let column_widths = resolved_table_column_widths(table, content_width, column_count);
@@ -1005,7 +1040,12 @@ fn table_placeholder_height(document: &Document, table: &TableBlock, width: Pixe
           let span = cell.col_span.max(1) as usize;
           let _column_width = spanned_column_width(&column_widths, column_ix, span);
           column_ix += span;
-          let paragraph_count = cell.blocks.iter().filter(|block| matches!(block, TableCellBlock::Paragraph(_))).count().max(1);
+          let paragraph_count = cell
+            .blocks
+            .iter()
+            .filter(|block| matches!(block, TableCellBlock::Paragraph(_)))
+            .count()
+            .max(1);
           line_height * paragraph_count as f32 + table_cell_padding() * 2.0
         })
         .fold(px(28.0), Pixels::max)
@@ -1027,7 +1067,14 @@ fn layout_table_block_without_text(document: &Document, table: &TableBlock, widt
   let column_count = table
     .column_widths
     .len()
-    .max(table.rows.iter().map(|row| row.cells.len()).max().unwrap_or(1))
+    .max(
+      table
+        .rows
+        .iter()
+        .map(|row| row.cells.len())
+        .max()
+        .unwrap_or(1),
+    )
     .max(1);
   let column_widths = resolved_table_column_widths(table, table_width, column_count);
   let mut row_top = y;
@@ -1109,7 +1156,17 @@ pub(super) fn wrap_lines(
     return lines;
   }
 
-  wrap_text_segment(document, paragraph, p_format, text, 0..text.len(), max_width, &mut shape_cache, window, cx)
+  wrap_text_segment(
+    document,
+    paragraph,
+    p_format,
+    text,
+    0..text.len(),
+    max_width,
+    &mut shape_cache,
+    window,
+    cx,
+  )
 }
 
 fn push_wrapped_soft_segment(
@@ -1127,7 +1184,17 @@ fn push_wrapped_soft_segment(
   if segment.is_empty() {
     lines.push(shape_line(document, paragraph, p_format, "", segment, shape_cache, window, cx));
   } else {
-    lines.extend(wrap_text_segment(document, paragraph, p_format, text, segment, max_width, shape_cache, window, cx));
+    lines.extend(wrap_text_segment(
+      document,
+      paragraph,
+      p_format,
+      text,
+      segment,
+      max_width,
+      shape_cache,
+      window,
+      cx,
+    ));
   }
 }
 
@@ -1177,9 +1244,7 @@ fn wrap_text_segment(
       if candidate_width > max_width {
         let line_end = last_break
           .filter(|break_at| *break_at > start)
-          .unwrap_or_else(|| {
-            first_overflow_line_end(document, paragraph, &p_format, text, start, break_at, max_width, shape_cache, window)
-          });
+          .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, break_at, max_width, shape_cache, window));
         lines.push(shape_line(
           document,
           paragraph,
@@ -1228,19 +1293,7 @@ fn wrap_text_segment(
 
     let line_end = last_break
       .filter(|break_at| *break_at > start)
-      .unwrap_or_else(|| {
-        first_overflow_line_end(
-          document,
-          paragraph,
-          &p_format,
-          text,
-          start,
-          segment.end,
-          max_width,
-          shape_cache,
-          window,
-        )
-      });
+      .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, segment.end, max_width, shape_cache, window));
     lines.push(shape_line(
       document,
       paragraph,
@@ -1768,6 +1821,13 @@ pub(super) fn caret_bounds(layout: &LayoutState, offset: DocumentOffset, origin:
   Some(Bounds::new(origin + line.origin + point(x, px(0.0)), size(px(1.0), line.line_height)))
 }
 
+pub(super) fn caret_bounds_in_paragraph(paragraph: &LaidOutParagraph, byte: usize, origin: Point<Pixels>) -> Option<Bounds<Pixels>> {
+  let line_ix = line_ix_for_byte(paragraph, byte)?;
+  let line = paragraph.lines.get(line_ix)?;
+  let x = x_for_byte(line, byte);
+  Some(Bounds::new(origin + line.origin + point(x, px(0.0)), size(px(1.0), line.line_height)))
+}
+
 pub(super) fn x_for_byte(line: &LaidOutLine, byte: usize) -> Pixels {
   for segment in &line.segments {
     let segment_end = segment.start_byte + segment.shaped.len();
@@ -1779,6 +1839,29 @@ pub(super) fn x_for_byte(line: &LaidOutLine, byte: usize) -> Pixels {
     }
   }
   line.width
+}
+
+fn line_ix_for_byte(paragraph: &LaidOutParagraph, byte: usize) -> Option<usize> {
+  let mut low = 0;
+  let mut high = paragraph.lines.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if paragraph.lines[mid].end_byte < byte {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  if let Some(line) = paragraph.lines.get(low)
+    && byte >= line.start_byte
+    && byte <= line.end_byte
+  {
+    if byte == line.end_byte && low + 1 < paragraph.lines.len() && paragraph.lines[low + 1].start_byte == byte {
+      return Some(low + 1);
+    }
+    return Some(low);
+  }
+  paragraph.lines.len().checked_sub(1)
 }
 
 // Locate the `LaidOutLine` containing the given offset. Returns

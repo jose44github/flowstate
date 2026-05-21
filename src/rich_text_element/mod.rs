@@ -15,12 +15,13 @@ mod word_boundary;
 
 pub use demo::demo_document;
 pub use document::{
-  AssetId, AssetRecord, AssetStore, Block, BlockAlignment, Document, DocumentOffset, DocumentTheme, EquationBlock, EquationDisplay, EquationSyntax,
-  HighlightStyle, ImageBlock, ImageSizing, Paragraph, ParagraphStyle, RunSemanticStyle, RunStyle, RunStyles, TableBlock, TableCell, TableCellBlock, TableCellParagraph,
-  TableColumnWidth, TableRow, TableStyle, TextRun, ThemeUnderline, DocumentPosition, ObjectAffinity,
+  AssetId, AssetRecord, AssetStore, Block, BlockAlignment, Document, DocumentOffset, DocumentPosition, DocumentTheme, EquationBlock,
+  EquationDisplay, EquationSyntax, HighlightStyle, ImageBlock, ImageSizing, ObjectAffinity, Paragraph, ParagraphStyle, RunSemanticStyle,
+  RunStyle, RunStyles, TableBlock, TableCell, TableCellBlock, TableCellParagraph, TableColumnWidth, TableRow, TableStyle, TextRun,
+  ThemeUnderline,
 };
-pub use element::RichTextDocumentElement;
 pub use editor::*;
+pub use element::RichTextDocumentElement;
 // `read_db8` is part of the public persistence API even though only tests
 // consume it inside this crate today; allow the unused-import lint so the
 // re-export stays in place.
@@ -30,10 +31,10 @@ pub use tools::ArmedInlineTool;
 
 // Internal imports used by sibling modules via `use super::*;`.
 use document::{
-  InputParagraph, InputRun, ParagraphOffsetIndex, RichClipboardFragment, SOFT_LINE_BREAK, SOFT_LINE_BREAK_STR, block_ix_for_paragraph,
-  paragraph_blocks_from_paragraphs, paragraphs_mut, replace_paragraph_blocks, update_paragraph_block, InputAsset, InputBlock, InputBlockAlignment,
-  InputEquationBlock, InputEquationDisplay, InputEquationSyntax,
-  InputImageBlock, InputImageSizing, InputTableBlock, InputTableCell, InputTableCellBlock, InputTableColumnWidth, InputTableRow, InputTableStyle,
+  InputAsset, InputBlock, InputBlockAlignment, InputEquationBlock, InputEquationDisplay, InputEquationSyntax, InputImageBlock, InputImageSizing,
+  InputParagraph, InputRun, InputTableBlock, InputTableCell, InputTableCellBlock, InputTableColumnWidth, InputTableRow, InputTableStyle,
+  ParagraphOffsetIndex, RichClipboardFragment, SOFT_LINE_BREAK, SOFT_LINE_BREAK_STR, block_ix_for_paragraph, document_offset_for_position,
+  document_position_for_offset, paragraph_blocks_from_paragraphs, paragraphs_mut, replace_paragraph_blocks, update_paragraph_block,
 };
 use edit_ops::*;
 use editor::{DocumentSpan, SelectionGranularity};

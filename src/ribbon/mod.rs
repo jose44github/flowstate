@@ -9,6 +9,5 @@ mod style_catalog;
 
 pub use editor_ribbon::EditorRibbon;
 pub use style_catalog::{
-  HIGHLIGHT_STYLE_SPECS, HighlightStyleSpec, PARAGRAPH_STYLE_SPECS, ParagraphStyleSpec,
-  SEMANTIC_STYLE_SPECS, SemanticStyleSpec,
+  HIGHLIGHT_STYLE_SPECS, HighlightStyleSpec, PARAGRAPH_STYLE_SPECS, ParagraphStyleSpec, SEMANTIC_STYLE_SPECS, SemanticStyleSpec,
 };

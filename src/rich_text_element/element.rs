@@ -201,6 +201,7 @@ impl Element for VirtualParagraphElement {
         editor.selection.clone(),
         drag_selection,
         editor.selection.is_caret()
+          && editor.selected_block.is_none()
           && editor.selection.head.paragraph == self.paragraph_ix
           && editor.caret_visible
           && editor.focus_handle.is_focused(window),
@@ -208,7 +209,15 @@ impl Element for VirtualParagraphElement {
       )
     };
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(layout.as_ref(), Some(&selection), drag_selection.as_ref(), show_caret, caret_width, window, cx);
+      paint_layout(
+        layout.as_ref(),
+        Some(&selection),
+        drag_selection.as_ref(),
+        show_caret,
+        caret_width,
+        window,
+        cx,
+      );
     }
   }
 }
@@ -251,7 +260,11 @@ impl Element for VirtualBlockElement {
           editor.document.theme.snap_underline_rules_to_pixels,
         )
       });
-      let height = block.as_ref().map(structural_block_height).unwrap_or(px(1.0)) + paragraph_after;
+      let height = block
+        .as_ref()
+        .map(structural_block_height)
+        .unwrap_or(px(1.0))
+        + paragraph_after;
       let layout = LayoutState {
         paragraphs: Vec::new(),
         blocks: block.into_iter().collect(),
@@ -292,7 +305,14 @@ impl Element for VirtualBlockElement {
     window: &mut Window,
     cx: &mut App,
   ) {
-    let selected_block = self.editor.read(cx).selected_block;
+    let (selected_block, table_cell_caret, text_selected) = {
+      let editor = self.editor.read(cx);
+      (
+        editor.selected_block,
+        editor.table_cell_caret_for_paint(window),
+        editor.block_is_inside_text_selection(self.block_ix),
+      )
+    };
     let Some(layout) = self.layout.0.borrow().as_ref().cloned() else {
       return;
     };
@@ -300,7 +320,7 @@ impl Element for VirtualBlockElement {
       return;
     };
     for block in &layout.blocks {
-      paint_structural_block(block, selected_block, bounds.origin, window, cx);
+      paint_structural_block(block, selected_block, table_cell_caret, text_selected, bounds.origin, window, cx);
     }
   }
 }
