@@ -1,4 +1,4 @@
-use std::{path::PathBuf, rc::Rc, time::Instant};
+use std::{path::PathBuf, rc::Rc};
 
 use gpui::{
   App, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, ParentElement, Render,
@@ -25,7 +25,7 @@ pub struct FileSearchOverlay {
   search: Option<Rc<Db8FileSearch>>,
   hits: Vec<FileSearchHit>,
   selected: usize,
-  status: SharedString,
+  error: Option<SharedString>,
   _input_subscription: Subscription,
 }
 
@@ -43,7 +43,7 @@ impl FileSearchOverlay {
       search: None,
       hits: Vec::new(),
       selected: 0,
-      status: "Indexing .db8 files...".into(),
+      error: None,
       _input_subscription,
     };
     overlay.rebuild_index(cx);
@@ -55,21 +55,14 @@ impl FileSearchOverlay {
   }
 
   fn rebuild_index(&mut self, cx: &mut Context<Self>) {
-    let started = Instant::now();
     match Db8FileSearch::new(default_global_search_root()) {
       Ok(search) => {
-        self.status = format!(
-          "Indexed {} files under {} in {:?}",
-          search.indexed_file_count(),
-          search.root().display(),
-          started.elapsed()
-        )
-        .into();
+        self.error = None;
         self.search = Some(Rc::new(search));
         self.refresh_results(cx);
       },
       Err(error) => {
-        self.status = format!("File search unavailable: {error}").into();
+        self.error = Some(format!("File search unavailable: {error}").into());
         self.search = None;
         self.hits.clear();
       },
@@ -195,16 +188,6 @@ impl Render for FileSearchOverlay {
               .child(Input::new(&self.search_input).w_full().cleanable(true)),
           )
           .child(
-            div()
-              .px_3()
-              .py_2()
-              .text_xs()
-              .text_color(cx.theme().muted_foreground)
-              .border_b_1()
-              .border_color(cx.theme().border)
-              .child(self.status.clone()),
-          )
-          .child(
             v_flex()
               .flex_1()
               .overflow_y_scrollbar()
@@ -255,11 +238,14 @@ impl Render for FileSearchOverlay {
                 })
               })
               .when(!has_hits, |this| {
-                let message = if query.trim().is_empty() {
-                  "No .db8 files indexed"
-                } else {
-                  "No matching .db8 files"
-                };
+                let message = self.error.clone().unwrap_or_else(|| {
+                  if query.trim().is_empty() {
+                    "No .db8 files indexed"
+                  } else {
+                    "No matching .db8 files"
+                  }
+                  .into()
+                });
                 this.child(
                   div()
                     .h(px(120.0))
