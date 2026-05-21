@@ -431,16 +431,23 @@ impl From<ThemeUnderlineSetting> for ThemeUnderline {
 fn settings_path() -> PathBuf {
   if cfg!(target_os = "windows") {
     if let Some(appdata) = env::var_os("APPDATA") {
-      return PathBuf::from(appdata).join("Odrenrir").join("settings.json");
+      return PathBuf::from(appdata)
+        .join("Odrenrir")
+        .join("settings.json");
     }
   }
 
   if let Some(config_home) = env::var_os("XDG_CONFIG_HOME") {
-    return PathBuf::from(config_home).join("odrenrir").join("settings.json");
+    return PathBuf::from(config_home)
+      .join("odrenrir")
+      .join("settings.json");
   }
 
   if let Some(home) = env::var_os("HOME") {
-    return PathBuf::from(home).join(".config").join("odrenrir").join("settings.json");
+    return PathBuf::from(home)
+      .join(".config")
+      .join("odrenrir")
+      .join("settings.json");
   }
 
   PathBuf::from("odrenrir-settings.json")

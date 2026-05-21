@@ -45,7 +45,9 @@ fn smart_word_selection_start(document: &Document, offset: DocumentOffset) -> Do
   };
   let byte = offset.byte.min(text.len());
   DocumentOffset {
-    paragraph: offset.paragraph.min(document.paragraphs.len().saturating_sub(1)),
+    paragraph: offset
+      .paragraph
+      .min(document.paragraphs.len().saturating_sub(1)),
     byte: if is_debate_word_byte(&text, byte) {
       previous_debate_word_boundary_in_paragraph_text(&text, byte)
     } else {
@@ -60,7 +62,9 @@ fn smart_word_selection_end(document: &Document, offset: DocumentOffset) -> Docu
   };
   let byte = offset.byte.min(text.len());
   DocumentOffset {
-    paragraph: offset.paragraph.min(document.paragraphs.len().saturating_sub(1)),
+    paragraph: offset
+      .paragraph
+      .min(document.paragraphs.len().saturating_sub(1)),
     byte: if is_debate_word_byte(&text, byte) {
       next_debate_word_boundary_in_paragraph_text(&text, byte)
     } else {
@@ -117,7 +121,9 @@ fn same_word_fragment(document: &Document, anchor: DocumentOffset, head: Documen
   if anchor.paragraph != head.paragraph || anchor == head {
     return false;
   }
-  let paragraph = anchor.paragraph.min(document.paragraphs.len().saturating_sub(1));
+  let paragraph = anchor
+    .paragraph
+    .min(document.paragraphs.len().saturating_sub(1));
   let text = paragraph_text(document, paragraph);
   let start = anchor.byte.min(head.byte).min(text.len());
   let end = anchor.byte.max(head.byte).min(text.len());

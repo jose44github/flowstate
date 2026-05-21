@@ -208,7 +208,15 @@ impl Element for VirtualParagraphElement {
       )
     };
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(layout.as_ref(), Some(&selection), drag_selection.as_ref(), show_caret, caret_width, window, cx);
+      paint_layout(
+        layout.as_ref(),
+        Some(&selection),
+        drag_selection.as_ref(),
+        show_caret,
+        caret_width,
+        window,
+        cx,
+      );
     }
   }
 }
@@ -251,7 +259,11 @@ impl Element for VirtualBlockElement {
           editor.document.theme.snap_underline_rules_to_pixels,
         )
       });
-      let height = block.as_ref().map(structural_block_height).unwrap_or(px(1.0)) + paragraph_after;
+      let height = block
+        .as_ref()
+        .map(structural_block_height)
+        .unwrap_or(px(1.0))
+        + paragraph_after;
       let layout = LayoutState {
         paragraphs: Vec::new(),
         blocks: block.into_iter().collect(),

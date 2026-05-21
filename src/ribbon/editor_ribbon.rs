@@ -1,21 +1,15 @@
 use gpui::{
-  AnyElement, Context, Entity, Hsla, IntoElement, Keystroke, ParentElement as _, Render,
-  Styled as _, Window, div, prelude::*, px, relative,
+  AnyElement, Context, Entity, Hsla, IntoElement, Keystroke, ParentElement as _, Render, Styled as _, Window, div, prelude::*, px, relative,
 };
-use gpui_component::button::{
-  Button, ButtonGroup, ButtonVariants as _, Toggle, ToggleVariants as _,
-};
+use gpui_component::button::{Button, ButtonGroup, ButtonVariants as _, Toggle, ToggleVariants as _};
 use gpui_component::kbd::Kbd;
 use gpui_component::{ActiveTheme as _, Disableable as _, PixelsExt as _, Selectable as _, Sizable as _, StyledExt as _};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{CommandId, default_keys_for};
+use crate::ribbon::style_catalog::{HIGHLIGHT_STYLE_SPECS, PARAGRAPH_STYLE_SPECS, SEMANTIC_STYLE_SPECS};
 use crate::rich_text_element::{
-  ArmedInlineTool, DocumentTheme, HighlightStyle, ParagraphStyle, RichTextEditor, RichTextEditorStyleState,
-  RunSemanticStyle, SelectionState,
-};
-use crate::ribbon::style_catalog::{
-  HIGHLIGHT_STYLE_SPECS, PARAGRAPH_STYLE_SPECS, SEMANTIC_STYLE_SPECS,
+  ArmedInlineTool, DocumentTheme, HighlightStyle, ParagraphStyle, RichTextEditor, RichTextEditorStyleState, RunSemanticStyle, SelectionState,
 };
 
 /// User-selectable ribbon renderer.
@@ -100,11 +94,7 @@ impl EditorRibbon {
     }
   }
 
-  pub fn set_modern_options(
-    &mut self,
-    modern_options: ModernRibbonOptions,
-    cx: &mut Context<Self>,
-  ) {
+  pub fn set_modern_options(&mut self, modern_options: ModernRibbonOptions, cx: &mut Context<Self>) {
     if self.modern_options != modern_options {
       self.modern_options = modern_options;
       cx.notify();
@@ -122,28 +112,16 @@ impl EditorRibbon {
     matches!(state.paragraph_style, SelectionState::Uniform(current) if current == style)
   }
 
-  fn semantic_selected(
-    state: &RichTextEditorStyleState,
-    armed_tool: Option<ArmedInlineTool>,
-    style: RunSemanticStyle,
-  ) -> bool {
+  fn semantic_selected(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>, style: RunSemanticStyle) -> bool {
     matches!(armed_tool, Some(ArmedInlineTool::Semantic(current)) if current == style)
       || matches!(state.semantic, SelectionState::Uniform(current) if current == style)
   }
 
-  fn underline_selected(
-    state: &RichTextEditorStyleState,
-    armed_tool: Option<ArmedInlineTool>,
-  ) -> bool {
-    matches!(armed_tool, Some(ArmedInlineTool::Underline))
-      || matches!(state.underline, SelectionState::Uniform(true))
+  fn underline_selected(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>) -> bool {
+    matches!(armed_tool, Some(ArmedInlineTool::Underline)) || matches!(state.underline, SelectionState::Uniform(true))
   }
 
-  fn highlight_selected(
-    state: &RichTextEditorStyleState,
-    armed_tool: Option<ArmedInlineTool>,
-    style: HighlightStyle,
-  ) -> bool {
+  fn highlight_selected(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>, style: HighlightStyle) -> bool {
     matches!(armed_tool, Some(ArmedInlineTool::Highlight(current)) if current == style)
       || matches!(state.highlight, SelectionState::Uniform(Some(current)) if current == style)
   }
@@ -153,17 +131,11 @@ impl Render for EditorRibbon {
   fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let (style_state, armed_tool, document_theme) = {
       let editor = self.editor.read(cx);
-      (
-        editor.style_state(),
-        editor.armed_inline_tool(),
-        editor.document_theme(),
-      )
+      (editor.style_state(), editor.armed_inline_tool(), editor.document_theme())
     };
 
     match self.mode {
-      RibbonMode::Legacy => {
-        LegacyStylesRibbon::render(self.editor.clone(), &style_state, armed_tool, cx)
-      }
+      RibbonMode::Legacy => LegacyStylesRibbon::render(self.editor.clone(), &style_state, armed_tool, cx),
       RibbonMode::Modern => ModernStylesRibbon::render(
         self.editor.clone(),
         &style_state,
@@ -309,17 +281,18 @@ impl LegacyStylesRibbon {
   }
 }
 
-fn legacy_ribbon_group(
-  label: &'static str,
-  controls: impl IntoElement,
-  cx: &mut Context<EditorRibbon>,
-) -> impl IntoElement {
+fn legacy_ribbon_group(label: &'static str, controls: impl IntoElement, cx: &mut Context<EditorRibbon>) -> impl IntoElement {
   div()
     .h_full()
     .flex()
     .flex_col()
     .gap_1()
-    .child(div().text_xs().text_color(cx.theme().muted_foreground).child(label))
+    .child(
+      div()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(label),
+    )
     .child(controls)
 }
 
@@ -430,9 +403,12 @@ impl ModernStylesRibbon {
               .justify_between()
               .gap(metrics.group_gap)
               .min_w_0()
-              .children(groups.iter().enumerate().map(|(index, group)| {
-                modern_group(index > 0, group, editor.clone(), options, metrics, cx)
-              })),
+              .children(
+                groups
+                  .iter()
+                  .enumerate()
+                  .map(|(index, group)| modern_group(index > 0, group, editor.clone(), options, metrics, cx)),
+              ),
           ),
       )
       .into_any_element()
@@ -442,9 +418,8 @@ impl ModernStylesRibbon {
 impl RibbonLayoutMetrics {
   fn from_height(height: gpui::Pixels) -> Self {
     let height = clamp_pixels(height, min_ribbon_height(), max_ribbon_height());
-    let scale = ((height.as_f32() - min_ribbon_height().as_f32())
-      / (max_ribbon_height().as_f32() - min_ribbon_height().as_f32()))
-    .clamp(0.0, 1.0);
+    let scale =
+      ((height.as_f32() - min_ribbon_height().as_f32()) / (max_ribbon_height().as_f32() - min_ribbon_height().as_f32())).clamp(0.0, 1.0);
     let max_chip_rows = chip_rows_for_height(height);
     let group_padding_top = px(3.0 + 3.0 * scale);
     let chip_gap = px(4.0 + 2.0 * scale);
@@ -495,7 +470,10 @@ fn modern_group(
     .w(group_width(group, metrics))
     .gap_2()
     .when(has_divider, |this| {
-      this.pl_2().border_l_1().border_color(cx.theme().border.opacity(0.72))
+      this
+        .pl_2()
+        .border_l_1()
+        .border_color(cx.theme().border.opacity(0.72))
     })
     .child(
       div()
@@ -520,9 +498,12 @@ fn modern_group(
             .content_start()
             .gap(metrics.chip_gap)
             .min_w_0()
-            .children(group.commands.iter().map(|command| {
-              modern_command_chip(command, editor.clone(), options, metrics, cx)
-            })),
+            .children(
+              group
+                .commands
+                .iter()
+                .map(|command| modern_command_chip(command, editor.clone(), options, metrics, cx)),
+            ),
         ),
     )
     .into_any_element()
@@ -603,9 +584,7 @@ fn modern_command_chip(
         .bg(cx.theme().blue_light.opacity(0.22))
         .text_color(cx.theme().foreground)
     })
-    .when_some(command.accent, |this, accent| {
-      this.child(accent_dot(accent_color(accent, cx)))
-    })
+    .when_some(command.accent, |this, accent| this.child(accent_dot(accent_color(accent, cx))))
     .child(
       div()
         .flex_none()
@@ -683,10 +662,7 @@ fn modern_command_groups(
   ]
 }
 
-fn inline_commands(
-  state: &RichTextEditorStyleState,
-  armed_tool: Option<ArmedInlineTool>,
-) -> Vec<RibbonCommand> {
+fn inline_commands(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInlineTool>) -> Vec<RibbonCommand> {
   let mut commands = SEMANTIC_STYLE_SPECS
     .iter()
     .map(|spec| {
@@ -762,31 +738,27 @@ fn highlight_commands(
   commands
 }
 
-fn perform_ribbon_command(
-  editor: &mut RichTextEditor,
-  command_id: RibbonCommandId,
-  cx: &mut Context<RichTextEditor>,
-) {
+fn perform_ribbon_command(editor: &mut RichTextEditor, command_id: RibbonCommandId, cx: &mut Context<RichTextEditor>) {
   match command_id {
     RibbonCommandId::Paragraph(style) => {
       editor.set_paragraph_style_for_selection(style, cx);
-    }
+    },
     RibbonCommandId::Semantic(style) => {
       editor.toggle_inline_tool(ArmedInlineTool::Semantic(style), cx);
-    }
+    },
     RibbonCommandId::Underline => {
       editor.toggle_inline_tool(ArmedInlineTool::Underline, cx);
-    }
+    },
     RibbonCommandId::Highlight(style) => {
       editor.toggle_inline_tool(ArmedInlineTool::Highlight(style), cx);
-    }
+    },
     RibbonCommandId::ClearHighlight => {
       editor.clear_armed_inline_tool(cx);
       editor.set_highlight_for_selection(None, cx);
-    }
+    },
     RibbonCommandId::ClearFormatting => {
       editor.clear_formatting(cx);
-    }
+    },
   }
 }
 
@@ -854,24 +826,15 @@ fn highlight_priority(style: HighlightStyle) -> u8 {
 
 fn paragraph_overflow_behavior(style: ParagraphStyle) -> OverflowBehavior {
   match style {
-    ParagraphStyle::Normal
-    | ParagraphStyle::Pocket
-    | ParagraphStyle::Hat
-    | ParagraphStyle::Block => OverflowBehavior::KeepVisible,
-    ParagraphStyle::Tag | ParagraphStyle::Analytic | ParagraphStyle::Undertag => {
-      OverflowBehavior::MoveToOverflow
-    }
+    ParagraphStyle::Normal | ParagraphStyle::Pocket | ParagraphStyle::Hat | ParagraphStyle::Block => OverflowBehavior::KeepVisible,
+    ParagraphStyle::Tag | ParagraphStyle::Analytic | ParagraphStyle::Undertag => OverflowBehavior::MoveToOverflow,
   }
 }
 
 fn semantic_overflow_behavior(style: RunSemanticStyle) -> OverflowBehavior {
   match style {
-    RunSemanticStyle::Cite | RunSemanticStyle::Emphasis | RunSemanticStyle::Underline => {
-      OverflowBehavior::KeepVisible
-    }
-    RunSemanticStyle::Condensed | RunSemanticStyle::Ultracondensed => {
-      OverflowBehavior::MoveToOverflow
-    }
+    RunSemanticStyle::Cite | RunSemanticStyle::Emphasis | RunSemanticStyle::Underline => OverflowBehavior::KeepVisible,
+    RunSemanticStyle::Condensed | RunSemanticStyle::Ultracondensed => OverflowBehavior::MoveToOverflow,
     RunSemanticStyle::Plain => OverflowBehavior::HideInCompact,
   }
 }

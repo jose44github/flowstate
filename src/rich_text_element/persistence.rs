@@ -218,7 +218,10 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
       Err(error) => return Err(error),
     }
   }
-  temp_path.persist(path).map(|_| ()).map_err(|error| error.error)
+  temp_path
+    .persist(path)
+    .map(|_| ())
+    .map_err(|error| error.error)
 }
 
 fn read_db8_v4(mut cursor: Cursor<&[u8]>, timing: Instant) -> io::Result<Document> {
@@ -276,7 +279,12 @@ fn read_db8_v4(mut cursor: Cursor<&[u8]>, timing: Instant) -> io::Result<Documen
   log_timing(
     "db8 read",
     timing,
-    format!("bytes={} blocks={} paragraphs={}", document.text.byte_len(), document.blocks.len(), document.paragraphs.len()),
+    format!(
+      "bytes={} blocks={} paragraphs={}",
+      document.text.byte_len(),
+      document.blocks.len(),
+      document.paragraphs.len()
+    ),
   );
   Ok(document)
 }
@@ -477,11 +485,7 @@ fn read_table_payload(cursor: &mut Cursor<&[u8]>) -> io::Result<TableBlock> {
       for _ in 0..block_count {
         blocks.push(read_table_cell_block(cursor)?);
       }
-      cells.push(TableCell {
-        blocks,
-        row_span,
-        col_span,
-      });
+      cells.push(TableCell { blocks, row_span, col_span });
     }
     rows.push(TableRow { cells });
   }

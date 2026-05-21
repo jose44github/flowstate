@@ -191,7 +191,10 @@ pub(super) fn find_text_ranges(document: &Document, query: &str) -> Vec<Range<Do
 pub(super) fn selected_plain_text(document: &Document, range: Range<DocumentOffset>) -> String {
   if range.start.paragraph == range.end.paragraph {
     let paragraph_range = paragraph_byte_range(document, range.start.paragraph);
-    return clipboard_plain_text(document_text_slice(document, paragraph_range.start + range.start.byte..paragraph_range.start + range.end.byte));
+    return clipboard_plain_text(document_text_slice(
+      document,
+      paragraph_range.start + range.start.byte..paragraph_range.start + range.end.byte,
+    ));
   }
 
   let mut text = String::new();
@@ -207,7 +210,10 @@ pub(super) fn selected_plain_text(document: &Document, range: Range<DocumentOffs
       paragraph_text_len(paragraph)
     };
     let paragraph_range = paragraph_byte_range(document, paragraph_ix);
-    text.push_str(&clipboard_plain_text(document_text_slice(document, paragraph_range.start + start..paragraph_range.start + end)));
+    text.push_str(&clipboard_plain_text(document_text_slice(
+      document,
+      paragraph_range.start + start..paragraph_range.start + end,
+    )));
   }
   text
 }
@@ -312,10 +318,7 @@ pub(super) fn split_paragraph_at(document: &mut Document, paragraph_ix: usize, b
     runs: right_runs,
     version: paragraph.version.wrapping_add(1),
   };
-  paragraphs.insert(
-    paragraph_ix + 1,
-    new_paragraph.clone(),
-  );
+  paragraphs.insert(paragraph_ix + 1, new_paragraph.clone());
   if let Some(block_ix) = block_ix_for_paragraph(document, paragraph_ix) {
     let blocks = Arc::make_mut(&mut document.blocks);
     if let Some(block) = blocks.get_mut(block_ix) {
@@ -469,7 +472,9 @@ pub(super) fn insert_text_at(document: &mut Document, paragraph_ix: usize, byte:
           if i > 0 && paragraph.runs[i - 1].styles == styles {
             paragraph.runs[i - 1].len += insert_len;
           } else {
-            paragraph.runs.insert(i, TextRun { len: insert_len, styles });
+            paragraph
+              .runs
+              .insert(i, TextRun { len: insert_len, styles });
           }
           inserted = true;
           break;
@@ -581,12 +586,8 @@ pub(super) fn selection_run_styles(document: &Document, range: Range<DocumentOff
 }
 
 pub(super) fn selection_prefers_direct_underline(document: &Document, range: Range<DocumentOffset>) -> bool {
-  (range.start.paragraph..=range.end.paragraph).any(|paragraph_ix| {
-    matches!(
-      document.paragraphs[paragraph_ix].style,
-      ParagraphStyle::Tag | ParagraphStyle::Analytic
-    )
-  })
+  (range.start.paragraph..=range.end.paragraph)
+    .any(|paragraph_ix| matches!(document.paragraphs[paragraph_ix].style, ParagraphStyle::Tag | ParagraphStyle::Analytic))
 }
 
 pub(super) fn selection_all_run_styles(document: &Document, range: Range<DocumentOffset>, predicate: impl Fn(RunStyles) -> bool) -> bool {
