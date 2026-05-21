@@ -700,7 +700,45 @@ impl RichTextEditor {
       cx.notify();
     } else {
       self.select_block(fallback, cx);
+      if matches!(fallback, BlockSelection::Equation(_)) {
+        let byte = self.equation_source_byte_at(block_ix, position, window, cx).unwrap_or(self.equation_source_caret);
+        self.equation_source_anchor = byte;
+        self.equation_source_caret = byte;
+        self.reset_caret_blink(cx);
+        cx.notify();
+      }
     }
+  }
+
+  fn equation_source_byte_at(
+    &mut self,
+    block_ix: usize,
+    position: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Option<usize> {
+    let Block::Equation(equation) = self.document.blocks.get(block_ix)? else {
+      return None;
+    };
+    let width = self.current_layout_width();
+    let block_top = self.block_top_for_index(block_ix)?;
+    let layout = layout_structural_block_at(&self.document, block_ix, width, block_top, window, cx)?;
+    let LaidOutBlock::Equation(object) = layout else {
+      return None;
+    };
+    let viewport = self.scroll_handle.bounds();
+    let document_point = point(position.x - viewport.left(), position.y - viewport.top() - self.scroll_handle.offset().y);
+    let source_height = px(18.0);
+    let source_top = object.bounds.bottom() - self.document.theme.paragraph_after - source_height;
+    if document_point.y < source_top || document_point.y > object.bounds.bottom() {
+      return None;
+    }
+    let strip_left = object.bounds.left() + px(8.0);
+    let char_width = px(7.0);
+    let delta: f32 = (document_point.x - strip_left).max(px(0.0)).into();
+    let char_width: f32 = char_width.into();
+    let target_char = (delta / char_width).round() as usize;
+    Some(byte_for_char_index(&equation.source, target_char))
   }
 
   fn table_cell_selection_at(
@@ -2579,6 +2617,14 @@ impl RichTextEditor {
     let Some(BlockSelection::Equation(block_ix)) = self.selected_block else {
       return false;
     };
+    if self
+      .selected_equation_source()
+      .map(|source| source.is_empty())
+      .unwrap_or(false)
+      && self.equation_source_selection_range().is_none()
+    {
+      return self.delete_selected_block(cx);
+    }
     let selection_range = self.equation_source_selection_range();
     let caret = self.equation_source_caret;
     let mut next_caret = caret;
@@ -4876,6 +4922,16 @@ impl RichTextEditor {
       return;
     }
     if event.dragging()
+      && let Some(BlockSelection::Equation(block_ix)) = self.selected_block
+      && let Some(byte) = self.equation_source_byte_at(block_ix, event.position, window, cx)
+    {
+      self.equation_source_caret = byte;
+      self.last_drag_position = Some(event.position);
+      self.reset_caret_blink(cx);
+      cx.notify();
+      return;
+    }
+    if event.dragging()
       && let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block
       && let Some((
         BlockSelection::TableCell {
@@ -6034,6 +6090,14 @@ fn equation_source_text_elements(source: &str, selection: Option<EquationSourceS
     );
   }
   children
+}
+
+fn byte_for_char_index(text: &str, char_ix: usize) -> usize {
+  text
+    .char_indices()
+    .nth(char_ix)
+    .map(|(byte, _)| byte)
+    .unwrap_or(text.len())
 }
 
 struct EquationRenderer;
