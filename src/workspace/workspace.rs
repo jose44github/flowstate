@@ -11,7 +11,7 @@ use gpui_component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_component::input::{Input, InputState, NumberInput};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel};
+use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel, v_resizable};
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::tab::{Tab, TabBar};
@@ -32,6 +32,7 @@ pub struct Workspace {
   tab_bar_scroll_handle: ScrollHandle,
   body_resizable_state: Entity<ResizableState>,
   content_resizable_state: Entity<ResizableState>,
+  ribbon_resizable_state: Entity<ResizableState>,
   outline_tree: Entity<TreeState>,
   outline_cache: Option<(Uuid, u64, u64)>,
   collapsed_outline_items: HashSet<usize>,
@@ -69,6 +70,7 @@ impl Workspace {
       tab_bar_scroll_handle: ScrollHandle::new(),
       body_resizable_state: cx.new(|_| ResizableState::default()),
       content_resizable_state: cx.new(|_| ResizableState::default()),
+      ribbon_resizable_state: cx.new(|_| ResizableState::default()),
       outline_tree: cx.new(|cx| TreeState::new(cx)),
       outline_cache: None,
       collapsed_outline_items: HashSet::new(),
@@ -432,8 +434,7 @@ impl Render for Workspace {
       .when(self.styles_settings_open, |this| this.child(self.render_styles_settings_view(cx)))
       .when(!self.styles_settings_open, |this| {
         this
-          .when(!self.ribbon_collapsed, |this| this.child(self.render_ribbon(cx)))
-          .child(self.render_workspace_body(cx))
+          .child(self.render_resizable_workspace(cx))
           .child(self.render_status_bar(cx))
       })
   }
@@ -624,7 +625,7 @@ impl Workspace {
       ))
   }
 
-  fn render_ribbon(&self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_ribbon(&self, ribbon_height: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
     let active_ribbon = self
       .active_document_id
       .and_then(|active_id| {
@@ -637,18 +638,59 @@ impl Workspace {
     let show_placeholder = active_ribbon.is_none();
 
     h_flex()
-      .min_h(px(104.0))
+      .h(ribbon_height)
+      .min_h(px(78.0))
       .w_full()
       .items_start()
       .border_b_1()
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
-      .when_some(active_ribbon, |this, ribbon| this.child(ribbon))
+      .when_some(active_ribbon, |this, ribbon| {
+        ribbon.update(cx, |ribbon, cx| {
+          ribbon.set_height(ribbon_height, cx);
+        });
+        this.child(ribbon)
+      })
       .when(show_placeholder, |this| {
         this
           .px_2()
           .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Ribbon placeholder"))
       })
+  }
+
+  fn render_resizable_workspace(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    if self.ribbon_collapsed {
+      return div()
+        .flex_1()
+        .overflow_hidden()
+        .child(self.render_workspace_body(cx))
+        .into_any_element();
+    }
+
+    let ribbon_height = self
+      .ribbon_resizable_state
+      .read(cx)
+      .sizes()
+      .first()
+      .copied()
+      .unwrap_or(px(112.0));
+
+    v_resizable("workspace-ribbon-resizable")
+      .with_state(&self.ribbon_resizable_state)
+      .child(
+        resizable_panel()
+          .size(px(112.0))
+          .size_range(px(78.0)..px(224.0))
+          .grow(false)
+          .child(self.render_ribbon(ribbon_height, cx)),
+      )
+      .child(
+        resizable_panel()
+          .size(px(640.0))
+          .size_range(px(320.0)..Pixels::MAX)
+          .child(self.render_workspace_body(cx)),
+      )
+      .into_any_element()
   }
 
   fn render_workspace_body(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

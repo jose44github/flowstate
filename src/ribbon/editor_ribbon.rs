@@ -6,8 +6,7 @@ use gpui_component::button::{
   Button, ButtonGroup, ButtonVariants as _, Toggle, ToggleVariants as _,
 };
 use gpui_component::kbd::Kbd;
-use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
-use gpui_component::{ActiveTheme as _, Disableable as _, Selectable as _, Sizable as _, StyledExt as _};
+use gpui_component::{ActiveTheme as _, Disableable as _, PixelsExt as _, Selectable as _, Sizable as _, StyledExt as _};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{CommandId, default_keys_for};
@@ -68,6 +67,7 @@ pub struct EditorRibbon {
   editor: Entity<RichTextEditor>,
   mode: RibbonMode,
   modern_options: ModernRibbonOptions,
+  height: gpui::Pixels,
 }
 
 /// Compatibility name for code that wants to talk in settings terms.
@@ -83,6 +83,7 @@ impl EditorRibbon {
       editor,
       mode,
       modern_options: ModernRibbonOptions::default(),
+      height: default_ribbon_height(),
     }
   }
 
@@ -106,6 +107,13 @@ impl EditorRibbon {
   ) {
     if self.modern_options != modern_options {
       self.modern_options = modern_options;
+      cx.notify();
+    }
+  }
+
+  pub fn set_height(&mut self, height: gpui::Pixels, cx: &mut Context<Self>) {
+    if self.height != height {
+      self.height = height;
       cx.notify();
     }
   }
@@ -162,6 +170,7 @@ impl Render for EditorRibbon {
         armed_tool,
         &document_theme,
         self.modern_options,
+        self.height,
         cx,
       ),
     }
@@ -316,6 +325,19 @@ fn legacy_ribbon_group(
 
 pub struct ModernStylesRibbon;
 
+#[derive(Clone, Copy, Debug)]
+struct RibbonLayoutMetrics {
+  height: gpui::Pixels,
+  chip_height: gpui::Pixels,
+  chip_min_width: gpui::Pixels,
+  chip_max_width: gpui::Pixels,
+  chip_padding_x: gpui::Pixels,
+  chip_text_size: gpui::Pixels,
+  group_gap: gpui::Pixels,
+  group_padding_top: gpui::Pixels,
+  group_padding_bottom: gpui::Pixels,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RibbonAccent {
   Blue,
@@ -371,19 +393,16 @@ impl ModernStylesRibbon {
     armed_tool: Option<ArmedInlineTool>,
     document_theme: &DocumentTheme,
     options: ModernRibbonOptions,
+    height: gpui::Pixels,
     cx: &mut Context<EditorRibbon>,
   ) -> AnyElement {
     let groups = modern_command_groups(style_state, armed_tool, document_theme);
-    let overflow_commands = groups
-      .iter()
-      .flat_map(|group| group.commands.iter())
-      .filter(|command| command.overflow_behavior == OverflowBehavior::HideInCompact)
-      .cloned()
-      .collect::<Vec<_>>();
+    let metrics = RibbonLayoutMetrics::from_height(height);
 
     div()
       .w_full()
-      .min_h(px(104.0))
+      .h(metrics.height)
+      .min_h(min_ribbon_height())
       .px_2()
       .pt_0()
       .pb_2()
@@ -395,10 +414,11 @@ impl ModernStylesRibbon {
           .flex_row()
           .flex_nowrap()
           .items_start()
-          .gap_1()
+          .gap_2()
           .bg(cx.theme().background)
           .px_2()
-          .py_1p5()
+          .pt(metrics.group_padding_top)
+          .pb(metrics.group_padding_bottom)
           .child(
             div()
               .flex()
@@ -406,16 +426,52 @@ impl ModernStylesRibbon {
               .flex_row()
               .flex_nowrap()
               .items_start()
-              .gap_2()
+              .gap(metrics.group_gap)
               .min_w_0()
               .children(groups.iter().enumerate().map(|(index, group)| {
-                modern_group(index > 0, group, editor.clone(), options, cx)
+                modern_group(index > 0, group, editor.clone(), options, metrics, cx)
               })),
-          )
-          .child(more_menu(editor, overflow_commands, cx)),
+          ),
       )
       .into_any_element()
   }
+}
+
+impl RibbonLayoutMetrics {
+  fn from_height(height: gpui::Pixels) -> Self {
+    let height = clamp_pixels(height, min_ribbon_height(), max_ribbon_height());
+    let scale = ((height.as_f32() - min_ribbon_height().as_f32())
+      / (max_ribbon_height().as_f32() - min_ribbon_height().as_f32()))
+    .clamp(0.0, 1.0);
+
+    Self {
+      height,
+      chip_height: px(24.0 + 10.0 * scale),
+      chip_min_width: px(58.0 + 18.0 * scale),
+      chip_max_width: px(132.0 + 34.0 * scale),
+      chip_padding_x: px(6.0 + 4.0 * scale),
+      chip_text_size: px(10.5 + 2.5 * scale),
+      group_gap: px(6.0 + 5.0 * scale),
+      group_padding_top: px(5.0 + 4.0 * scale),
+      group_padding_bottom: px(5.0 + 5.0 * scale),
+    }
+  }
+}
+
+fn default_ribbon_height() -> gpui::Pixels {
+  px(112.0)
+}
+
+fn min_ribbon_height() -> gpui::Pixels {
+  px(78.0)
+}
+
+fn max_ribbon_height() -> gpui::Pixels {
+  px(224.0)
+}
+
+fn clamp_pixels(value: gpui::Pixels, min: gpui::Pixels, max: gpui::Pixels) -> gpui::Pixels {
+  px(value.as_f32().clamp(min.as_f32(), max.as_f32()))
 }
 
 fn modern_group(
@@ -423,56 +479,66 @@ fn modern_group(
   group: &RibbonCommandGroup,
   editor: Entity<RichTextEditor>,
   options: ModernRibbonOptions,
+  metrics: RibbonLayoutMetrics,
   cx: &mut Context<EditorRibbon>,
 ) -> AnyElement {
   div()
     .flex()
-    .flex_col()
+    .flex_row()
     .flex_shrink()
-    .min_w(group_min_width(group.id))
-    .min_h(section_divider_height())
-    .gap_0p5()
+    .min_w(group_min_width(group, metrics))
+    .gap_2()
     .when(has_divider, |this| {
       this.pl_2().border_l_1().border_color(cx.theme().border.opacity(0.72))
     })
     .child(
       div()
-        .text_xs()
-        .font_medium()
-        .text_color(cx.theme().muted_foreground)
-        .child(group.label),
-    )
-    .child(
-      div()
-        .id(group.id)
         .flex()
-        .flex_row()
-        .flex_wrap()
-        .items_center()
-        .gap_1()
+        .flex_col()
         .min_w_0()
-        .children(group.commands.iter().map(|command| {
-          modern_command_chip(command, editor.clone(), options, cx)
-        })),
+        .gap_0p5()
+        .child(
+          div()
+            .text_size(px(10.0))
+            .font_medium()
+            .text_color(cx.theme().muted_foreground)
+            .child(group.label),
+        )
+        .child(
+          div()
+            .id(group.id)
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .content_start()
+            .gap_1()
+            .min_w_0()
+            .children(group.commands.iter().map(|command| {
+              modern_command_chip(command, editor.clone(), options, metrics, cx)
+            })),
+        ),
     )
     .into_any_element()
 }
 
-fn group_min_width(group_id: &str) -> gpui::Pixels {
-  match group_id {
-    "reset" => px(178.0),
-    _ => px(112.0),
-  }
-}
-
-fn section_divider_height() -> gpui::Pixels {
-  px(88.0)
+fn group_min_width(group: &RibbonCommandGroup, metrics: RibbonLayoutMetrics) -> gpui::Pixels {
+  let preferred_columns: usize = match group.commands.len() {
+    0 | 1 => 1,
+    2 => 2,
+    3 | 4 => 2,
+    _ => 3,
+  };
+  let command_width = metrics.chip_min_width.as_f32() * preferred_columns as f32;
+  let gap_width = 4.0 * preferred_columns.saturating_sub(1) as f32;
+  px(command_width + gap_width)
 }
 
 fn modern_command_chip(
   command: &RibbonCommand,
   editor: Entity<RichTextEditor>,
   options: ModernRibbonOptions,
+  metrics: RibbonLayoutMetrics,
   cx: &mut Context<EditorRibbon>,
 ) -> AnyElement {
   let command_id = command.id;
@@ -483,6 +549,10 @@ fn modern_command_chip(
     .small()
     .compact()
     .outline()
+    .h(metrics.chip_height)
+    .min_w(metrics.chip_min_width)
+    .max_w(metrics.chip_max_width)
+    .px(metrics.chip_padding_x)
     .rounded(px(6.0))
     .selected(command.selected)
     .disabled(command.disabled)
@@ -499,9 +569,10 @@ fn modern_command_chip(
     .child(
       div()
         .flex_none()
-        .text_size(px(12.0))
+        .text_size(metrics.chip_text_size)
         .line_height(relative(1.0))
         .whitespace_nowrap()
+        .text_ellipsis()
         .child(command.label),
     )
     .when(show_shortcut(options), |this| {
@@ -512,54 +583,6 @@ fn modern_command_chip(
         perform_ribbon_command(editor, command_id, cx);
       });
     })
-    .into_any_element()
-}
-
-fn more_menu(
-  editor: Entity<RichTextEditor>,
-  overflow_commands: Vec<RibbonCommand>,
-  cx: &mut Context<EditorRibbon>,
-) -> AnyElement {
-  div()
-    .h_full()
-    .min_h(section_divider_height())
-    .border_l_1()
-    .border_color(cx.theme().border.opacity(0.72))
-    .pl_2()
-    .flex()
-    .items_center()
-    .child(
-      Button::new("modern-ribbon-more")
-        .label("More")
-        .small()
-        .ghost()
-        .dropdown_caret(true)
-        .tooltip("More style commands")
-        .dropdown_menu(move |menu, _, _| {
-          if overflow_commands.is_empty() {
-            return menu.item(PopupMenuItem::label("No overflow commands"));
-          }
-
-          overflow_commands.iter().fold(menu, |menu, command| {
-            let command_id = command.id;
-            let editor = editor.clone();
-            let label = match &command.shortcut {
-              Some(shortcut) => format!("{}    {}", command.label, shortcut),
-              None => command.label.to_string(),
-            };
-            menu.item(
-              PopupMenuItem::new(label)
-                .checked(command.selected)
-                .disabled(command.disabled)
-                .on_click(move |_, _, cx| {
-                  editor.update(cx, |editor, cx| {
-                    perform_ribbon_command(editor, command_id, cx);
-                  });
-                }),
-            )
-          })
-        }),
-    )
     .into_any_element()
 }
 
