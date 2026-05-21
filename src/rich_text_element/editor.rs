@@ -572,6 +572,7 @@ pub struct RichTextEditor {
 impl RichTextEditor {
   pub fn new_with_path(document: Document, document_path: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
     let paragraph_count = document.paragraphs.len();
+    let saved_generation = if document_path.is_some() { 0 } else { u64::MAX };
     Self {
       focus_handle: cx.focus_handle(),
       focus_subscriptions: Vec::new(),
@@ -582,7 +583,7 @@ impl RichTextEditor {
       selection: EditorSelection::caret(),
       config: RichTextEditorConfig::default(),
       edit_generation: 0,
-      saved_generation: 0,
+      saved_generation,
       next_edit_generation: 1,
       save_status: SaveStatus::Saved,
       undo_stack: Vec::new(),

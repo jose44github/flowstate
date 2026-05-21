@@ -118,7 +118,12 @@ impl Workspace {
         }
       }));
     let workspace = cx.entity().downgrade();
-    let panel = cx.new(|cx| DocumentPanel::new(path, editor.clone(), workspace, cx));
+    let title = path
+      .as_ref()
+      .and_then(|path| path.file_name())
+      .map(|name| name.to_string_lossy().to_string())
+      .or_else(|| Some(self.next_untitled_title(cx)));
+    let panel = cx.new(|cx| DocumentPanel::new_with_title(title, path, editor.clone(), workspace, cx));
     let id = panel.read(cx).id();
     self.active_document_id = Some(id);
     self.active_editor = Some(editor);
@@ -399,6 +404,30 @@ impl Workspace {
       .document_panels
       .iter()
       .position(|panel| panel.read(cx).id() == active_id)
+  }
+
+  fn activate_document_at_index(&mut self, index: usize, cx: &mut Context<Self>) {
+    let Some(panel) = self.document_panels.get(index) else {
+      return;
+    };
+    let panel = panel.read(cx);
+    self.active_document_id = Some(panel.id());
+    self.active_editor = Some(panel.editor());
+    cx.notify();
+  }
+
+  fn navigate_active_tab(&mut self, offset: isize, cx: &mut Context<Self>) {
+    let Some(active_index) = self.active_document_index(cx) else {
+      return;
+    };
+    let target = if offset.is_negative() {
+      active_index.checked_sub(offset.unsigned_abs())
+    } else {
+      active_index.checked_add(offset as usize)
+    };
+    if let Some(target) = target.filter(|target| *target < self.document_panels.len()) {
+      self.activate_document_at_index(target, cx);
+    }
   }
 
   fn apply_document_theme_to_open_editors(&mut self, theme: DocumentTheme, cx: &mut Context<Self>) {
@@ -1090,6 +1119,8 @@ impl Workspace {
       .xsmall()
       .track_scroll(&self.tab_bar_scroll_handle)
       .menu(true)
+      .prefix(self.render_document_tab_bar_prefix(active_index, tabs.len(), cx))
+      .suffix(self.render_document_tab_bar_suffix())
       .active_tab_bg(white())
       .active_tab_fg(active_tab_fg)
       .selected_index(active_index)
@@ -1125,6 +1156,70 @@ impl Workspace {
           .suffix(close_button)
       }))
       .last_empty_space(div().flex_1().h_full())
+  }
+
+  fn next_untitled_title(&self, cx: &App) -> String {
+    let used = self
+      .document_panels
+      .iter()
+      .filter_map(|panel| untitled_index(panel.read(cx).title_text().as_ref()))
+      .collect::<HashSet<_>>();
+    let mut index = 1usize;
+    while used.contains(&index) {
+      index += 1;
+    }
+    format!("Untitled{index}.db8")
+  }
+
+  fn render_document_tab_bar_prefix(&self, active_index: usize, tab_count: usize, cx: &mut Context<Self>) -> impl IntoElement {
+    h_flex()
+      .h_full()
+      .items_center()
+      .gap_1()
+      .px_1()
+      .child(
+        icon_button("tab-bar-new-file", AppIcon::NewFile)
+          .tooltip("New file")
+          .on_click(cx.listener(|workspace, _, window, cx| {
+            workspace.new_document(window, cx);
+          })),
+      )
+      .child(
+        icon_button("tab-bar-save-file", AppIcon::SaveFile)
+          .tooltip("Save current file")
+          .on_click(cx.listener(|workspace, _, window, cx| {
+            workspace.save_active(window, cx);
+          })),
+      )
+      .child(
+        icon_button("tab-bar-navigate-left", AppIcon::TabLeft)
+          .tooltip("Navigate tab left")
+          .disabled(active_index == 0)
+          .on_click(cx.listener(|workspace, _, _, cx| {
+            workspace.navigate_active_tab(-1, cx);
+          })),
+      )
+      .child(
+        icon_button("tab-bar-navigate-right", AppIcon::TabRight)
+          .tooltip("Navigate tab right")
+          .disabled(active_index + 1 >= tab_count)
+          .on_click(cx.listener(|workspace, _, _, cx| {
+            workspace.navigate_active_tab(1, cx);
+          })),
+      )
+  }
+
+  fn render_document_tab_bar_suffix(&self) -> impl IntoElement {
+    h_flex()
+      .h_full()
+      .items_center()
+      .gap_1()
+      .px_1()
+      .child(
+        icon_button("tab-bar-multipanel-placeholder", AppIcon::MultiPanel)
+          .tooltip("Multi-panel layout")
+          .disabled(true),
+      )
   }
 
   fn render_empty_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2124,4 +2219,13 @@ fn truncate_tab_title(title: &str, max_chars: usize) -> String {
     short.push_str("...");
   }
   short
+}
+
+fn untitled_index(title: &str) -> Option<usize> {
+  let title = title.strip_suffix(".db8").unwrap_or(title);
+  let number = title.strip_prefix("Untitled")?;
+  if number.is_empty() {
+    return None;
+  }
+  number.parse::<usize>().ok().filter(|index| *index > 0)
 }

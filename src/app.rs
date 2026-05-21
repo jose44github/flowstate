@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
+use std::{borrow::Cow, path::{Path, PathBuf}};
 
-use gpui::{App, Application, Context, Entity, IntoElement, Render, Window, div, prelude::*, rgb};
+use gpui::{App, Application, AssetSource, Context, Entity, IntoElement, Render, Result, SharedString, Window, div, prelude::*, rgb};
 use gpui_component::{Theme, ThemeRegistry};
 
 use crate::app_settings::load_app_settings;
@@ -64,7 +64,7 @@ pub fn write_demo_document() -> anyhow::Result<()> {
 /// Run the rich text processor by itself for focused component development.
 pub fn run_standalone(document_path: Option<PathBuf>) {
   Application::new()
-    .with_assets(gpui_component_assets::Assets)
+    .with_assets(AppAssets)
     .run(|cx: &mut App| {
       gpui_component::init(cx);
       init_theme_registry(cx);
@@ -73,6 +73,25 @@ pub fn run_standalone(document_path: Option<PathBuf>) {
       open_workspace_window(document_path, cx);
       cx.activate(true);
     });
+}
+
+struct AppAssets;
+
+impl AssetSource for AppAssets {
+  fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+    match path {
+      "icons/save.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/save.svg")))),
+      _ => gpui_component_assets::Assets.load(path),
+    }
+  }
+
+  fn list(&self, path: &str) -> Result<Vec<SharedString>> {
+    let mut assets = gpui_component_assets::Assets.list(path)?;
+    if "icons/save.svg".starts_with(path) {
+      assets.push("icons/save.svg".into());
+    }
+    Ok(assets)
+  }
 }
 
 fn init_theme_registry(cx: &mut App) {

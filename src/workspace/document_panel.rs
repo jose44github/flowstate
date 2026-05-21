@@ -24,14 +24,16 @@ pub struct DocumentPanel {
 }
 
 impl DocumentPanel {
-  pub fn new(path: Option<PathBuf>, editor: Entity<RichTextEditor>, workspace: WeakEntity<Workspace>, cx: &mut Context<Self>) -> Self {
+  pub fn new_with_title(
+    title: Option<String>,
+    path: Option<PathBuf>,
+    editor: Entity<RichTextEditor>,
+    workspace: WeakEntity<Workspace>,
+    cx: &mut Context<Self>,
+  ) -> Self {
     let ribbon_mode = load_ribbon_mode();
     let ribbon = cx.new(|_| EditorRibbon::new_with_mode(editor.clone(), ribbon_mode));
-    let title = path
-      .as_ref()
-      .and_then(|path| path.file_name())
-      .map(|name| name.to_string_lossy().to_string())
-      .unwrap_or_else(|| "Untitled.db8".to_string());
+    let title = title.unwrap_or_else(|| "Untitled1.db8".to_string());
 
     Self {
       id: Uuid::new_v4(),
