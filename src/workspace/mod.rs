@@ -1,4 +1,5 @@
 mod document_panel;
+mod file_management;
 mod icons;
 mod workspace;
 

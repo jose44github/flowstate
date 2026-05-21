@@ -27,15 +27,11 @@ impl DocumentPanel {
   pub fn new(path: Option<PathBuf>, editor: Entity<RichTextEditor>, workspace: WeakEntity<Workspace>, cx: &mut Context<Self>) -> Self {
     let ribbon_mode = load_ribbon_mode();
     let ribbon = cx.new(|_| EditorRibbon::new_with_mode(editor.clone(), ribbon_mode));
-    let title = path
-      .as_ref()
-      .and_then(|path| path.file_name())
-      .map(|name| name.to_string_lossy().to_string())
-      .unwrap_or_else(|| "Untitled.db8".to_string());
+    let title = title_for_path(path.as_ref());
 
     Self {
       id: Uuid::new_v4(),
-      title: title.into(),
+      title,
       path,
       editor,
       ribbon,
@@ -61,6 +57,12 @@ impl DocumentPanel {
     self.title.clone()
   }
 
+  pub fn set_path(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    self.title = title_for_path(Some(&path));
+    self.path = Some(path);
+    cx.notify();
+  }
+
   pub fn is_dirty(&self, cx: &App) -> bool {
     self.editor.read(cx).has_unsaved_changes()
   }
@@ -72,6 +74,14 @@ impl DocumentPanel {
       self.title.clone()
     }
   }
+}
+
+fn title_for_path(path: Option<&PathBuf>) -> SharedString {
+  path
+    .and_then(|path| path.file_name())
+    .map(|name| name.to_string_lossy().to_string())
+    .unwrap_or_else(|| "Untitled.db8".to_string())
+    .into()
 }
 
 impl EventEmitter<PanelEvent> for DocumentPanel {}

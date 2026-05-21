@@ -20,9 +20,10 @@ use uuid::Uuid;
 
 use crate::app_settings::{load_document_theme, save_document_theme, save_theme_name};
 use crate::rich_text_element::{
-  Document, DocumentTheme, ParagraphStyle, RichTextEditor, ThemeUnderline, demo_document, load_or_create_document,
+  Document, DocumentTheme, ParagraphStyle, RichTextEditor, Save, ThemeUnderline, demo_document, load_or_create_document,
 };
 use crate::workspace::document_panel::DocumentPanel;
+use crate::workspace::file_management::{UNTITLED_DOCUMENT_NAME, default_save_directory, new_blank_document, normalize_db8_path};
 use crate::workspace::icons::{AppIcon, icon_button};
 
 pub struct Workspace {
@@ -147,7 +148,7 @@ impl Workspace {
   }
 
   pub fn new_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.add_document_panel(demo_document(), None, window, cx);
+    self.add_document_panel(new_blank_document(), None, window, cx);
   }
 
   pub fn open_demo_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -312,6 +313,10 @@ impl Workspace {
     let Some(editor) = self.active_editor.clone() else {
       return;
     };
+    if editor.read(cx).document_path().is_none() {
+      self.prompt_save_active_as(editor, window, cx);
+      return;
+    }
     match editor.update(cx, |editor, cx| editor.save(cx)) {
       Ok(()) => {},
       Err(error) => {
@@ -320,6 +325,56 @@ impl Workspace {
       },
     }
     cx.notify();
+  }
+
+  fn prompt_save_active_as(&mut self, editor: Entity<RichTextEditor>, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(panel_id) = self.active_document_id else {
+      return;
+    };
+    let save_path = cx.prompt_for_new_path(&default_save_directory(), Some(UNTITLED_DOCUMENT_NAME));
+    let window_handle = window.window_handle();
+    cx.spawn(async move |workspace, cx| {
+      let path = match save_path.await {
+        Ok(Ok(Some(path))) => normalize_db8_path(path),
+        Ok(Ok(None)) => return,
+        Ok(Err(error)) => {
+          let detail = error.to_string();
+          let _ = window_handle.update(cx, |_, window, cx| {
+            window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
+          });
+          return;
+        },
+        Err(error) => {
+          eprintln!("save dialog was canceled before completion: {error}");
+          return;
+        },
+      };
+
+      match editor.update(cx, |editor, cx| editor.save_as(path.clone(), cx)) {
+        Ok(Ok(())) => {
+          let _ = workspace.update(cx, |workspace, cx| {
+            if let Some(panel) = workspace
+              .document_panels
+              .iter()
+              .find(|panel| panel.read(cx).id() == panel_id)
+            {
+              panel.update(cx, |panel, cx| panel.set_path(path, cx));
+            }
+            cx.notify();
+          });
+        },
+        Ok(Err(error)) => {
+          let detail = error.to_string();
+          let _ = window_handle.update(cx, |_, window, cx| {
+            window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
+          });
+        },
+        Err(error) => {
+          eprintln!("failed to access editor before save: {error}");
+        },
+      }
+    })
+    .detach();
   }
 
   pub fn toggle_ribbon(&mut self, cx: &mut Context<Self>) {
@@ -453,6 +508,7 @@ impl Workspace {
 impl Render for Workspace {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     v_flex()
+      .on_action(cx.listener(Self::on_save))
       .size_full()
       .bg(cx.theme().background)
       .child(self.render_top_bar(window, cx))
@@ -466,6 +522,10 @@ impl Render for Workspace {
 }
 
 impl Workspace {
+  fn on_save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+    self.save_active(window, cx);
+  }
+
   fn render_styles_settings_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let workspace = cx.entity().downgrade();
     let has_document = self.active_editor.is_some();
@@ -1131,6 +1191,7 @@ impl Workspace {
     // dispatch grows beyond direct callbacks, keep the buttons mapped to
     // `CommandId::NewDocument` and `CommandId::OpenDemoDocument`.
     let new_doc = cx.listener(|workspace, _, window, cx| workspace.new_document(window, cx));
+    let open_document = cx.listener(|workspace, _, window, cx| workspace.prompt_open_document(window, cx));
     let open_demo = cx.listener(|workspace, _, window, cx| workspace.open_demo_document(window, cx));
     v_flex()
       .size_full()
@@ -1153,6 +1214,12 @@ impl Workspace {
               .label("New")
               .primary()
               .on_click(new_doc),
+          )
+          .child(
+            Button::new("empty-open-document")
+              .icon(IconName::FolderOpen)
+              .label("Open")
+              .on_click(open_document),
           )
           .child(
             Button::new("empty-open-demo")
