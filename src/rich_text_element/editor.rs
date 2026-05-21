@@ -898,6 +898,10 @@ impl RichTextEditor {
     }
   }
 
+  pub fn document_theme(&self) -> DocumentTheme {
+    self.document.theme.clone()
+  }
+
   pub fn has_unsaved_changes(&self) -> bool {
     self.edit_generation != self.saved_generation
   }
@@ -1923,6 +1927,9 @@ impl RichTextEditor {
   }
 
   pub fn toggle_underline(&mut self, cx: &mut Context<Self>) {
+    if self.clear_matching_armed_inline_tool(ArmedInlineTool::Underline, cx) {
+      return;
+    }
     self.toggle_underline_kind(None, cx);
   }
 
@@ -1935,6 +1942,9 @@ impl RichTextEditor {
     semantic: RunSemanticStyle,
     cx: &mut Context<Self>,
   ) {
+    if self.clear_matching_armed_inline_tool(ArmedInlineTool::Semantic(semantic), cx) {
+      return;
+    }
     self.toggle_semantic_style(semantic, cx);
   }
 
@@ -1955,6 +1965,9 @@ impl RichTextEditor {
   }
 
   pub fn set_highlight(&mut self, highlight: HighlightStyle, cx: &mut Context<Self>) {
+    if self.clear_matching_armed_inline_tool(ArmedInlineTool::Highlight(highlight), cx) {
+      return;
+    }
     self.set_highlight_internal(Some(highlight), cx);
   }
 

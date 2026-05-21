@@ -86,15 +86,18 @@ fn vendored_themes_dir() -> PathBuf {
 }
 
 fn apply_saved_theme(cx: &mut App) {
-  let Some(theme_name) = load_app_settings().theme_name else {
-    return;
-  };
-  let Some(theme) = ThemeRegistry::global(cx).themes().get(theme_name.as_str()).cloned() else {
-    return;
-  };
+  if let Some(theme_name) = load_app_settings().theme_name
+    && let Some(theme) = ThemeRegistry::global(cx).themes().get(theme_name.as_str()).cloned()
+  {
+    let mode = theme.mode;
+    Theme::global_mut(cx).apply_config(&theme);
+    Theme::change(mode, None, cx);
+  }
 
-  let mode = theme.mode;
-  Theme::global_mut(cx).apply_config(&theme);
-  Theme::change(mode, None, cx);
+  apply_global_ui_font(cx);
 }
 
+fn apply_global_ui_font(cx: &mut App) {
+  let mono_font_family = Theme::global(cx).mono_font_family.clone();
+  Theme::global_mut(cx).font_family = mono_font_family;
+}
