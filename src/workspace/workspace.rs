@@ -1243,7 +1243,7 @@ impl Workspace {
     // `CommandId::NewDocument` and `CommandId::OpenDemoDocument`.
     let new_doc = cx.listener(|workspace, _, window, cx| workspace.new_document(window, cx));
     let open_document = cx.listener(|workspace, _, window, cx| workspace.prompt_open_document(window, cx));
-    let open_demo = cx.listener(|workspace, _, window, cx| workspace.open_demo_document(window, cx));
+    let open_search = cx.listener(|workspace, _, window, cx| workspace.open_file_search_overlay(window, cx));
     v_flex()
       .size_full()
       .items_center()
@@ -1273,10 +1273,10 @@ impl Workspace {
               .on_click(open_document),
           )
           .child(
-            Button::new("empty-open-demo")
-              .icon(IconName::FolderOpen)
-              .label("Open Demo [REMOVE THIS IN PROD]")
-              .on_click(open_demo),
+            Button::new("empty-search-document")
+              .icon(IconName::Search)
+              .label("Search")
+              .on_click(open_search),
           ),
       )
   }
