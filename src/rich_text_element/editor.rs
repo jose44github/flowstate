@@ -1,7 +1,8 @@
 use std::{
-  collections::{hash_map::DefaultHasher, HashMap},
+  collections::{HashMap, hash_map::DefaultHasher},
+  fs,
   hash::{Hash, Hasher},
-  fs, io,
+  io,
   ops::Range,
   path::{Path, PathBuf},
   rc::Rc,
@@ -11,10 +12,9 @@ use std::{
 
 use crop::Rope;
 use gpui::{
-  App, Bounds, ClipboardEntry, ClipboardItem, Context, CursorStyle, ExternalPaths, FocusHandle, Focusable, Image, ImageFormat, InteractiveElement, IntoElement, KeyDownEvent,
-  MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels, Point, Render, ScrollStrategy, SharedString, Size, Subscription, Timer,
-  Window, actions, div, img, point, prelude::*,
-  px, rgb, size,
+  App, Bounds, ClipboardEntry, ClipboardItem, Context, CursorStyle, ExternalPaths, FocusHandle, Focusable, Image, ImageFormat,
+  InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels, Point,
+  Render, ScrollStrategy, SharedString, Size, Subscription, Timer, Window, actions, div, img, point, prelude::*, px, rgb, size,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::{VirtualListScrollHandle, v_virtual_list};
@@ -296,7 +296,9 @@ pub(super) fn adjust_drop_after_source_delete(drop: DocumentOffset, source: Rang
     if drop.paragraph == source.start.paragraph {
       return DocumentOffset {
         paragraph: drop.paragraph,
-        byte: drop.byte.saturating_sub(source.end.byte - source.start.byte),
+        byte: drop
+          .byte
+          .saturating_sub(source.end.byte - source.start.byte),
       };
     }
     return drop;
@@ -334,9 +336,7 @@ pub struct RichTextEditorConfig {
 
 impl Default for RichTextEditorConfig {
   fn default() -> Self {
-    Self {
-      smart_word_selection: true,
-    }
+    Self { smart_word_selection: true }
   }
 }
 
@@ -377,11 +377,7 @@ pub(super) enum BlockSelection {
   Image(usize),
   Equation(usize),
   Table(usize),
-  TableCell {
-    block_ix: usize,
-    row_ix: usize,
-    cell_ix: usize,
-  },
+  TableCell { block_ix: usize, row_ix: usize, cell_ix: usize },
 }
 
 #[derive(Default)]
@@ -574,11 +570,7 @@ impl RichTextEditor {
     &self.config
   }
 
-  pub fn update_config(
-    &mut self,
-    update: impl FnOnce(&mut RichTextEditorConfig),
-    cx: &mut Context<Self>,
-  ) {
+  pub fn update_config(&mut self, update: impl FnOnce(&mut RichTextEditorConfig), cx: &mut Context<Self>) {
     update(&mut self.config);
     cx.notify();
   }
@@ -593,7 +585,10 @@ impl RichTextEditor {
 
   fn select_block(&mut self, selection: BlockSelection, cx: &mut Context<Self>) {
     self.selected_block = Some(selection);
-    self.table_cell_caret = self.selected_table_cell_text().map(|text| text.len()).unwrap_or(0);
+    self.table_cell_caret = self
+      .selected_table_cell_text()
+      .map(|text| text.len())
+      .unwrap_or(0);
     self.selecting = false;
     self.pending_text_drag = None;
     self.active_text_drag = None;
@@ -635,11 +630,7 @@ impl RichTextEditor {
     for (row_ix, row) in table.rows.iter().enumerate() {
       for (cell_ix, cell) in row.cells.iter().enumerate() {
         if cell.bounds.contains(&document_point) {
-          return Some(BlockSelection::TableCell {
-            block_ix,
-            row_ix,
-            cell_ix,
-          });
+          return Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix });
         }
       }
     }
@@ -651,7 +642,13 @@ impl RichTextEditor {
       return Some(self.height_prefix_index.item_top(block_ix));
     }
     let sizes = self.item_sizes_cache.as_ref()?;
-    Some(sizes.sizes.iter().take(block_ix).fold(px(0.0), |top, size| top + size.height))
+    Some(
+      sizes
+        .sizes
+        .iter()
+        .take(block_ix)
+        .fold(px(0.0), |top, size| top + size.height),
+    )
   }
 
   fn clear_block_selection(&mut self) {
@@ -854,11 +851,7 @@ impl RichTextEditor {
   }
 
   pub(super) fn caret_paint_width(&self) -> Pixels {
-    if self.active_text_drag.is_some() {
-      px(2.0)
-    } else {
-      px(1.0)
-    }
+    if self.active_text_drag.is_some() { px(2.0) } else { px(1.0) }
   }
 
   pub fn find_text(&self, query: &str) -> Vec<Range<DocumentOffset>> {
@@ -870,18 +863,31 @@ impl RichTextEditor {
       let run_styles = if paragraph.paragraph.runs.is_empty() {
         vec![RunStyles::default()]
       } else {
-        paragraph.paragraph.runs.iter().map(|run| run.styles).collect()
+        paragraph
+          .paragraph
+          .runs
+          .iter()
+          .map(|run| run.styles)
+          .collect()
       };
       return RichTextEditorStyleState {
         paragraph_style: SelectionState::Uniform(paragraph.paragraph.style),
         semantic: selection_state_from_values(run_styles.iter().map(|styles| styles.semantic)),
-        underline: selection_state_from_values(run_styles.iter().map(|styles| styles.direct_underline || styles.semantic == RunSemanticStyle::Underline)),
+        underline: selection_state_from_values(
+          run_styles
+            .iter()
+            .map(|styles| styles.direct_underline || styles.semantic == RunSemanticStyle::Underline),
+        ),
         highlight: selection_state_from_values(run_styles.iter().map(|styles| styles.highlight)),
       };
     }
     let range = self.selection.normalized();
     let paragraph_style = selection_state_from_values((range.start.paragraph..=range.end.paragraph).filter_map(|paragraph_ix| {
-      self.document.paragraphs.get(paragraph_ix).map(|paragraph| paragraph.style)
+      self
+        .document
+        .paragraphs
+        .get(paragraph_ix)
+        .map(|paragraph| paragraph.style)
     }));
 
     let run_styles = if self.selection.is_caret() {
@@ -893,7 +899,11 @@ impl RichTextEditor {
     RichTextEditorStyleState {
       paragraph_style,
       semantic: selection_state_from_values(run_styles.iter().map(|styles| styles.semantic)),
-      underline: selection_state_from_values(run_styles.iter().map(|styles| styles.direct_underline || styles.semantic == RunSemanticStyle::Underline)),
+      underline: selection_state_from_values(
+        run_styles
+          .iter()
+          .map(|styles| styles.direct_underline || styles.semantic == RunSemanticStyle::Underline),
+      ),
       highlight: selection_state_from_values(run_styles.iter().map(|styles| styles.highlight)),
     }
   }
@@ -910,11 +920,7 @@ impl RichTextEditor {
     self.edit_generation
   }
 
-  pub fn update_document_theme(
-    &mut self,
-    update: impl FnOnce(&mut DocumentTheme),
-    cx: &mut Context<Self>,
-  ) {
+  pub fn update_document_theme(&mut self, update: impl FnOnce(&mut DocumentTheme), cx: &mut Context<Self>) {
     update(&mut self.document.theme);
     self.invalidate_document_theme_layout(cx);
   }
@@ -1252,7 +1258,10 @@ impl RichTextEditor {
       return;
     }
     if let Some(metadata) = item.metadata() {
-      if let Some(PasteCache::Rich { metadata: cached_metadata, fragment }) = &self.paste_cache
+      if let Some(PasteCache::Rich {
+        metadata: cached_metadata,
+        fragment,
+      }) = &self.paste_cache
         && cached_metadata == metadata
       {
         let fragment = fragment.clone();
@@ -1293,7 +1302,9 @@ impl RichTextEditor {
   }
 
   fn selected_table_cell_text(&self) -> Option<String> {
-    self.selected_table_cell_paragraph().map(|paragraph| paragraph.text.clone())
+    self
+      .selected_table_cell_paragraph()
+      .map(|paragraph| paragraph.text.clone())
   }
 
   fn selected_table_cell_paragraph(&self) -> Option<&TableCellParagraph> {
@@ -1303,10 +1314,17 @@ impl RichTextEditor {
     let Block::Table(table) = self.document.blocks.get(block_ix)? else {
       return None;
     };
-    table.rows.get(row_ix)?.cells.get(cell_ix)?.blocks.iter().find_map(|block| match block {
-      TableCellBlock::Paragraph(paragraph) => Some(paragraph),
-      TableCellBlock::Table(_) => None,
-    })
+    table
+      .rows
+      .get(row_ix)?
+      .cells
+      .get(cell_ix)?
+      .blocks
+      .iter()
+      .find_map(|block| match block {
+        TableCellBlock::Paragraph(paragraph) => Some(paragraph),
+        TableCellBlock::Table(_) => None,
+      })
   }
 
   fn clear_selected_table_cell(&mut self, cx: &mut Context<Self>) -> bool {
@@ -1335,19 +1353,21 @@ impl RichTextEditor {
         positions.push((row, cell));
       }
     }
-    let Some(current) = positions.iter().position(|&(row, cell)| row == row_ix && cell == cell_ix) else {
+    let Some(current) = positions
+      .iter()
+      .position(|&(row, cell)| row == row_ix && cell == cell_ix)
+    else {
       return false;
     };
-    let next = if forward {
-      current + 1
-    } else {
-      current.saturating_sub(1)
-    };
+    let next = if forward { current + 1 } else { current.saturating_sub(1) };
     let Some(&(row_ix, cell_ix)) = positions.get(next) else {
       return false;
     };
     self.selected_block = Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix });
-    self.table_cell_caret = self.selected_table_cell_text().map(|text| text.len()).unwrap_or(0);
+    self.table_cell_caret = self
+      .selected_table_cell_text()
+      .map(|text| text.len())
+      .unwrap_or(0);
     cx.notify();
     true
   }
@@ -1375,7 +1395,9 @@ impl RichTextEditor {
             .collect(),
         })
         .collect(),
-      column_widths: (0..columns).map(|_| TableColumnWidth::Fraction(1)).collect(),
+      column_widths: (0..columns)
+        .map(|_| TableColumnWidth::Fraction(1))
+        .collect(),
       style: TableStyle { header_row: false },
       version: 0,
     };
@@ -1388,8 +1410,18 @@ impl RichTextEditor {
       _ => None,
     };
     self.edit_selected_table(cx, |table| {
-      let columns = table.rows.iter().map(|row| row.cells.len()).max().unwrap_or(1).max(table.column_widths.len()).max(1);
-      let insert_ix = target_row.map(|row| row + 1).unwrap_or(table.rows.len()).min(table.rows.len());
+      let columns = table
+        .rows
+        .iter()
+        .map(|row| row.cells.len())
+        .max()
+        .unwrap_or(1)
+        .max(table.column_widths.len())
+        .max(1);
+      let insert_ix = target_row
+        .map(|row| row + 1)
+        .unwrap_or(table.rows.len())
+        .min(table.rows.len());
       table.rows.insert(insert_ix, default_table_row(columns));
     });
   }
@@ -1401,7 +1433,9 @@ impl RichTextEditor {
     };
     self.edit_selected_table(cx, |table| {
       if table.rows.len() > 1 {
-        let row_ix = target_row.unwrap_or(table.rows.len() - 1).min(table.rows.len() - 1);
+        let row_ix = target_row
+          .unwrap_or(table.rows.len() - 1)
+          .min(table.rows.len() - 1);
         table.rows.remove(row_ix);
       }
     });
@@ -1413,8 +1447,13 @@ impl RichTextEditor {
       _ => None,
     };
     self.edit_selected_table(cx, |table| {
-      let insert_ix = target_column.map(|column| column + 1).unwrap_or(table.column_widths.len()).min(table.column_widths.len());
-      table.column_widths.insert(insert_ix, TableColumnWidth::Fraction(1));
+      let insert_ix = target_column
+        .map(|column| column + 1)
+        .unwrap_or(table.column_widths.len())
+        .min(table.column_widths.len());
+      table
+        .column_widths
+        .insert(insert_ix, TableColumnWidth::Fraction(1));
       for row in &mut table.rows {
         let cell_ix = insert_ix.min(row.cells.len());
         row.cells.insert(cell_ix, default_table_cell());
@@ -1429,7 +1468,9 @@ impl RichTextEditor {
     };
     self.edit_selected_table(cx, |table| {
       if table.column_widths.len() > 1 {
-        let column_ix = target_column.unwrap_or(table.column_widths.len() - 1).min(table.column_widths.len() - 1);
+        let column_ix = target_column
+          .unwrap_or(table.column_widths.len() - 1)
+          .min(table.column_widths.len() - 1);
         table.column_widths.remove(column_ix);
         for row in &mut table.rows {
           if row.cells.len() > 1 {
@@ -1440,7 +1481,9 @@ impl RichTextEditor {
       } else {
         for row in &mut table.rows {
           if row.cells.len() > 1 {
-            let cell_ix = target_column.unwrap_or(row.cells.len() - 1).min(row.cells.len() - 1);
+            let cell_ix = target_column
+              .unwrap_or(row.cells.len() - 1)
+              .min(row.cells.len() - 1);
             row.cells.remove(cell_ix);
           }
         }
@@ -1668,13 +1711,13 @@ impl RichTextEditor {
       let asset_id = asset.id;
       self.document.assets.assets.insert(asset_id, asset);
       blocks.push(Block::Image(ImageBlock {
-          asset_id,
-          alt_text,
-          caption: None,
-          sizing: ImageSizing::FitWidth,
-          alignment: BlockAlignment::Center,
-          version: 0,
-        }));
+        asset_id,
+        alt_text,
+        caption: None,
+        sizing: ImageSizing::FitWidth,
+        alignment: BlockAlignment::Center,
+        version: 0,
+      }));
     }
     self.insert_blocks_after_caret_without_history(blocks);
     self.push_replace_document_history(before_document, before_selection, cx);
@@ -1697,7 +1740,9 @@ impl RichTextEditor {
       let Some((asset, alt_text)) = image_asset_from_path(&path) else {
         return;
       };
-      editor.update(cx, |editor, cx| editor.insert_image_block(asset, alt_text, cx)).ok();
+      editor
+        .update(cx, |editor, cx| editor.insert_image_block(asset, alt_text, cx))
+        .ok();
     })
     .detach();
   }
@@ -1728,7 +1773,10 @@ impl RichTextEditor {
       }
     }
     let offset = self.hit_test_document_position(position, window, cx);
-    self.selection = EditorSelection { anchor: offset, head: offset };
+    self.selection = EditorSelection {
+      anchor: offset,
+      head: offset,
+    };
     self.clear_block_selection();
     self.goal_x = None;
     self.reset_caret_blink(cx);
@@ -1790,7 +1838,13 @@ impl RichTextEditor {
       .selected_table_cell_text()
       .and_then(|text| {
         let caret = caret.min(text.len());
-        (caret > 0).then(|| text[..caret].char_indices().next_back().map(|(byte, _)| byte).unwrap_or(0))
+        (caret > 0).then(|| {
+          text[..caret]
+            .char_indices()
+            .next_back()
+            .map(|(byte, _)| byte)
+            .unwrap_or(0)
+        })
       })
       .unwrap_or(caret);
     self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
@@ -1798,7 +1852,11 @@ impl RichTextEditor {
       if caret == 0 {
         return;
       }
-      let prev = paragraph.text[..caret].char_indices().next_back().map(|(byte, _)| byte).unwrap_or(0);
+      let prev = paragraph.text[..caret]
+        .char_indices()
+        .next_back()
+        .map(|(byte, _)| byte)
+        .unwrap_or(0);
       delete_range_in_table_cell_paragraph(paragraph, prev..caret);
     });
     self.table_cell_caret = new_caret;
@@ -1887,7 +1945,11 @@ impl RichTextEditor {
       return;
     };
     let mut updated = table.clone();
-    let Some(cell) = updated.rows.get_mut(row_ix).and_then(|row| row.cells.get_mut(cell_ix)) else {
+    let Some(cell) = updated
+      .rows
+      .get_mut(row_ix)
+      .and_then(|row| row.cells.get_mut(cell_ix))
+    else {
       return;
     };
     let paragraph_ix = cell
@@ -1895,7 +1957,9 @@ impl RichTextEditor {
       .iter()
       .position(|block| matches!(block, TableCellBlock::Paragraph(_)))
       .unwrap_or_else(|| {
-        cell.blocks.push(TableCellBlock::Paragraph(default_table_cell_paragraph()));
+        cell
+          .blocks
+          .push(TableCellBlock::Paragraph(default_table_cell_paragraph()));
         cell.blocks.len() - 1
       });
     let TableCellBlock::Paragraph(paragraph) = &mut cell.blocks[paragraph_ix] else {
@@ -1937,11 +2001,7 @@ impl RichTextEditor {
   ///
   /// The ribbon can call this generic method instead of matching each style to
   /// a shortcut-specific wrapper like `toggle_cite` or `toggle_emphasis`.
-  pub fn toggle_semantic_style_for_selection(
-    &mut self,
-    semantic: RunSemanticStyle,
-    cx: &mut Context<Self>,
-  ) {
+  pub fn toggle_semantic_style_for_selection(&mut self, semantic: RunSemanticStyle, cx: &mut Context<Self>) {
     if self.clear_matching_armed_inline_tool(ArmedInlineTool::Semantic(semantic), cx) {
       return;
     }
@@ -1975,11 +2035,7 @@ impl RichTextEditor {
   ///
   /// `None` clears highlights. `Some(...)` applies the requested highlight, or
   /// toggles it off when the whole selection already has that highlight.
-  pub fn set_highlight_for_selection(
-    &mut self,
-    highlight: Option<HighlightStyle>,
-    cx: &mut Context<Self>,
-  ) {
+  pub fn set_highlight_for_selection(&mut self, highlight: Option<HighlightStyle>, cx: &mut Context<Self>) {
     self.set_highlight_internal(highlight, cx);
   }
 
@@ -2471,11 +2527,7 @@ impl RichTextEditor {
     let mut ranges = vec![self.active_height_range(), self.predicted_visible_height_range(width)];
     if !self.visible_layout_range.is_empty() {
       let visible_paragraph_range = self.paragraph_range_for_block_range(self.visible_layout_range.clone());
-      ranges.push(expand_paragraph_range(
-        visible_paragraph_range,
-        self.document.paragraphs.len(),
-        2,
-      ));
+      ranges.push(expand_paragraph_range(visible_paragraph_range, self.document.paragraphs.len(), 2));
     }
 
     for range in ranges {
@@ -2573,7 +2625,10 @@ impl RichTextEditor {
   }
 
   fn document_layout_for_paragraph(&self, paragraph_ix: usize, width: Pixels) -> Option<LayoutState> {
-    let mut layout = self.cached_paragraph_layout(paragraph_ix, width)?.as_ref().clone();
+    let mut layout = self
+      .cached_paragraph_layout(paragraph_ix, width)?
+      .as_ref()
+      .clone();
     let viewport = self.scroll_handle.bounds();
     let row_top = if self.height_prefix_index.len() == self.document.blocks.len() {
       self
@@ -2592,13 +2647,15 @@ impl RichTextEditor {
 
   fn layout_for_offset(&self, offset: DocumentOffset) -> Option<LayoutState> {
     let width = self.current_layout_width();
-    self.document_layout_for_paragraph(offset.paragraph, width).or_else(|| {
-      self
-        .last_layout
-        .as_ref()
-        .filter(|layout| paragraph_layout(layout, offset.paragraph).is_some())
-        .map(|layout| layout.as_ref().clone())
-    })
+    self
+      .document_layout_for_paragraph(offset.paragraph, width)
+      .or_else(|| {
+        self
+          .last_layout
+          .as_ref()
+          .filter(|layout| paragraph_layout(layout, offset.paragraph).is_some())
+          .map(|layout| layout.as_ref().clone())
+      })
   }
 
   fn hit_test_cached_position(&self, position: Point<Pixels>) -> Option<DocumentOffset> {
@@ -2702,14 +2759,21 @@ impl RichTextEditor {
       | BlockSelection::TableCell { block_ix, .. } => block_ix,
     };
     let offset = match dir {
-      HDir::Left => self.paragraph_before_block(block_ix).map(|paragraph| DocumentOffset {
-        paragraph,
-        byte: paragraph_text_len(&self.document.paragraphs[paragraph]),
-      }),
-      HDir::Right => self.paragraph_after_block(block_ix).map(|paragraph| DocumentOffset { paragraph, byte: 0 }),
+      HDir::Left => self
+        .paragraph_before_block(block_ix)
+        .map(|paragraph| DocumentOffset {
+          paragraph,
+          byte: paragraph_text_len(&self.document.paragraphs[paragraph]),
+        }),
+      HDir::Right => self
+        .paragraph_after_block(block_ix)
+        .map(|paragraph| DocumentOffset { paragraph, byte: 0 }),
     };
     if let Some(offset) = offset {
-      self.selection = EditorSelection { anchor: offset, head: offset };
+      self.selection = EditorSelection {
+        anchor: offset,
+        head: offset,
+      };
       self.scroll_head_into_view();
       self.reset_caret_blink(cx);
       cx.notify();
@@ -2762,7 +2826,9 @@ impl RichTextEditor {
     let scroll_top = -self.scroll_handle.offset().y;
     let scroll_bottom = scroll_top + viewport_height + px(256.0);
     if self.height_prefix_index.len() == self.document.blocks.len() {
-      let start_block = self.height_prefix_index.lower_bound((scroll_top - px(256.0)).max(px(0.0)));
+      let start_block = self
+        .height_prefix_index
+        .lower_bound((scroll_top - px(256.0)).max(px(0.0)));
       let end_block = (self.height_prefix_index.lower_bound(scroll_bottom) + 1).min(self.document.blocks.len());
       let paragraph_range = self.paragraph_range_for_block_range(start_block..end_block.max(start_block + 1));
       if !paragraph_range.is_empty() {
@@ -2920,9 +2986,16 @@ impl RichTextEditor {
       return;
     }
     self.last_layout = Some(Rc::new(LayoutState {
-      blocks: paragraphs.iter().cloned().map(LaidOutBlock::Paragraph).collect(),
+      blocks: paragraphs
+        .iter()
+        .cloned()
+        .map(LaidOutBlock::Paragraph)
+        .collect(),
       paragraph_to_block: (0..paragraphs.len()).collect(),
-      block_to_paragraph: paragraphs.iter().map(|paragraph| Some(paragraph.index)).collect(),
+      block_to_paragraph: paragraphs
+        .iter()
+        .map(|paragraph| Some(paragraph.index))
+        .collect(),
       paragraphs,
       bounds: Some(Bounds::new(point(bounds.origin.x, px(0.0)), self.scroll_handle.content_size())),
       size: self.scroll_handle.content_size(),
@@ -3185,8 +3258,12 @@ impl RichTextEditor {
   }
 
   fn prepare_block_insertion_index(&mut self) -> usize {
-    if let Some(BlockSelection::Image(block_ix) | BlockSelection::Equation(block_ix) | BlockSelection::Table(block_ix) | BlockSelection::TableCell { block_ix, .. }) =
-      self.selected_block
+    if let Some(
+      BlockSelection::Image(block_ix)
+      | BlockSelection::Equation(block_ix)
+      | BlockSelection::Table(block_ix)
+      | BlockSelection::TableCell { block_ix, .. },
+    ) = self.selected_block
     {
       return (block_ix + 1).min(self.document.blocks.len());
     }
@@ -3269,8 +3346,7 @@ impl RichTextEditor {
   fn toggle_underline_kind(&mut self, explicit_direct: Option<bool>, cx: &mut Context<Self>) {
     if self.selection.is_caret() {
       let paragraph_style = self.document.paragraphs[self.selection.head.paragraph].style;
-      let direct =
-        explicit_direct.unwrap_or_else(|| matches!(paragraph_style, ParagraphStyle::Tag | ParagraphStyle::Analytic));
+      let direct = explicit_direct.unwrap_or_else(|| matches!(paragraph_style, ParagraphStyle::Tag | ParagraphStyle::Analytic));
       let mut styles = self.styles_at_caret();
       if direct {
         styles.direct_underline = !styles.direct_underline;
@@ -3405,7 +3481,9 @@ impl RichTextEditor {
       let head = self.selection.head;
       let object = match dir {
         HDir::Left if head.byte == 0 => self.immediate_object_before_paragraph(head.paragraph),
-        HDir::Right if head.byte == paragraph_text_len(&self.document.paragraphs[head.paragraph]) => self.immediate_object_after_paragraph(head.paragraph),
+        HDir::Right if head.byte == paragraph_text_len(&self.document.paragraphs[head.paragraph]) => {
+          self.immediate_object_after_paragraph(head.paragraph)
+        },
         _ => None,
       };
       if let Some(object) = object {
@@ -3604,16 +3682,14 @@ impl RichTextEditor {
       return DocumentOffset::default();
     }
     let viewport = self.scroll_handle.bounds();
-    let width = if viewport.size.width > px(1.0) {
-      viewport.size.width
-    } else {
-      px(900.0)
-    };
+    let width = if viewport.size.width > px(1.0) { viewport.size.width } else { px(900.0) };
     self.ensure_exact_interaction_paragraph_heights(width, window, cx);
     let content_y = (position.y - viewport.top() - self.scroll_handle.offset().y).max(px(0.0));
     let paragraph_ix = if self.height_prefix_index.len() == self.document.blocks.len() {
       let block_ix = self.height_prefix_index.lower_bound(content_y);
-      self.paragraph_ix_for_block(block_ix).unwrap_or(self.selection.head.paragraph.min(paragraph_count - 1))
+      self
+        .paragraph_ix_for_block(block_ix)
+        .unwrap_or(self.selection.head.paragraph.min(paragraph_count - 1))
     } else {
       self.selection.head.paragraph.min(paragraph_count - 1)
     };
@@ -3943,10 +4019,7 @@ impl RichTextEditor {
       self.move_rich_text_fragment(active_drag, drop, cx);
     } else if self.pending_text_drag.take().is_some() {
       let caret = self.hit_test_document_position(event.position, window, cx);
-      self.selection = EditorSelection {
-        anchor: caret,
-        head: caret,
-      };
+      self.selection = EditorSelection { anchor: caret, head: caret };
       self.scroll_head_into_view();
       self.reset_caret_blink(cx);
       cx.notify();
@@ -4318,7 +4391,11 @@ fn expand_paragraph_range(range: Range<usize>, paragraph_count: usize, padding: 
     return 0..0;
   }
   let start = range.start.saturating_sub(padding).min(paragraph_count);
-  let end = range.end.saturating_add(padding).min(paragraph_count).max(start);
+  let end = range
+    .end
+    .saturating_add(padding)
+    .min(paragraph_count)
+    .max(start);
   start..end
 }
 
@@ -4465,10 +4542,14 @@ fn render_image_block(
 ) -> gpui::AnyElement {
   let selected = selected_block == Some(BlockSelection::Image(block_ix));
   let Some(asset) = document.assets.assets.get(&image.asset_id) else {
-    return reserved_object_frame(document, row_size, selected).child("Missing image").into_any_element();
+    return reserved_object_frame(document, row_size, selected)
+      .child("Missing image")
+      .into_any_element();
   };
   let Some(format) = ImageFormat::from_mime_type(asset.mime_type.as_ref()) else {
-    return reserved_object_frame(document, row_size, selected).child("Unsupported image").into_any_element();
+    return reserved_object_frame(document, row_size, selected)
+      .child("Unsupported image")
+      .into_any_element();
   };
   let gpui_image = Image::from_bytes(format, asset.bytes.as_ref().clone());
   image_object_frame(document, image, asset, row_size, selected)
@@ -4477,7 +4558,13 @@ fn render_image_block(
         .size_full()
         .object_fit(gpui::ObjectFit::Contain)
         .with_loading(|| div().size_full().bg(rgb(0xffffff)).into_any_element())
-        .with_fallback(|| div().size_full().bg(rgb(0xffffff)).child("Image unavailable").into_any_element()),
+        .with_fallback(|| {
+          div()
+            .size_full()
+            .bg(rgb(0xffffff))
+            .child("Image unavailable")
+            .into_any_element()
+        }),
     )
     .into_any_element()
 }
@@ -4500,7 +4587,13 @@ fn render_equation_block(
             .size_full()
             .object_fit(gpui::ObjectFit::Contain)
             .with_loading(|| div().size_full().bg(rgb(0xffffff)).into_any_element())
-            .with_fallback(|| div().size_full().bg(rgb(0xffffff)).child("Equation unavailable").into_any_element()),
+            .with_fallback(|| {
+              div()
+                .size_full()
+                .bg(rgb(0xffffff))
+                .child("Equation unavailable")
+                .into_any_element()
+            }),
         )
         .into_any_element()
     },
@@ -4565,7 +4658,9 @@ fn image_object_frame(document: &Document, image: &ImageBlock, asset: &AssetReco
   let object_width = match image.sizing {
     ImageSizing::Fixed { width_px, .. } => px(width_px as f32).min(available_width),
     ImageSizing::FitWidth => available_width,
-    ImageSizing::Intrinsic => intrinsic.map(|(width, _)| width.min(available_width)).unwrap_or(available_width),
+    ImageSizing::Intrinsic => intrinsic
+      .map(|(width, _)| width.min(available_width))
+      .unwrap_or(available_width),
   };
   let object_height = (row_size.height - document.theme.paragraph_after).max(px(1.0));
   let left_margin = document.theme.pageless_inset_x
@@ -4597,7 +4692,9 @@ fn image_asset_intrinsic_size(asset: &AssetRecord) -> Option<(Pixels, Pixels)> {
 fn image_asset_from_path(path: &Path) -> Option<(AssetRecord, SharedString)> {
   let bytes = fs::read(path).ok()?;
   let format = image_format_for_path(path)?;
-  let original_name = path.file_name().map(|name| name.to_string_lossy().to_string());
+  let original_name = path
+    .file_name()
+    .map(|name| name.to_string_lossy().to_string());
   let alt_text: SharedString = original_name.clone().unwrap_or_default().into();
   let mut hasher = DefaultHasher::new();
   bytes.hash(&mut hasher);
@@ -4614,7 +4711,12 @@ fn image_asset_from_path(path: &Path) -> Option<(AssetRecord, SharedString)> {
 }
 
 fn image_format_for_path(path: &Path) -> Option<ImageFormat> {
-  match path.extension()?.to_string_lossy().to_ascii_lowercase().as_str() {
+  match path
+    .extension()?
+    .to_string_lossy()
+    .to_ascii_lowercase()
+    .as_str()
+  {
     "png" => Some(ImageFormat::Png),
     "jpg" | "jpeg" => Some(ImageFormat::Jpeg),
     "webp" => Some(ImageFormat::Webp),
@@ -4633,7 +4735,11 @@ fn block_fragment_plain_text(fragment: &RichClipboardFragment) -> String {
     .map(|block| match block {
       InputBlock::Paragraph(paragraph) => input_paragraph_text(paragraph),
       InputBlock::Image(image) => {
-        if image.alt_text.is_empty() { "[Image]".to_string() } else { image.alt_text.clone() }
+        if image.alt_text.is_empty() {
+          "[Image]".to_string()
+        } else {
+          image.alt_text.clone()
+        }
       },
       InputBlock::Equation(equation) => equation.source.clone(),
       InputBlock::Table(table) => table_plain_text(table),

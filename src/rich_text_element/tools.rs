@@ -23,11 +23,7 @@ impl RichTextEditor {
   /// If text is selected, the tool is applied immediately and is not armed. If
   /// the caret is empty, the tool is armed for future mouse selections and also
   /// updates pending caret styles so typed text follows the selected style.
-  pub fn activate_inline_tool(
-    &mut self,
-    tool: ArmedInlineTool,
-    cx: &mut Context<Self>,
-  ) {
+  pub fn activate_inline_tool(&mut self, tool: ArmedInlineTool, cx: &mut Context<Self>) {
     if matches!(self.selected_block, Some(BlockSelection::TableCell { .. })) {
       self.armed_inline_tool = None;
       self.force_apply_inline_tool_to_current_target(tool, cx);
@@ -50,11 +46,7 @@ impl RichTextEditor {
   /// When the caret has an armed tool, choosing the same tool again should
   /// disarm it and undo the pending caret style. With selected text this keeps
   /// the existing document-style toggle behavior.
-  pub fn toggle_inline_tool(
-    &mut self,
-    tool: ArmedInlineTool,
-    cx: &mut Context<Self>,
-  ) {
+  pub fn toggle_inline_tool(&mut self, tool: ArmedInlineTool, cx: &mut Context<Self>) {
     if self.selection.is_caret() && self.armed_inline_tool == Some(tool) {
       self.armed_inline_tool = None;
       self.apply_inline_tool_to_pending_styles(tool);
@@ -66,11 +58,7 @@ impl RichTextEditor {
     self.activate_inline_tool(tool, cx);
   }
 
-  pub fn clear_matching_armed_inline_tool(
-    &mut self,
-    tool: ArmedInlineTool,
-    cx: &mut Context<Self>,
-  ) -> bool {
+  pub fn clear_matching_armed_inline_tool(&mut self, tool: ArmedInlineTool, cx: &mut Context<Self>) -> bool {
     if self.selection.is_caret() && self.armed_inline_tool == Some(tool) {
       self.armed_inline_tool = None;
       self.apply_inline_tool_to_pending_styles(tool);
@@ -106,11 +94,7 @@ impl RichTextEditor {
     self.pending_styles = Some(styles);
   }
 
-  fn apply_inline_tool_to_selection_with_current_behavior(
-    &mut self,
-    tool: ArmedInlineTool,
-    cx: &mut Context<Self>,
-  ) {
+  fn apply_inline_tool_to_selection_with_current_behavior(&mut self, tool: ArmedInlineTool, cx: &mut Context<Self>) {
     match tool {
       ArmedInlineTool::Semantic(semantic) => self.toggle_semantic_style_for_selection(semantic, cx),
       ArmedInlineTool::Underline => self.toggle_underline(cx),
@@ -155,11 +139,7 @@ impl RichTextEditor {
   }
 }
 
-fn apply_inline_tool_to_caret_styles(
-  editor: &RichTextEditor,
-  tool: ArmedInlineTool,
-  styles: &mut RunStyles,
-) {
+fn apply_inline_tool_to_caret_styles(editor: &RichTextEditor, tool: ArmedInlineTool, styles: &mut RunStyles) {
   match tool {
     ArmedInlineTool::Semantic(semantic) => {
       styles.semantic = if styles.semantic == semantic {
@@ -184,11 +164,7 @@ fn apply_inline_tool_to_caret_styles(
       }
     },
     ArmedInlineTool::Highlight(highlight) => {
-      styles.highlight = if styles.highlight == Some(highlight) {
-        None
-      } else {
-        Some(highlight)
-      };
+      styles.highlight = if styles.highlight == Some(highlight) { None } else { Some(highlight) };
     },
   }
 }

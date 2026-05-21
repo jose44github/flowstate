@@ -73,7 +73,10 @@ fn smart_mouse_selection_snaps_across_words_but_not_inside_one_word() {
   let snapped = expand_mouse_selection(
     &document,
     DocumentOffset { paragraph: 0, byte: 2 },
-    DocumentOffset { paragraph: 0, byte: "alpha be".len() },
+    DocumentOffset {
+      paragraph: 0,
+      byte: "alpha be".len(),
+    },
     SelectionGranularity::Character,
     smart,
   )
@@ -84,7 +87,10 @@ fn smart_mouse_selection_snaps_across_words_but_not_inside_one_word() {
   let after_first_word = expand_mouse_selection(
     &document,
     DocumentOffset { paragraph: 0, byte: 2 },
-    DocumentOffset { paragraph: 0, byte: "alpha".len() },
+    DocumentOffset {
+      paragraph: 0,
+      byte: "alpha".len(),
+    },
     SelectionGranularity::Character,
     smart,
   )
@@ -106,7 +112,10 @@ fn exact_mouse_selection_override_avoids_word_snapping() {
   let selection = expand_mouse_selection(
     &document,
     DocumentOffset { paragraph: 0, byte: 2 },
-    DocumentOffset { paragraph: 0, byte: "alpha be".len() },
+    DocumentOffset {
+      paragraph: 0,
+      byte: "alpha be".len(),
+    },
     SelectionGranularity::Character,
     MouseSelectionOptions {
       smart_word_selection: true,
@@ -132,7 +141,10 @@ fn mouse_selection_can_disable_smart_word_snapping() {
   let selection = expand_mouse_selection(
     &document,
     DocumentOffset { paragraph: 0, byte: 2 },
-    DocumentOffset { paragraph: 0, byte: "alpha be".len() },
+    DocumentOffset {
+      paragraph: 0,
+      byte: "alpha be".len(),
+    },
     SelectionGranularity::Character,
     MouseSelectionOptions {
       smart_word_selection: false,
@@ -182,7 +194,12 @@ fn db8_round_trip_preserves_text_structure_and_styles() {
   );
   assert_eq!(document.paragraphs.len(), loaded.paragraphs.len());
   // Verify styles and run structure for every paragraph, not just the first.
-  for (ix, (orig, loaded_para)) in document.paragraphs.iter().zip(loaded.paragraphs.iter()).enumerate() {
+  for (ix, (orig, loaded_para)) in document
+    .paragraphs
+    .iter()
+    .zip(loaded.paragraphs.iter())
+    .enumerate()
+  {
     assert_eq!(orig.style, loaded_para.style, "paragraph {ix} style mismatch");
     assert_eq!(orig.runs, loaded_para.runs, "paragraph {ix} runs mismatch");
   }
@@ -216,7 +233,13 @@ fn split_and_merge_preserve_empty_styled_paragraphs() {
   );
   assert_eq!(document.paragraphs.len(), 1);
   assert_eq!(paragraph_text(&document, 0), "Pocket");
-  assert_eq!(document.paragraphs[0].runs, vec![TextRun { len: "Pocket".len(), styles: spoken }]);
+  assert_eq!(
+    document.paragraphs[0].runs,
+    vec![TextRun {
+      len: "Pocket".len(),
+      styles: spoken
+    }]
+  );
 }
 
 #[test]
@@ -385,7 +408,12 @@ fn paragraph_sync_preserves_non_text_blocks_when_paragraphs_are_removed() {
   );
 
   assert_eq!(document.paragraphs.len(), 1);
-  assert!(document.blocks.iter().any(|block| matches!(block, Block::Image(_))));
+  assert!(
+    document
+      .blocks
+      .iter()
+      .any(|block| matches!(block, Block::Image(_)))
+  );
 }
 
 #[test]
@@ -438,15 +466,16 @@ fn deleting_empty_paragraph_above_image_keeps_image_before_next_paragraph() {
 
 fn test_png_2x1() -> Vec<u8> {
   vec![
-    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0,
-    0, 0, 12, 73, 68, 65, 84, 8, 29, 99, 248, 15, 4, 0, 9, 251, 3, 253, 167, 170, 43, 113, 0, 0, 0, 0, 73, 69, 78, 68, 174,
-    66, 96, 130,
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 2, 0, 0, 0, 1, 8, 6, 0, 0, 0, 244, 34, 127, 138, 0, 0, 0, 12, 73, 68,
+    65, 84, 8, 29, 99, 248, 15, 4, 0, 9, 251, 3, 253, 167, 170, 43, 113, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
   ]
 }
 
 #[test]
 fn db8_v4_round_trip_preserves_table_cell_paragraph_and_run_styles() {
-  let emphasized = RunStyles::default().with(RunStyle::Emphasis).with(RunStyle::HighlightSpoken);
+  let emphasized = RunStyles::default()
+    .with(RunStyle::Emphasis)
+    .with(RunStyle::HighlightSpoken);
   let cell_paragraph = Paragraph {
     style: ParagraphStyle::Tag,
     byte_range: 0.."cell".len(),
@@ -514,10 +543,7 @@ fn block_delete_operation_undo_redo_preserves_non_text_block() {
     display: EquationDisplay::Display,
     version: 0,
   });
-  document.blocks = std::sync::Arc::new(vec![
-    Block::Paragraph(document.paragraphs[0].clone()),
-    equation.clone(),
-  ]);
+  document.blocks = std::sync::Arc::new(vec![Block::Paragraph(document.paragraphs[0].clone()), equation.clone()]);
 
   let op = EditOperation::DeleteBlock {
     block_ix: 1,
@@ -619,11 +645,7 @@ fn replace_block_operation_undo_redo_preserves_table_shape_changes() {
   table.version = 1;
   document.blocks = std::sync::Arc::new(vec![Block::Paragraph(document.paragraphs[0].clone()), before.clone()]);
 
-  let op = EditOperation::ReplaceBlock {
-    block_ix: 1,
-    before,
-    after,
-  };
+  let op = EditOperation::ReplaceBlock { block_ix: 1, before, after };
   op.redo(&mut document);
   let Block::Table(table) = &document.blocks[1] else {
     panic!("expected table");
@@ -681,11 +703,7 @@ fn table_cell_text_edit_is_a_replace_block_history_operation() {
     }],
   );
   document.blocks = std::sync::Arc::new(vec![Block::Paragraph(document.paragraphs[0].clone()), before.clone()]);
-  let op = EditOperation::ReplaceBlock {
-    block_ix: 1,
-    before,
-    after,
-  };
+  let op = EditOperation::ReplaceBlock { block_ix: 1, before, after };
   op.redo(&mut document);
   let Block::Table(table) = &document.blocks[1] else {
     panic!("expected table");
@@ -726,11 +744,7 @@ fn replace_block_operation_undo_redo_preserves_equation_source_changes() {
     version: 1,
   });
   document.blocks = std::sync::Arc::new(vec![Block::Paragraph(document.paragraphs[0].clone()), before.clone()]);
-  let op = EditOperation::ReplaceBlock {
-    block_ix: 1,
-    before,
-    after,
-  };
+  let op = EditOperation::ReplaceBlock { block_ix: 1, before, after };
   op.redo(&mut document);
   let Block::Equation(equation) = &document.blocks[1] else {
     panic!("expected equation");
@@ -776,10 +790,7 @@ fn default_inserted_table_shape_round_trips_through_db8() {
     style: TableStyle { header_row: false },
     version: 0,
   });
-  document.blocks = std::sync::Arc::new(vec![
-    Block::Paragraph(document.paragraphs[0].clone()),
-    table,
-  ]);
+  document.blocks = std::sync::Arc::new(vec![Block::Paragraph(document.paragraphs[0].clone()), table]);
 
   let path = std::env::temp_dir().join(format!("debateprocessor-default-table-{}.db8", uuid::Uuid::new_v4()));
   write_db8(&path, &document).unwrap();
@@ -871,13 +882,7 @@ fn double_click_empty_paragraph_selects_only_empty_paragraph() {
     ],
   );
 
-  let selection = selection_for_word_at(
-    &document,
-    DocumentOffset {
-      paragraph: 1,
-      byte: 0,
-    },
-  );
+  let selection = selection_for_word_at(&document, DocumentOffset { paragraph: 1, byte: 0 });
 
   assert_eq!(
     selection,
@@ -917,7 +922,12 @@ fn selection_across_empty_paragraphs_and_clear_formatting_policy() {
 
   for paragraph in document.paragraphs.iter() {
     assert_eq!(paragraph.style, ParagraphStyle::Normal);
-    assert!(paragraph.runs.iter().all(|run| run.styles == RunStyles::default()));
+    assert!(
+      paragraph
+        .runs
+        .iter()
+        .all(|run| run.styles == RunStyles::default())
+    );
   }
 }
 
@@ -968,7 +978,12 @@ fn db8_round_trip_preserves_condensed_semantic_styles() {
       style: ParagraphStyle::Normal,
       runs: vec![
         run("condensed", RunStyles::default().with(RunStyle::Condensed)),
-        run(" ultra", RunStyles::default().with(RunStyle::Ultracondensed).with(RunStyle::HighlightSpoken)),
+        run(
+          " ultra",
+          RunStyles::default()
+            .with(RunStyle::Ultracondensed)
+            .with(RunStyle::HighlightSpoken),
+        ),
       ],
     }],
   );
@@ -1069,9 +1084,18 @@ fn move_rich_text_operation_undo_redo_restores_source_and_drop() {
       },
     ],
   );
-  let source = DocumentOffset { paragraph: 0, byte: "abc ".len() }..DocumentOffset { paragraph: 0, byte: "abc MOVE".len() };
+  let source = DocumentOffset {
+    paragraph: 0,
+    byte: "abc ".len(),
+  }..DocumentOffset {
+    paragraph: 0,
+    byte: "abc MOVE".len(),
+  };
   let fragment = selected_rich_fragment(&document, source.clone());
-  let drop = DocumentOffset { paragraph: 1, byte: "tar".len() };
+  let drop = DocumentOffset {
+    paragraph: 1,
+    byte: "tar".len(),
+  };
   let adjusted_drop = adjust_drop_after_source_delete(drop, source.clone());
   delete_cross_paragraph_range(&mut document, source.clone());
   let inserted_end = insert_rich_fragment_at(&mut document, adjusted_drop, &fragment);
@@ -1084,17 +1108,32 @@ fn move_rich_text_operation_undo_redo_restores_source_and_drop() {
 
   assert_eq!(paragraph_text(&document, 0), "abc  def");
   assert_eq!(paragraph_text(&document, 1), "tarMOVEget");
-  assert!(document.paragraphs[1].runs.iter().any(|run| run.styles.semantic == RunSemanticStyle::Emphasis));
+  assert!(
+    document.paragraphs[1]
+      .runs
+      .iter()
+      .any(|run| run.styles.semantic == RunSemanticStyle::Emphasis)
+  );
 
   operation.undo(&mut document);
   assert_eq!(paragraph_text(&document, 0), "abc MOVE def");
   assert_eq!(paragraph_text(&document, 1), "target");
-  assert!(document.paragraphs[0].runs.iter().any(|run| run.styles.semantic == RunSemanticStyle::Emphasis));
+  assert!(
+    document.paragraphs[0]
+      .runs
+      .iter()
+      .any(|run| run.styles.semantic == RunSemanticStyle::Emphasis)
+  );
 
   operation.redo(&mut document);
   assert_eq!(paragraph_text(&document, 0), "abc  def");
   assert_eq!(paragraph_text(&document, 1), "tarMOVEget");
-  assert!(document.paragraphs[1].runs.iter().any(|run| run.styles.semantic == RunSemanticStyle::Emphasis));
+  assert!(
+    document.paragraphs[1]
+      .runs
+      .iter()
+      .any(|run| run.styles.semantic == RunSemanticStyle::Emphasis)
+  );
 }
 
 #[test]
@@ -1140,9 +1179,27 @@ fn find_text_ranges_returns_document_offsets_across_paragraphs() {
   let matches = find_text_ranges(&document, "alpha");
   assert_eq!(matches.len(), 2);
   assert_eq!(matches[0].start, DocumentOffset { paragraph: 0, byte: 0 });
-  assert_eq!(matches[0].end, DocumentOffset { paragraph: 0, byte: "alpha".len() });
-  assert_eq!(matches[1].start, DocumentOffset { paragraph: 1, byte: "beta ".len() });
-  assert_eq!(matches[1].end, DocumentOffset { paragraph: 1, byte: "beta alpha".len() });
+  assert_eq!(
+    matches[0].end,
+    DocumentOffset {
+      paragraph: 0,
+      byte: "alpha".len()
+    }
+  );
+  assert_eq!(
+    matches[1].start,
+    DocumentOffset {
+      paragraph: 1,
+      byte: "beta ".len()
+    }
+  );
+  assert_eq!(
+    matches[1].end,
+    DocumentOffset {
+      paragraph: 1,
+      byte: "beta alpha".len()
+    }
+  );
 }
 
 #[test]

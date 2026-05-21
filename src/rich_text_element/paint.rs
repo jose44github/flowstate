@@ -87,7 +87,11 @@ pub(super) fn paint_layout(
     caret.size.width = caret_width;
     window.paint_quad(fill(snap_vertical_rule_to_device_pixels(caret, window), black()));
   }
-  log_timing("paint layout", timing, format!("blocks={} visible_paragraphs={visible_count}", layout.block_count()));
+  log_timing(
+    "paint layout",
+    timing,
+    format!("blocks={} visible_paragraphs={visible_count}", layout.block_count()),
+  );
 }
 
 pub(super) fn paint_structural_block(
@@ -128,7 +132,11 @@ fn paint_object_block(
     Background::from(if selected { rgb(0x0969da) } else { rgb(0xb7b7b7) }),
   ));
   window.paint_quad(fill(
-    snap_rule_bounds(Bounds::new(point(bounds.origin.x, bounds.bottom() - px(1.0)), size(bounds.size.width, px(1.0))), RuleSnap::Horizontal, window),
+    snap_rule_bounds(
+      Bounds::new(point(bounds.origin.x, bounds.bottom() - px(1.0)), size(bounds.size.width, px(1.0))),
+      RuleSnap::Horizontal,
+      window,
+    ),
     Background::from(if selected { rgb(0x0969da) } else { rgb(0xb7b7b7) }),
   ));
 }
@@ -160,7 +168,10 @@ fn paint_table_block(
         Some(BlockSelection::TableCell { block_ix, row_ix: selected_row, cell_ix: selected_cell })
           if block_ix == table.block_ix && selected_row == row_ix && selected_cell == cell_ix
       );
-      window.paint_quad(fill(cell_bounds, Background::from(if cell_selected { rgb(0xeaf4ff) } else { rgb(0xffffff) })));
+      window.paint_quad(fill(
+        cell_bounds,
+        Background::from(if cell_selected { rgb(0xeaf4ff) } else { rgb(0xffffff) }),
+      ));
       paint_table_cell_rules(cell_bounds, selected || cell_selected, window);
       for block in &cell.blocks {
         match block {
@@ -177,25 +188,33 @@ fn paint_table_block(
 fn paint_table_cell_rules(bounds: Bounds<Pixels>, selected: bool, window: &mut Window) {
   let color = if selected { rgb(0x0969da) } else { rgb(0x808080) };
   let background = Background::from(color);
-  window.paint_quad(fill(snap_rule_bounds(Bounds::new(bounds.origin, size(bounds.size.width, px(1.0))), RuleSnap::Horizontal, window), background));
   window.paint_quad(fill(
-    snap_rule_bounds(Bounds::new(point(bounds.origin.x, bounds.bottom() - px(1.0)), size(bounds.size.width, px(1.0))), RuleSnap::Horizontal, window),
+    snap_rule_bounds(Bounds::new(bounds.origin, size(bounds.size.width, px(1.0))), RuleSnap::Horizontal, window),
     background,
   ));
-  window.paint_quad(fill(snap_rule_bounds(Bounds::new(bounds.origin, size(px(1.0), bounds.size.height)), RuleSnap::Vertical, window), background));
   window.paint_quad(fill(
-    snap_rule_bounds(Bounds::new(point(bounds.right() - px(1.0), bounds.origin.y), size(px(1.0), bounds.size.height)), RuleSnap::Vertical, window),
+    snap_rule_bounds(
+      Bounds::new(point(bounds.origin.x, bounds.bottom() - px(1.0)), size(bounds.size.width, px(1.0))),
+      RuleSnap::Horizontal,
+      window,
+    ),
+    background,
+  ));
+  window.paint_quad(fill(
+    snap_rule_bounds(Bounds::new(bounds.origin, size(px(1.0), bounds.size.height)), RuleSnap::Vertical, window),
+    background,
+  ));
+  window.paint_quad(fill(
+    snap_rule_bounds(
+      Bounds::new(point(bounds.right() - px(1.0), bounds.origin.y), size(px(1.0), bounds.size.height)),
+      RuleSnap::Vertical,
+      window,
+    ),
     background,
   ));
 }
 
-fn paint_table_paragraph(
-  paragraph: &LaidOutParagraph,
-  origin: Point<Pixels>,
-  content_mask: Bounds<Pixels>,
-  window: &mut Window,
-  cx: &mut App,
-) {
+fn paint_table_paragraph(paragraph: &LaidOutParagraph, origin: Point<Pixels>, content_mask: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
   for line in &paragraph.lines {
     if line_intersects_mask(line, origin, content_mask) {
       paint_line_text(line, origin + line.origin, content_mask, window, cx);
@@ -206,7 +225,10 @@ fn paint_table_paragraph(
       continue;
     }
     for underline in &line.underlines {
-      window.paint_quad(fill(snap_horizontal_rule_to_device_pixels(underline.bounds.shift(origin + line.origin), window), Background::from(underline.color)));
+      window.paint_quad(fill(
+        snap_horizontal_rule_to_device_pixels(underline.bounds.shift(origin + line.origin), window),
+        Background::from(underline.color),
+      ));
     }
   }
 }

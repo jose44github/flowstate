@@ -5,14 +5,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{COMMAND_SPECS, CommandId};
 use crate::rich_text_element::{
-  Backspace, ClearFormatting, ClearHighlight, Copy, Cut, Delete, DeleteWordBackward,
-  DeleteWordForward, InsertEquation, InsertImage, InsertNewline, InsertSoftLineBreak, InsertTable, MoveDocumentEnd, MoveDocumentStart,
-  MoveDown, MoveLeft, MoveLineEnd, MoveLineStart, MoveRight, MoveUp, MoveWordLeft,
-  MoveWordRight, PageDown, PageUp, Paste, Redo, Save, SelectAll, SelectDocumentEnd,
-  SelectDocumentStart, SelectDown, SelectLeft, SelectLineEnd, SelectLineStart, SelectPageDown,
-  SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight, SetHighlightSpoken,
-  SetParagraphAnalytic, SetParagraphBlock, SetParagraphHat, SetParagraphPocket,
-  SetParagraphTag, ToggleCite, ToggleEmphasis, ToggleUnderline, Undo,
+  Backspace, ClearFormatting, ClearHighlight, Copy, Cut, Delete, DeleteWordBackward, DeleteWordForward, InsertEquation, InsertImage,
+  InsertNewline, InsertSoftLineBreak, InsertTable, MoveDocumentEnd, MoveDocumentStart, MoveDown, MoveLeft, MoveLineEnd, MoveLineStart,
+  MoveRight, MoveUp, MoveWordLeft, MoveWordRight, PageDown, PageUp, Paste, Redo, Save, SelectAll, SelectDocumentEnd, SelectDocumentStart,
+  SelectDown, SelectLeft, SelectLineEnd, SelectLineStart, SelectPageDown, SelectPageUp, SelectRight, SelectUp, SelectWordLeft, SelectWordRight,
+  SetHighlightSpoken, SetParagraphAnalytic, SetParagraphBlock, SetParagraphHat, SetParagraphPocket, SetParagraphTag, ToggleCite, ToggleEmphasis,
+  ToggleUnderline, Undo,
 };
 
 /// A complete keymap that can later be loaded from a structured user file.

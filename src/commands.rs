@@ -114,8 +114,18 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
   CommandSpec::new(CommandId::SelectAll, "Select All", EDITOR, &["cmd-a", "ctrl-a"]),
   CommandSpec::new(CommandId::MoveWordLeft, "Move Word Left", EDITOR, &["ctrl-left", "alt-left"]),
   CommandSpec::new(CommandId::MoveWordRight, "Move Word Right", EDITOR, &["ctrl-right", "alt-right"]),
-  CommandSpec::new(CommandId::SelectWordLeft, "Select Word Left", EDITOR, &["ctrl-shift-left", "alt-shift-left"]),
-  CommandSpec::new(CommandId::SelectWordRight, "Select Word Right", EDITOR, &["ctrl-shift-right", "alt-shift-right"]),
+  CommandSpec::new(
+    CommandId::SelectWordLeft,
+    "Select Word Left",
+    EDITOR,
+    &["ctrl-shift-left", "alt-shift-left"],
+  ),
+  CommandSpec::new(
+    CommandId::SelectWordRight,
+    "Select Word Right",
+    EDITOR,
+    &["ctrl-shift-right", "alt-shift-right"],
+  ),
   CommandSpec::new(CommandId::DeleteWordBackward, "Delete Word Backward", EDITOR, &["ctrl-backspace"]),
   CommandSpec::new(CommandId::DeleteWordForward, "Delete Word Forward", EDITOR, &["ctrl-delete"]),
   CommandSpec::new(CommandId::PageUp, "Page Up", EDITOR, &["pageup"]),
@@ -163,9 +173,13 @@ pub fn command_spec(id: CommandId) -> Option<&'static CommandSpec> {
 }
 
 pub fn default_keys_for(id: CommandId) -> &'static [&'static str] {
-  command_spec(id).map(|spec| spec.default_keys).unwrap_or(&[])
+  command_spec(id)
+    .map(|spec| spec.default_keys)
+    .unwrap_or(&[])
 }
 
 pub fn label_for(id: CommandId) -> &'static str {
-  command_spec(id).map(|spec| spec.label).unwrap_or("Unknown Command")
+  command_spec(id)
+    .map(|spec| spec.label)
+    .unwrap_or("Unknown Command")
 }
