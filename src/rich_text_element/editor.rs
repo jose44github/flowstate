@@ -12,7 +12,7 @@ use std::{
 
 use crop::Rope;
 use gpui::{
-  App, Bounds, ClipboardEntry, ClipboardItem, Context, CursorStyle, ExternalPaths, FocusHandle, Focusable, Image, ImageFormat,
+  App, Bounds, ClipboardEntry, ClipboardItem, Context, CursorStyle, Entity, ExternalPaths, FocusHandle, Focusable, Image, ImageFormat,
   InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels, Point,
   Render, ScrollStrategy, SharedString, Size, Subscription, Timer, Window, actions, div, img, point, prelude::*, px, rgb, size,
 };
@@ -373,11 +373,66 @@ struct ActiveTextDrag {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ImageResizeHandle {
+  Left,
+  Right,
+  TopLeft,
+  TopRight,
+  BottomLeft,
+  BottomRight,
+}
+
+impl ImageResizeHandle {
+  fn horizontal_sign(self) -> f32 {
+    match self {
+      Self::Left | Self::TopLeft | Self::BottomLeft => -1.0,
+      Self::Right | Self::TopRight | Self::BottomRight => 1.0,
+    }
+  }
+}
+
+#[derive(Clone)]
+struct ImageResizeDrag {
+  block_ix: usize,
+  start_position: Point<Pixels>,
+  start_width: Pixels,
+  handle: ImageResizeHandle,
+  before: ImageBlock,
+}
+
+#[derive(Clone)]
+struct TableColumnResizeDrag {
+  block_ix: usize,
+  column_ix: usize,
+  start_position: Point<Pixels>,
+  start_widths: Vec<u32>,
+  before: TableBlock,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BlockSelection {
   Image(usize),
   Equation(usize),
   Table(usize),
   TableCell { block_ix: usize, row_ix: usize, cell_ix: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TableCellCaret {
+  pub(super) block_ix: usize,
+  pub(super) row_ix: usize,
+  pub(super) cell_ix: usize,
+  pub(super) paragraph_block_ix: usize,
+  pub(super) anchor: usize,
+  pub(super) byte: usize,
+  pub(super) caret_visible: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EquationSourceSelection {
+  anchor: usize,
+  caret: usize,
+  caret_visible: bool,
 }
 
 #[derive(Default)]
@@ -482,8 +537,14 @@ pub struct RichTextEditor {
   last_drag_position: Option<Point<Pixels>>,
   pending_text_drag: Option<PendingTextDrag>,
   active_text_drag: Option<ActiveTextDrag>,
+  image_resize_drag: Option<ImageResizeDrag>,
+  table_column_resize_drag: Option<TableColumnResizeDrag>,
   pub(super) selected_block: Option<BlockSelection>,
+  table_cell_block_ix: usize,
+  table_cell_anchor: usize,
   table_cell_caret: usize,
+  equation_source_anchor: usize,
+  equation_source_caret: usize,
   autoscroll_active: bool,
   pub(super) caret_visible: bool,
   caret_blink_active: bool,
@@ -540,8 +601,14 @@ impl RichTextEditor {
       last_drag_position: None,
       pending_text_drag: None,
       active_text_drag: None,
+      image_resize_drag: None,
+      table_column_resize_drag: None,
       selected_block: None,
+      table_cell_block_ix: 0,
+      table_cell_anchor: 0,
       table_cell_caret: 0,
+      equation_source_anchor: 0,
+      equation_source_caret: 0,
       autoscroll_active: false,
       caret_visible: true,
       caret_blink_active: false,
@@ -584,14 +651,29 @@ impl RichTextEditor {
   }
 
   fn select_block(&mut self, selection: BlockSelection, cx: &mut Context<Self>) {
+    let block_ix = match selection {
+      BlockSelection::Image(block_ix)
+      | BlockSelection::Equation(block_ix)
+      | BlockSelection::Table(block_ix)
+      | BlockSelection::TableCell { block_ix, .. } => block_ix,
+    };
     self.selected_block = Some(selection);
+    self.table_cell_block_ix = 0;
     self.table_cell_caret = self
       .selected_table_cell_text()
       .map(|text| text.len())
       .unwrap_or(0);
+    self.table_cell_anchor = self.table_cell_caret;
+    let equation_source_len = self
+      .selected_equation_source()
+      .map(|source| source.len())
+      .unwrap_or(0);
+    self.equation_source_caret = equation_source_len;
+    self.equation_source_anchor = equation_source_len;
     self.selecting = false;
     self.pending_text_drag = None;
     self.active_text_drag = None;
+    self.scroll_block_into_view(block_ix);
     cx.notify();
   }
 
@@ -603,10 +685,22 @@ impl RichTextEditor {
     window: &mut Window,
     cx: &mut Context<Self>,
   ) {
-    let selection = self
-      .table_cell_selection_at(block_ix, position, window, cx)
-      .unwrap_or(fallback);
-    self.select_block(selection, cx);
+    window.focus(&self.focus_handle);
+    if let Some((selection, paragraph_block_ix, byte)) = self.table_cell_selection_at(block_ix, position, window, cx) {
+      self.selected_block = Some(selection);
+      self.table_cell_block_ix = paragraph_block_ix;
+      self.table_cell_anchor = byte;
+      self.table_cell_caret = byte;
+      self.selecting = false;
+      self.drag_anchor = None;
+      self.pending_text_drag = None;
+      self.active_text_drag = None;
+      self.goal_x = None;
+      self.reset_caret_blink(cx);
+      cx.notify();
+    } else {
+      self.select_block(fallback, cx);
+    }
   }
 
   fn table_cell_selection_at(
@@ -615,7 +709,7 @@ impl RichTextEditor {
     position: Point<Pixels>,
     window: &mut Window,
     cx: &mut Context<Self>,
-  ) -> Option<BlockSelection> {
+  ) -> Option<(BlockSelection, usize, usize)> {
     let Block::Table(_) = self.document.blocks.get(block_ix)? else {
       return None;
     };
@@ -630,11 +724,150 @@ impl RichTextEditor {
     for (row_ix, row) in table.rows.iter().enumerate() {
       for (cell_ix, cell) in row.cells.iter().enumerate() {
         if cell.bounds.contains(&document_point) {
-          return Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix });
+          let selection = BlockSelection::TableCell { block_ix, row_ix, cell_ix };
+          let mut fallback = (selection, 0, 0);
+          for block in &cell.blocks {
+            if let LaidOutBlock::Paragraph(paragraph) = block {
+              fallback = (selection, paragraph.index, paragraph.len);
+              if document_point.y <= paragraph.bottom {
+                let offset = paragraph.hit_test(document_point);
+                return Some((selection, paragraph.index, offset.byte));
+              }
+            }
+          }
+          return Some(fallback);
         }
       }
     }
     None
+  }
+
+  fn start_table_column_resize_if_hit(&mut self, block_ix: usize, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    let Some((column_ix, widths, before)) = self.table_column_resize_hit_at(block_ix, position, window, cx) else {
+      return false;
+    };
+    window.focus(&self.focus_handle);
+    self.selected_block = Some(BlockSelection::Table(block_ix));
+    self.table_column_resize_drag = Some(TableColumnResizeDrag {
+      block_ix,
+      column_ix,
+      start_position: position,
+      start_widths: widths,
+      before,
+    });
+    self.selecting = false;
+    self.pending_text_drag = None;
+    self.active_text_drag = None;
+    self.goal_x = None;
+    cx.notify();
+    true
+  }
+
+  fn table_column_resize_hit_at(
+    &mut self,
+    block_ix: usize,
+    position: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Option<(usize, Vec<u32>, TableBlock)> {
+    let Block::Table(table) = self.document.blocks.get(block_ix)?.clone() else {
+      return None;
+    };
+    let width = self.current_layout_width();
+    let block_top = self.block_top_for_index(block_ix)?;
+    let layout = layout_structural_block_at(&self.document, block_ix, width, block_top, window, cx)?;
+    let LaidOutBlock::Table(laid_out) = layout else {
+      return None;
+    };
+    let viewport = self.scroll_handle.bounds();
+    let document_point = point(position.x - viewport.left(), position.y - viewport.top() - self.scroll_handle.offset().y);
+    if !laid_out.bounds.contains(&document_point) {
+      return None;
+    }
+
+    let tolerance = 5.0;
+    let first_row = laid_out.rows.first()?;
+    let data_row = table.rows.first()?;
+    let mut logical_column_ix = 0usize;
+    for (cell_ix, cell_layout) in first_row.cells.iter().enumerate() {
+      let span = data_row
+        .cells
+        .get(cell_ix)
+        .map(|cell| cell.col_span.max(1) as usize)
+        .unwrap_or(1);
+      let border_column_ix = logical_column_ix.saturating_add(span).saturating_sub(1);
+      let delta: f32 = (document_point.x - cell_layout.bounds.right()).into();
+      if delta.abs() <= tolerance && border_column_ix < table_column_count(&table) {
+        return Some((border_column_ix, fixed_table_column_widths_from_layout(&table, &laid_out), table));
+      }
+      logical_column_ix = logical_column_ix.saturating_add(span);
+    }
+    None
+  }
+
+  fn update_table_column_resize_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+    let Some(drag) = self.table_column_resize_drag.clone() else {
+      return false;
+    };
+    let Some(Block::Table(table)) = Arc::make_mut(&mut self.document.blocks).get_mut(drag.block_ix) else {
+      self.table_column_resize_drag = None;
+      return true;
+    };
+    let delta: f32 = (position.x - drag.start_position.x).into();
+    let column_count = drag
+      .start_widths
+      .len()
+      .max(table_column_count(table))
+      .max(1);
+    while table.column_widths.len() < column_count {
+      table.column_widths.push(TableColumnWidth::FixedPx(120));
+    }
+    for (ix, width) in drag.start_widths.iter().copied().enumerate() {
+      if ix < table.column_widths.len() {
+        table.column_widths[ix] = TableColumnWidth::FixedPx(width);
+      }
+    }
+    let Some(start_width) = drag.start_widths.get(drag.column_ix).copied() else {
+      self.table_column_resize_drag = None;
+      return true;
+    };
+    table.column_widths[drag.column_ix] = TableColumnWidth::FixedPx((start_width as f32 + delta).clamp(32.0, 1600.0).round() as u32);
+    table.version = drag.before.version.wrapping_add(1);
+    self.invalidate_document_layout_caches();
+    cx.notify();
+    true
+  }
+
+  fn finish_table_column_resize_drag(&mut self, cx: &mut Context<Self>) -> bool {
+    let Some(drag) = self.table_column_resize_drag.take() else {
+      return false;
+    };
+    let Some(Block::Table(after)) = self.document.blocks.get(drag.block_ix).cloned() else {
+      cx.notify();
+      return true;
+    };
+    if after == drag.before {
+      cx.notify();
+      return true;
+    }
+    let before_generation = self.edit_generation;
+    let after_generation = self.next_edit_generation;
+    self.next_edit_generation = self.next_edit_generation.wrapping_add(1);
+    self.undo_stack.push(EditRecord {
+      before_selection: self.selection.clone(),
+      before_generation,
+      after_selection: self.selection.clone(),
+      after_generation,
+      operations: vec![EditOperation::ReplaceBlock {
+        block_ix: drag.block_ix,
+        before: Block::Table(drag.before),
+        after: Block::Table(after),
+      }],
+    });
+    self.redo_stack.clear();
+    self.invalidate_document_layout_caches();
+    self.mark_document_changed(after_generation, cx);
+    true
   }
 
   fn block_top_for_index(&self, block_ix: usize) -> Option<Pixels> {
@@ -647,13 +880,35 @@ impl RichTextEditor {
         .sizes
         .iter()
         .take(block_ix)
-        .fold(px(0.0), |top, size| top + size.height),
+      .fold(px(0.0), |top, size| top + size.height),
     )
+  }
+
+  fn scroll_block_into_view(&self, block_ix: usize) {
+    let Some(sizes) = &self.item_sizes_cache else {
+      return;
+    };
+    let Some(row_size) = sizes.sizes.get(block_ix).copied() else {
+      return;
+    };
+    let Some(top) = self.block_top_for_index(block_ix) else {
+      return;
+    };
+    let viewport = self.scroll_handle.bounds();
+    let rect = Bounds::new(
+      point(viewport.left(), viewport.top() + self.scroll_handle.offset().y + top),
+      size(viewport.size.width, row_size.height),
+    );
+    scroll_rect_into_view(&self.scroll_handle, rect, px(8.0));
   }
 
   fn clear_block_selection(&mut self) {
     self.selected_block = None;
+    self.table_cell_block_ix = 0;
+    self.table_cell_anchor = 0;
     self.table_cell_caret = 0;
+    self.equation_source_anchor = 0;
+    self.equation_source_caret = 0;
   }
 
   fn selected_block_fragment(&self) -> Option<RichClipboardFragment> {
@@ -738,6 +993,20 @@ impl RichTextEditor {
     self.document.blocks[start_block.min(end_block)..=start_block.max(end_block)]
       .iter()
       .any(|block| !matches!(block, Block::Paragraph(_)))
+  }
+
+  pub(super) fn block_is_inside_text_selection(&self, block_ix: usize) -> bool {
+    if self.selected_block.is_some() || self.selection.is_caret() {
+      return false;
+    }
+    let range = self.selection.normalized();
+    let Some(start_block) = self.block_ix_for_paragraph(range.start.paragraph) else {
+      return false;
+    };
+    let Some(end_block) = self.block_ix_for_paragraph(range.end.paragraph) else {
+      return false;
+    };
+    block_ix > start_block.min(end_block) && block_ix < start_block.max(end_block)
   }
 
   fn object_block_indices_in_text_range(&self, range: Range<DocumentOffset>) -> Vec<usize> {
@@ -852,6 +1121,24 @@ impl RichTextEditor {
 
   pub(super) fn caret_paint_width(&self) -> Pixels {
     if self.active_text_drag.is_some() { px(2.0) } else { px(1.0) }
+  }
+
+  pub(super) fn table_cell_caret_for_paint(&self, window: &Window) -> Option<TableCellCaret> {
+    if !self.focus_handle.is_focused(window) {
+      return None;
+    }
+    let BlockSelection::TableCell { block_ix, row_ix, cell_ix } = self.selected_block? else {
+      return None;
+    };
+    Some(TableCellCaret {
+      block_ix,
+      row_ix,
+      cell_ix,
+      paragraph_block_ix: self.table_cell_block_ix,
+      anchor: self.table_cell_anchor,
+      byte: self.table_cell_caret,
+      caret_visible: self.caret_visible,
+    })
   }
 
   pub fn find_text(&self, query: &str) -> Vec<Range<DocumentOffset>> {
@@ -1200,8 +1487,14 @@ impl RichTextEditor {
   }
 
   pub fn copy(&mut self, cx: &mut Context<Self>) {
-    if let Some(text) = self.selected_table_cell_text() {
+    if let Some(text) = self.selected_equation_source_text() {
       cx.write_to_clipboard(ClipboardItem::new_string(text));
+      self.paste_cache = None;
+      return;
+    }
+    if let Some(fragment) = self.selected_table_cell_fragment() {
+      let text = block_fragment_plain_text(&fragment);
+      cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(text, fragment));
       self.paste_cache = None;
       return;
     }
@@ -1265,6 +1558,9 @@ impl RichTextEditor {
         && cached_metadata == metadata
       {
         let fragment = fragment.clone();
+        if self.insert_rich_fragment_into_selected_table_cell(&fragment, cx) {
+          return;
+        }
         if fragment.blocks.is_empty() {
           self.apply_document_edit(cx, |editor, cx| editor.insert_rich_fragment(fragment, cx));
         } else {
@@ -1280,6 +1576,9 @@ impl RichTextEditor {
           metadata: metadata.to_string(),
           fragment: fragment.clone(),
         });
+        if self.insert_rich_fragment_into_selected_table_cell(&fragment, cx) {
+          return;
+        }
         if fragment.blocks.is_empty() {
           self.apply_document_edit(cx, |editor, cx| editor.insert_rich_fragment(fragment, cx));
         } else {
@@ -1293,12 +1592,125 @@ impl RichTextEditor {
         && cached_text == &text
       {
         let text = cached_text.clone();
+        if self.insert_plain_text_into_selected_table_cell(&text, cx) {
+          return;
+        }
         self.apply_document_edit(cx, |editor, cx| editor.insert_plain_text_fragment(&text, cx));
         return;
       }
       self.paste_cache = Some(PasteCache::Plain { text: text.clone() });
+      if self.insert_plain_text_into_selected_table_cell(&text, cx) {
+        return;
+      }
       self.apply_document_edit(cx, |editor, cx| editor.insert_plain_text_fragment(&text, cx));
     }
+  }
+
+  fn selected_table_cell_fragment(&self) -> Option<RichClipboardFragment> {
+    let cell = self.selected_table_cell()?;
+    if let (Some(range), Some(paragraph)) = (self.table_cell_selection_range(), self.selected_table_cell_paragraph()) {
+      return Some(RichClipboardFragment {
+        format: "debateprocessor.rich-text-fragment.v1".to_string(),
+        paragraphs: vec![input_paragraph_from_table_cell_range(paragraph, range)],
+        blocks: Vec::new(),
+        assets: Vec::new(),
+      });
+    }
+    let paragraphs = cell
+      .blocks
+      .iter()
+      .filter_map(|block| match block {
+        TableCellBlock::Paragraph(paragraph) => Some(input_paragraph_from_table_cell_paragraph(paragraph)),
+        TableCellBlock::Table(_) => None,
+      })
+      .collect::<Vec<_>>();
+    (!paragraphs.is_empty()).then_some(RichClipboardFragment {
+      format: "debateprocessor.rich-text-fragment.v1".to_string(),
+      paragraphs,
+      blocks: Vec::new(),
+      assets: Vec::new(),
+    })
+  }
+
+  fn insert_plain_text_into_selected_table_cell(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    if normalized.is_empty() {
+      return matches!(self.selected_block, Some(BlockSelection::TableCell { .. }));
+    }
+    let styles = self
+      .selected_table_cell_paragraph()
+      .map(|paragraph| table_cell_styles_at(paragraph, self.table_cell_caret))
+      .unwrap_or_default();
+    let paragraphs = normalized
+      .split('\n')
+      .map(|line| InputParagraph {
+        style: ParagraphStyle::Normal,
+        runs: if line.is_empty() {
+          Vec::new()
+        } else {
+          vec![InputRun {
+            text: line.to_string(),
+            styles,
+          }]
+        },
+      })
+      .collect::<Vec<_>>();
+    self.insert_paragraphs_into_selected_table_cell(&paragraphs, cx)
+  }
+
+  fn insert_rich_fragment_into_selected_table_cell(&mut self, fragment: &RichClipboardFragment, cx: &mut Context<Self>) -> bool {
+    if fragment
+      .blocks
+      .iter()
+      .any(|block| !matches!(block, InputBlock::Paragraph(_)))
+    {
+      return false;
+    }
+    if !fragment.blocks.is_empty() {
+      let paragraphs = fragment
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+          InputBlock::Paragraph(paragraph) => Some(paragraph.clone()),
+          InputBlock::Image(_) | InputBlock::Equation(_) | InputBlock::Table(_) => None,
+        })
+        .collect::<Vec<_>>();
+      return self.insert_paragraphs_into_selected_table_cell(&paragraphs, cx);
+    }
+    self.insert_paragraphs_into_selected_table_cell(&fragment.paragraphs, cx)
+  }
+
+  fn insert_paragraphs_into_selected_table_cell(&mut self, paragraphs: &[InputParagraph], cx: &mut Context<Self>) -> bool {
+    let Some(BlockSelection::TableCell {
+      block_ix: _,
+      row_ix,
+      cell_ix,
+    }) = self.selected_block
+    else {
+      return false;
+    };
+    if paragraphs.is_empty() {
+      return true;
+    }
+    let current_paragraph_ix = self.table_cell_block_ix;
+    let caret = self.table_cell_caret;
+    let mut new_caret = None;
+    self.edit_selected_table(cx, |table| {
+      let Some(cell) = table
+        .rows
+        .get_mut(row_ix)
+        .and_then(|row| row.cells.get_mut(cell_ix))
+      else {
+        return;
+      };
+      new_caret = insert_table_cell_paragraphs_at(cell, current_paragraph_ix, caret, paragraphs);
+    });
+    if let Some((paragraph_ix, byte)) = new_caret {
+      self.table_cell_block_ix = paragraph_ix;
+      self.table_cell_caret = byte;
+      cx.notify();
+    }
+    true
   }
 
   fn selected_table_cell_text(&self) -> Option<String> {
@@ -1307,24 +1719,78 @@ impl RichTextEditor {
       .map(|paragraph| paragraph.text.clone())
   }
 
+  fn selected_equation_source(&self) -> Option<String> {
+    let BlockSelection::Equation(block_ix) = self.selected_block? else {
+      return None;
+    };
+    let Block::Equation(equation) = self.document.blocks.get(block_ix)? else {
+      return None;
+    };
+    Some(equation.source.to_string())
+  }
+
+  fn equation_source_selection_range(&self) -> Option<Range<usize>> {
+    if self.equation_source_anchor == self.equation_source_caret {
+      return None;
+    }
+    Some(self.equation_source_anchor.min(self.equation_source_caret)..self.equation_source_anchor.max(self.equation_source_caret))
+  }
+
+  fn selected_equation_source_text(&self) -> Option<String> {
+    let source = self.selected_equation_source()?;
+    let range = self.equation_source_selection_range()?;
+    Some(source.get(range).unwrap_or("").to_string())
+  }
+
+  fn equation_source_selection_for_render(&self, block_ix: usize) -> Option<EquationSourceSelection> {
+    if self.selected_block != Some(BlockSelection::Equation(block_ix)) {
+      return None;
+    }
+    Some(EquationSourceSelection {
+      anchor: self.equation_source_anchor,
+      caret: self.equation_source_caret,
+      caret_visible: self.caret_visible,
+    })
+  }
+
+  pub(super) fn table_cell_selection_range(&self) -> Option<Range<usize>> {
+    if self.table_cell_anchor == self.table_cell_caret {
+      return None;
+    }
+    Some(self.table_cell_anchor.min(self.table_cell_caret)..self.table_cell_anchor.max(self.table_cell_caret))
+  }
+
   fn selected_table_cell_paragraph(&self) -> Option<&TableCellParagraph> {
+    let cell = self.selected_table_cell()?;
+    let paragraph_ix = table_cell_paragraph_block_ix(cell, self.table_cell_block_ix)?;
+    let TableCellBlock::Paragraph(paragraph) = cell.blocks.get(paragraph_ix)? else {
+      return None;
+    };
+    Some(paragraph)
+  }
+
+  fn selected_table_cell(&self) -> Option<&TableCell> {
     let BlockSelection::TableCell { block_ix, row_ix, cell_ix } = self.selected_block? else {
       return None;
     };
     let Block::Table(table) = self.document.blocks.get(block_ix)? else {
       return None;
     };
-    table
-      .rows
-      .get(row_ix)?
-      .cells
-      .get(cell_ix)?
-      .blocks
-      .iter()
-      .find_map(|block| match block {
-        TableCellBlock::Paragraph(paragraph) => Some(paragraph),
-        TableCellBlock::Table(_) => None,
-      })
+    table.rows.get(row_ix)?.cells.get(cell_ix)
+  }
+
+  fn adjacent_selected_table_cell_paragraph(&self, forward: bool) -> Option<(usize, usize)> {
+    let cell = self.selected_table_cell()?;
+    let current_ix = table_cell_paragraph_block_ix(cell, self.table_cell_block_ix)?;
+    let paragraph_ix = if forward {
+      next_table_cell_paragraph_block_ix(cell, current_ix)?
+    } else {
+      previous_table_cell_paragraph_block_ix(cell, current_ix)?
+    };
+    let TableCellBlock::Paragraph(paragraph) = cell.blocks.get(paragraph_ix)? else {
+      return None;
+    };
+    Some((paragraph_ix, paragraph.text.len()))
   }
 
   fn clear_selected_table_cell(&mut self, cx: &mut Context<Self>) -> bool {
@@ -1364,6 +1830,7 @@ impl RichTextEditor {
       return false;
     };
     self.selected_block = Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix });
+    self.table_cell_block_ix = 0;
     self.table_cell_caret = self
       .selected_table_cell_text()
       .map(|text| text.len())
@@ -1644,6 +2111,112 @@ impl RichTextEditor {
     });
   }
 
+  fn start_image_resize_drag(
+    &mut self,
+    block_ix: usize,
+    handle: ImageResizeHandle,
+    position: Point<Pixels>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    let Some(Block::Image(image)) = self.document.blocks.get(block_ix).cloned() else {
+      return;
+    };
+    window.focus(&self.focus_handle);
+    self.selected_block = Some(BlockSelection::Image(block_ix));
+    self.table_cell_block_ix = 0;
+    self.table_cell_caret = 0;
+    self.image_resize_drag = Some(ImageResizeDrag {
+      block_ix,
+      start_position: position,
+      start_width: self.image_rendered_width(&image),
+      handle,
+      before: image,
+    });
+    self.selecting = false;
+    self.pending_text_drag = None;
+    self.active_text_drag = None;
+    self.goal_x = None;
+    window.prevent_default();
+    cx.stop_propagation();
+    cx.notify();
+  }
+
+  fn update_image_resize_drag(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+    let Some(drag) = self.image_resize_drag.clone() else {
+      return false;
+    };
+    let delta: f32 = (position.x - drag.start_position.x).into();
+    let delta = delta * drag.handle.horizontal_sign();
+    let start_width: f32 = drag.start_width.into();
+    let max_width: f32 = (self.current_layout_width() - self.document.theme.pageless_inset_x * 2.0)
+      .max(px(32.0))
+      .into();
+    let width_px = (start_width + delta)
+      .clamp(32.0, max_width.max(32.0))
+      .round() as u32;
+    let Some(Block::Image(image)) = Arc::make_mut(&mut self.document.blocks).get_mut(drag.block_ix) else {
+      self.image_resize_drag = None;
+      return true;
+    };
+    if image.sizing == (ImageSizing::Fixed { width_px, height_px: None }) {
+      return true;
+    }
+    image.sizing = ImageSizing::Fixed { width_px, height_px: None };
+    image.version = drag.before.version.wrapping_add(1);
+    self.invalidate_document_layout_caches();
+    cx.notify();
+    true
+  }
+
+  fn finish_image_resize_drag(&mut self, cx: &mut Context<Self>) -> bool {
+    let Some(drag) = self.image_resize_drag.take() else {
+      return false;
+    };
+    let Some(Block::Image(after)) = self.document.blocks.get(drag.block_ix).cloned() else {
+      cx.notify();
+      return true;
+    };
+    if after == drag.before {
+      cx.notify();
+      return true;
+    }
+    let before_generation = self.edit_generation;
+    let after_generation = self.next_edit_generation;
+    self.next_edit_generation = self.next_edit_generation.wrapping_add(1);
+    self.undo_stack.push(EditRecord {
+      before_selection: self.selection.clone(),
+      before_generation,
+      after_selection: self.selection.clone(),
+      after_generation,
+      operations: vec![EditOperation::ReplaceBlock {
+        block_ix: drag.block_ix,
+        before: Block::Image(drag.before),
+        after: Block::Image(after),
+      }],
+    });
+    self.redo_stack.clear();
+    self.invalidate_document_layout_caches();
+    self.mark_document_changed(after_generation, cx);
+    true
+  }
+
+  fn image_rendered_width(&self, image: &ImageBlock) -> Pixels {
+    let available_width = (self.current_layout_width() - self.document.theme.pageless_inset_x * 2.0).max(px(1.0));
+    match image.sizing {
+      ImageSizing::Fixed { width_px, .. } => px(width_px as f32).min(available_width),
+      ImageSizing::FitWidth => available_width,
+      ImageSizing::Intrinsic => self
+        .document
+        .assets
+        .assets
+        .get(&image.asset_id)
+        .and_then(image_asset_intrinsic_size)
+        .map(|(width, _)| width.min(available_width))
+        .unwrap_or(available_width),
+    }
+  }
+
   pub fn set_selected_image_alt_text(&mut self, alt_text: impl Into<SharedString>, cx: &mut Context<Self>) {
     let Some(BlockSelection::Image(block_ix)) = self.selected_block else {
       return;
@@ -1803,15 +2376,68 @@ impl RichTextEditor {
     if text.is_empty() {
       return true;
     }
-    let insert_at = self.table_cell_caret;
+    let selection_range = self.table_cell_selection_range();
+    let insert_at = selection_range
+      .as_ref()
+      .map(|range| range.start)
+      .unwrap_or(self.table_cell_caret);
     let styles = self
       .selected_table_cell_paragraph()
       .map(|paragraph| table_cell_styles_at(paragraph, insert_at))
       .unwrap_or_default();
     self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
+      if let Some(range) = selection_range.clone() {
+        delete_range_in_table_cell_paragraph(paragraph, range);
+      }
       insert_text_in_table_cell_paragraph(paragraph, insert_at, text, styles);
     });
-    self.table_cell_caret = self.table_cell_caret.saturating_add(text.len());
+    self.table_cell_caret = insert_at.saturating_add(text.len());
+    self.table_cell_anchor = self.table_cell_caret;
+    true
+  }
+
+  fn split_selected_table_cell_paragraph(&mut self, cx: &mut Context<Self>) -> bool {
+    let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block else {
+      return false;
+    };
+    let Some(Block::Table(table)) = self.document.blocks.get(block_ix).cloned() else {
+      return false;
+    };
+    let mut updated = table.clone();
+    let Some(cell) = updated
+      .rows
+      .get_mut(row_ix)
+      .and_then(|row| row.cells.get_mut(cell_ix))
+    else {
+      return false;
+    };
+    let Some(new_paragraph_ix) = split_table_cell_paragraph_at(cell, self.table_cell_block_ix, self.table_cell_caret) else {
+      return true;
+    };
+    if updated == table {
+      return true;
+    }
+    updated.version = updated.version.wrapping_add(1);
+    let before = Block::Table(table);
+    let after = Block::Table(updated);
+    if let Some(block) = Arc::make_mut(&mut self.document.blocks).get_mut(block_ix) {
+      *block = after.clone();
+    }
+    let before_generation = self.edit_generation;
+    let after_generation = self.next_edit_generation;
+    self.next_edit_generation = self.next_edit_generation.wrapping_add(1);
+    self.undo_stack.push(EditRecord {
+      before_selection: self.selection.clone(),
+      before_generation,
+      after_selection: self.selection.clone(),
+      after_generation,
+      operations: vec![EditOperation::ReplaceBlock { block_ix, before, after }],
+    });
+    self.redo_stack.clear();
+    self.table_cell_block_ix = new_paragraph_ix;
+    self.table_cell_caret = 0;
+    self.invalidate_document_layout_caches();
+    self.mark_document_changed(after_generation, cx);
     true
   }
 
@@ -1822,10 +2448,31 @@ impl RichTextEditor {
     if text.is_empty() {
       return true;
     }
+    let selection_range = self.equation_source_selection_range();
+    let insert_at = selection_range
+      .as_ref()
+      .map(|range| range.start)
+      .unwrap_or(self.equation_source_caret);
     self.edit_selected_equation(block_ix, cx, |equation| {
-      equation.source = format!("{}{}", equation.source, text).into();
+      let mut source = equation.source.to_string();
+      let insert_at = insert_at.min(source.len());
+      if !source.is_char_boundary(insert_at) {
+        return;
+      }
+      if let Some(range) = selection_range.clone()
+        && range.start <= range.end
+        && range.end <= source.len()
+        && source.is_char_boundary(range.start)
+        && source.is_char_boundary(range.end)
+      {
+        source.replace_range(range, "");
+      }
+      source.insert_str(insert_at, text);
+      equation.source = source.into();
       equation.version = equation.version.wrapping_add(1);
     });
+    self.equation_source_caret = insert_at.saturating_add(text.len());
+    self.equation_source_anchor = self.equation_source_caret;
     true
   }
 
@@ -1834,6 +2481,26 @@ impl RichTextEditor {
       return false;
     };
     let caret = self.table_cell_caret;
+    if caret == 0 {
+      let mut merged_caret = None;
+      let current_paragraph_ix = self.table_cell_block_ix;
+      self.edit_selected_table(cx, |table| {
+        let Some(cell) = table
+          .rows
+          .get_mut(row_ix)
+          .and_then(|row| row.cells.get_mut(cell_ix))
+        else {
+          return;
+        };
+        merged_caret = merge_table_cell_paragraph_with_previous(cell, current_paragraph_ix);
+      });
+      if let Some((paragraph_ix, byte)) = merged_caret {
+        self.table_cell_block_ix = paragraph_ix;
+        self.table_cell_caret = byte;
+        cx.notify();
+      }
+      return true;
+    }
     let new_caret = self
       .selected_table_cell_text()
       .and_then(|text| {
@@ -1884,6 +2551,25 @@ impl RichTextEditor {
       self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
         delete_range_in_table_cell_paragraph(paragraph, caret..next);
       });
+    } else {
+      let mut merged_caret = None;
+      let current_paragraph_ix = self.table_cell_block_ix;
+      self.edit_selected_table(cx, |table| {
+        let Some(cell) = table
+          .rows
+          .get_mut(row_ix)
+          .and_then(|row| row.cells.get_mut(cell_ix))
+        else {
+          return;
+        };
+        merged_caret = merge_table_cell_paragraph_with_next(cell, current_paragraph_ix);
+      });
+      if let Some((paragraph_ix, byte)) = merged_caret {
+        self.table_cell_block_ix = paragraph_ix;
+        self.table_cell_caret = byte;
+        cx.notify();
+      }
+      return true;
     }
     self.table_cell_caret = caret;
     true
@@ -1893,14 +2579,36 @@ impl RichTextEditor {
     let Some(BlockSelection::Equation(block_ix)) = self.selected_block else {
       return false;
     };
+    let selection_range = self.equation_source_selection_range();
+    let caret = self.equation_source_caret;
+    let mut next_caret = caret;
     self.edit_selected_equation(block_ix, cx, |equation| {
       let mut source = equation.source.to_string();
-      if let Some((byte, _)) = source.char_indices().next_back() {
-        source.truncate(byte);
+      if let Some(range) = selection_range.clone()
+        && range.start <= range.end
+        && range.end <= source.len()
+        && source.is_char_boundary(range.start)
+        && source.is_char_boundary(range.end)
+      {
+        source.replace_range(range.clone(), "");
+        next_caret = range.start;
+        equation.source = source.into();
+        equation.version = equation.version.wrapping_add(1);
+        return;
+      }
+      let caret = caret.min(source.len());
+      if caret > 0
+        && source.is_char_boundary(caret)
+        && let Some((byte, _)) = source[..caret].char_indices().next_back()
+      {
+        source.replace_range(byte..caret, "");
+        next_caret = byte;
         equation.source = source.into();
         equation.version = equation.version.wrapping_add(1);
       }
     });
+    self.equation_source_caret = next_caret;
+    self.equation_source_anchor = next_caret;
     true
   }
 
@@ -1952,16 +2660,12 @@ impl RichTextEditor {
     else {
       return;
     };
-    let paragraph_ix = cell
-      .blocks
-      .iter()
-      .position(|block| matches!(block, TableCellBlock::Paragraph(_)))
-      .unwrap_or_else(|| {
-        cell
-          .blocks
-          .push(TableCellBlock::Paragraph(default_table_cell_paragraph()));
-        cell.blocks.len() - 1
-      });
+    let paragraph_ix = table_cell_paragraph_block_ix(cell, self.table_cell_block_ix).unwrap_or_else(|| {
+      cell
+        .blocks
+        .push(TableCellBlock::Paragraph(default_table_cell_paragraph()));
+      cell.blocks.len() - 1
+    });
     let TableCellBlock::Paragraph(paragraph) = &mut cell.blocks[paragraph_ix] else {
       return;
     };
@@ -2076,6 +2780,9 @@ impl RichTextEditor {
 
   pub fn apply_run_style_to_selection(&mut self, style: RunStyle, cx: &mut Context<Self>) {
     if let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block {
+      let Some(selection_range) = self.table_cell_selection_range() else {
+        return;
+      };
       self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
         if paragraph.text.is_empty() {
           return;
@@ -2086,9 +2793,7 @@ impl RichTextEditor {
             styles: RunStyles::default(),
           });
         }
-        for run in &mut paragraph.paragraph.runs {
-          run.styles.apply(style);
-        }
+        mutate_table_cell_runs_in_range(paragraph, selection_range.clone(), |styles| styles.apply(style));
         paragraph.paragraph.runs = merge_adjacent_runs(std::mem::take(&mut paragraph.paragraph.runs));
         paragraph.paragraph.version = paragraph.paragraph.version.wrapping_add(1);
       });
@@ -2289,7 +2994,7 @@ impl RichTextEditor {
     self.delete_forward_command(cx);
   }
   fn on_insert_newline(&mut self, _: &InsertNewline, _: &mut Window, cx: &mut Context<Self>) {
-    if self.selected_block.is_some() && self.insert_text_into_selected_table_cell(SOFT_LINE_BREAK_STR, cx) {
+    if self.split_selected_table_cell_paragraph(cx) {
       return;
     }
     self.insert_paragraph_break_command(cx);
@@ -3251,6 +3956,7 @@ impl RichTextEditor {
     }
     let insert_ix = self.prepare_block_insertion_index();
     Arc::make_mut(&mut self.document.blocks).splice(insert_ix..insert_ix, blocks);
+    self.append_missing_paragraph_blocks();
     self.selected_block = None;
     self.item_sizes_cache = None;
     self.last_layout = None;
@@ -3268,6 +3974,10 @@ impl RichTextEditor {
       return (block_ix + 1).min(self.document.blocks.len());
     }
 
+    if let Some(insert_ix) = self.remove_empty_caret_paragraph_for_block_insertion() {
+      return insert_ix;
+    }
+
     if !self.selection.is_caret() {
       let range = self.selection.normalized();
       let object_indices = self.object_block_indices_in_text_range(range);
@@ -3282,10 +3992,69 @@ impl RichTextEditor {
       self.delete_selection_internal();
     }
 
-    self
-      .block_ix_for_paragraph(self.selection.head.paragraph)
-      .map(|ix| ix + 1)
-      .unwrap_or_else(|| self.document.blocks.len())
+    if let Some(position) = document_position_for_offset(&self.document, self.selection.head) {
+      debug_assert_eq!(document_offset_for_position(&self.document, &position), Some(self.selection.head));
+      if let DocumentPosition::Text { block_ix, .. } = position {
+        return (block_ix + 1).min(self.document.blocks.len());
+      }
+    }
+    self.document.blocks.len()
+  }
+
+  fn remove_empty_caret_paragraph_for_block_insertion(&mut self) -> Option<usize> {
+    if !self.selection.is_caret() {
+      return None;
+    }
+    let paragraph_ix = self.selection.head.paragraph;
+    let paragraph = self.document.paragraphs.get(paragraph_ix)?;
+    if self.selection.head.byte != 0 || paragraph_text_len(paragraph) != 0 {
+      return None;
+    }
+    let block_ix = self.block_ix_for_paragraph(paragraph_ix)?;
+    let paragraph_count = self.document.paragraphs.len();
+    let blocks = Arc::make_mut(&mut self.document.blocks);
+    if block_ix < blocks.len() {
+      blocks.remove(block_ix);
+    }
+
+    if paragraph_count > 1 {
+      let range = paragraph_byte_range(&self.document, paragraph_ix);
+      if paragraph_ix + 1 < paragraph_count {
+        self.document.text.delete(range.start..range.start + 1);
+      } else if range.start > 0 {
+        self.document.text.delete(range.start - 1..range.start);
+      }
+      paragraphs_mut(&mut self.document).remove(paragraph_ix);
+      rebuild_document_offset_index(&mut self.document);
+      let new_paragraph_ix = paragraph_ix.min(self.document.paragraphs.len().saturating_sub(1));
+      self.selection = EditorSelection {
+        anchor: DocumentOffset {
+          paragraph: new_paragraph_ix,
+          byte: 0,
+        },
+        head: DocumentOffset {
+          paragraph: new_paragraph_ix,
+          byte: 0,
+        },
+      };
+    }
+    Some(block_ix)
+  }
+
+  fn append_missing_paragraph_blocks(&mut self) {
+    let existing = self
+      .document
+      .blocks
+      .iter()
+      .filter(|block| matches!(block, Block::Paragraph(_)))
+      .count();
+    if existing >= self.document.paragraphs.len() {
+      return;
+    }
+    let blocks = Arc::make_mut(&mut self.document.blocks);
+    for paragraph in self.document.paragraphs.iter().skip(existing) {
+      blocks.push(Block::Paragraph(paragraph.clone()));
+    }
   }
 
   fn push_replace_document_history(&mut self, before_document: Document, before_selection: EditorSelection, cx: &mut Context<Self>) {
@@ -3344,6 +4113,52 @@ impl RichTextEditor {
   }
 
   fn toggle_underline_kind(&mut self, explicit_direct: Option<bool>, cx: &mut Context<Self>) {
+    if let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block {
+      let Some(selection_range) = self.table_cell_selection_range() else {
+        return;
+      };
+      let paragraph_style = self
+        .selected_table_cell_paragraph()
+        .map(|paragraph| paragraph.paragraph.style)
+        .unwrap_or(ParagraphStyle::Normal);
+      let direct = explicit_direct.unwrap_or_else(|| matches!(paragraph_style, ParagraphStyle::Tag | ParagraphStyle::Analytic));
+      let all_selected = self
+        .selected_table_cell_paragraph()
+        .map(|paragraph| {
+          let range = selection_range.clone();
+          !range.is_empty()
+            && table_cell_range_all_run_styles(paragraph, range, |styles| {
+              if direct {
+                styles.direct_underline
+              } else {
+                styles.semantic == RunSemanticStyle::Underline
+              }
+            })
+        })
+        .unwrap_or(false);
+      self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
+        if paragraph.text.is_empty() {
+          return;
+        }
+        if paragraph.paragraph.runs.is_empty() {
+          paragraph.paragraph.runs.push(TextRun {
+            len: paragraph.text.len(),
+            styles: RunStyles::default(),
+          });
+        }
+        mutate_table_cell_runs_in_range(paragraph, selection_range.clone(), |styles| {
+          if direct {
+            styles.direct_underline = !all_selected;
+          } else if all_selected {
+            styles.semantic = RunSemanticStyle::Plain;
+          } else {
+            styles.semantic = RunSemanticStyle::Underline;
+            styles.direct_underline = false;
+          }
+        });
+      });
+      return;
+    }
     if self.selection.is_caret() {
       let paragraph_style = self.document.paragraphs[self.selection.head.paragraph].style;
       let direct = explicit_direct.unwrap_or_else(|| matches!(paragraph_style, ParagraphStyle::Tag | ParagraphStyle::Analytic));
@@ -3386,6 +4201,35 @@ impl RichTextEditor {
   }
 
   fn toggle_semantic_style(&mut self, semantic: RunSemanticStyle, cx: &mut Context<Self>) {
+    if let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block {
+      let Some(selection_range) = self.table_cell_selection_range() else {
+        return;
+      };
+      let all_selected = self
+        .selected_table_cell_paragraph()
+        .map(|paragraph| {
+          let range = selection_range.clone();
+          !range.is_empty() && table_cell_range_all_run_styles(paragraph, range, |styles| styles.semantic == semantic)
+        })
+        .unwrap_or(false);
+      self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
+        if paragraph.text.is_empty() {
+          return;
+        }
+        if paragraph.paragraph.runs.is_empty() {
+          paragraph.paragraph.runs.push(TextRun {
+            len: paragraph.text.len(),
+            styles: RunStyles::default(),
+          });
+        }
+        mutate_table_cell_runs_in_range(paragraph, selection_range.clone(), |styles| {
+          styles.semantic = if all_selected { RunSemanticStyle::Plain } else { semantic };
+        });
+        paragraph.paragraph.runs = merge_adjacent_runs(std::mem::take(&mut paragraph.paragraph.runs));
+        paragraph.paragraph.version = paragraph.paragraph.version.wrapping_add(1);
+      });
+      return;
+    }
     if self.selection.is_caret() {
       let mut styles = self.styles_at_caret();
       styles.semantic = if styles.semantic == semantic {
@@ -3410,6 +4254,36 @@ impl RichTextEditor {
   }
 
   fn set_highlight_internal(&mut self, highlight: Option<HighlightStyle>, cx: &mut Context<Self>) {
+    if let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block {
+      let Some(selection_range) = self.table_cell_selection_range() else {
+        return;
+      };
+      let all_selected = self
+        .selected_table_cell_paragraph()
+        .and_then(|paragraph| {
+          highlight.map(|highlight| {
+            let range = selection_range.clone();
+            !range.is_empty() && table_cell_range_all_run_styles(paragraph, range, |styles| styles.highlight == Some(highlight))
+          })
+        })
+        .unwrap_or(false);
+      let target_highlight = if all_selected { None } else { highlight };
+      self.edit_table_cell_paragraph(block_ix, row_ix, cell_ix, cx, |paragraph| {
+        if paragraph.text.is_empty() {
+          return;
+        }
+        if paragraph.paragraph.runs.is_empty() {
+          paragraph.paragraph.runs.push(TextRun {
+            len: paragraph.text.len(),
+            styles: RunStyles::default(),
+          });
+        }
+        mutate_table_cell_runs_in_range(paragraph, selection_range.clone(), |styles| styles.highlight = target_highlight);
+        paragraph.paragraph.runs = merge_adjacent_runs(std::mem::take(&mut paragraph.paragraph.runs));
+        paragraph.paragraph.version = paragraph.paragraph.version.wrapping_add(1);
+      });
+      return;
+    }
     if self.selection.is_caret() {
       let mut styles = self.styles_at_caret();
       styles.highlight = highlight;
@@ -3449,6 +4323,33 @@ impl RichTextEditor {
   // -------- Movement primitives ----------------------------------------
 
   fn move_horizontal(&mut self, dir: HDir, extend: bool, cx: &mut Context<Self>) {
+    if matches!(self.selected_block, Some(BlockSelection::Equation(_))) {
+      let source = self.selected_equation_source().unwrap_or_default();
+      let caret = self.equation_source_caret.min(source.len());
+      let next = match dir {
+        HDir::Left if caret > 0 => source[..caret]
+          .char_indices()
+          .next_back()
+          .map(|(byte, _)| byte)
+          .unwrap_or(0),
+        HDir::Left => 0,
+        HDir::Right if caret < source.len() => source[caret..]
+          .char_indices()
+          .nth(1)
+          .map(|(byte, _)| caret + byte)
+          .unwrap_or(source.len()),
+        HDir::Right => source.len(),
+      };
+      if extend {
+        self.equation_source_caret = next;
+      } else {
+        self.equation_source_caret = next;
+        self.equation_source_anchor = next;
+      }
+      self.reset_caret_blink(cx);
+      cx.notify();
+      return;
+    }
     if !extend && matches!(self.selected_block, Some(BlockSelection::TableCell { .. })) {
       let text = self.selected_table_cell_text().unwrap_or_default();
       match dir {
@@ -3461,6 +4362,14 @@ impl RichTextEditor {
           cx.notify();
           return;
         },
+        HDir::Left => {
+          if let Some((paragraph_ix, len)) = self.adjacent_selected_table_cell_paragraph(false) {
+            self.table_cell_block_ix = paragraph_ix;
+            self.table_cell_caret = len;
+            cx.notify();
+            return;
+          }
+        },
         HDir::Right if self.table_cell_caret < text.len() => {
           let caret = self.table_cell_caret.min(text.len());
           self.table_cell_caret = text[caret..]
@@ -3471,7 +4380,14 @@ impl RichTextEditor {
           cx.notify();
           return;
         },
-        _ => {},
+        HDir::Right => {
+          if let Some((paragraph_ix, _)) = self.adjacent_selected_table_cell_paragraph(true) {
+            self.table_cell_block_ix = paragraph_ix;
+            self.table_cell_caret = 0;
+            cx.notify();
+            return;
+          }
+        },
       }
     }
     if !extend && self.selected_block.is_some() && self.collapse_object_selection(dir, cx) {
@@ -3907,6 +4823,8 @@ impl RichTextEditor {
 
   fn on_mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
     window.focus(&self.focus_handle);
+    self.image_resize_drag = None;
+    self.table_column_resize_drag = None;
     self.clear_block_selection();
     self.last_drag_position = Some(event.position);
     self.goal_x = None;
@@ -3951,6 +4869,33 @@ impl RichTextEditor {
   }
 
   fn on_mouse_move(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+    if self.update_table_column_resize_drag(event.position, cx) {
+      return;
+    }
+    if self.update_image_resize_drag(event.position, cx) {
+      return;
+    }
+    if event.dragging()
+      && let Some(BlockSelection::TableCell { block_ix, row_ix, cell_ix }) = self.selected_block
+      && let Some((
+        BlockSelection::TableCell {
+          row_ix: hit_row,
+          cell_ix: hit_cell,
+          ..
+        },
+        paragraph_ix,
+        byte,
+      )) = self.table_cell_selection_at(block_ix, event.position, window, cx)
+      && row_ix == hit_row
+      && cell_ix == hit_cell
+    {
+      self.table_cell_block_ix = paragraph_ix;
+      self.table_cell_caret = byte;
+      self.last_drag_position = Some(event.position);
+      self.reset_caret_blink(cx);
+      cx.notify();
+      return;
+    }
     if let Some(pending_drag) = self.pending_text_drag.clone() {
       self.last_drag_position = Some(event.position);
       if point_distance_squared(pending_drag.start_position, event.position) < 16.0 {
@@ -4014,6 +4959,26 @@ impl RichTextEditor {
   }
 
   fn on_mouse_up(&mut self, event: &MouseUpEvent, window: &mut Window, cx: &mut Context<Self>) {
+    if self.finish_table_column_resize_drag(cx) {
+      self.selecting = false;
+      self.drag_granularity = SelectionGranularity::Character;
+      self.drag_anchor = None;
+      self.smart_selection_left_anchor_word = false;
+      self.smart_selection_exact_override = false;
+      self.last_drag_position = None;
+      self.autoscroll_active = false;
+      return;
+    }
+    if self.finish_image_resize_drag(cx) {
+      self.selecting = false;
+      self.drag_granularity = SelectionGranularity::Character;
+      self.drag_anchor = None;
+      self.smart_selection_left_anchor_word = false;
+      self.smart_selection_exact_override = false;
+      self.last_drag_position = None;
+      self.autoscroll_active = false;
+      return;
+    }
     if let Some(active_drag) = self.active_text_drag.take() {
       let drop = self.hit_test_document_position(event.position, window, cx);
       self.move_rich_text_fragment(active_drag, drop, cx);
@@ -4209,6 +5174,16 @@ impl Focusable for RichTextEditor {
 impl Render for RichTextEditor {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     self.ensure_focus_subscriptions(window, cx);
+    if self.image_resize_drag.is_some() {
+      let editor = cx.entity();
+      window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+        if phase.bubble() {
+          editor.update(cx, |editor, cx| {
+            editor.finish_image_resize_drag(cx);
+          });
+        }
+      });
+    }
     let hide_until_viewport_measured = self.scroll_handle.bounds().size.width <= px(1.0);
     let item_sizes = self.paragraph_item_sizes(window, cx);
     let has_startup_layout_width = self.measured_item_width.is_some() || self.document.paragraphs.is_empty();
@@ -4314,14 +5289,32 @@ impl Render for RichTextEditor {
                   Some(Block::Table(_)) => Some(BlockSelection::Table(block_ix)),
                   Some(Block::Paragraph(_)) | None => None,
                 };
+                let editor_for_down = editor_entity.clone();
                 div()
                   .size_full()
-                  .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                  .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+                    cx.stop_propagation();
+                    editor_for_down.update(cx, |editor, cx| {
+                      if editor.start_table_column_resize_if_hit(block_ix, event.position, window, cx) {
+                        return;
+                      }
+                      if let Some(selection) = editor.selection_for_object_block(block_ix) {
+                        editor.select_block_from_click(block_ix, selection, event.position, window, cx);
+                      }
+                    });
+                  })
                   .when_some(selection, |this, selection| {
                     let editor_entity = editor_entity.clone();
                     this.on_mouse_up(MouseButton::Left, move |event, window, cx| {
                       cx.stop_propagation();
-                      editor_entity.update(cx, |editor, cx| editor.select_block_from_click(block_ix, selection, event.position, window, cx));
+                      editor_entity.update(cx, |editor, cx| {
+                        if editor.finish_table_column_resize_drag(cx) {
+                          return;
+                        }
+                        if !matches!(editor.selected_block, Some(BlockSelection::TableCell { .. })) {
+                          editor.select_block_from_click(block_ix, selection, event.position, window, cx);
+                        }
+                      });
                     })
                   })
                   .child(match editor.document.blocks.get(block_ix) {
@@ -4331,13 +5324,15 @@ impl Render for RichTextEditor {
                       block_ix,
                       render_item_sizes.get(block_ix).copied().unwrap_or_else(|| size(px(900.0), px(1.0))),
                       editor.selected_block,
+                      editor_entity.clone(),
                     ),
                     Some(Block::Equation(equation)) => render_equation_block(
                       &editor.document,
                       equation,
                       block_ix,
                       render_item_sizes.get(block_ix).copied().unwrap_or_else(|| size(px(900.0), px(1.0))),
-                      editor.selected_block,
+                      editor.selected_block == Some(BlockSelection::Equation(block_ix)) || editor.block_is_inside_text_selection(block_ix),
+                      editor.equation_source_selection_for_render(block_ix),
                     ),
                     Some(Block::Table(_)) | Some(Block::Paragraph(_)) | None => VirtualBlockElement {
                       editor: editor_entity,
@@ -4413,6 +5408,57 @@ fn default_table_cell() -> TableCell {
   }
 }
 
+fn table_column_count(table: &TableBlock) -> usize {
+  table
+    .rows
+    .iter()
+    .map(|row| {
+      row
+        .cells
+        .iter()
+        .map(|cell| cell.col_span.max(1) as usize)
+        .sum::<usize>()
+    })
+    .max()
+    .unwrap_or(0)
+    .max(table.column_widths.len())
+}
+
+fn fixed_table_column_widths_from_layout(table: &TableBlock, layout: &LaidOutTable) -> Vec<u32> {
+  let column_count = table_column_count(table).max(1);
+  let mut widths = vec![120; column_count];
+  for (ix, width) in table.column_widths.iter().enumerate() {
+    if ix < widths.len() {
+      if let TableColumnWidth::FixedPx(width) = width {
+        widths[ix] = *width;
+      }
+    }
+  }
+  let Some(first_layout_row) = layout.rows.first() else {
+    return widths;
+  };
+  let Some(first_data_row) = table.rows.first() else {
+    return widths;
+  };
+  let mut logical_column_ix = 0usize;
+  for (cell_ix, cell_layout) in first_layout_row.cells.iter().enumerate() {
+    let span = first_data_row
+      .cells
+      .get(cell_ix)
+      .map(|cell| cell.col_span.max(1) as usize)
+      .unwrap_or(1);
+    let cell_width: f32 = cell_layout.bounds.size.width.into();
+    let per_column = (cell_width / span as f32).max(32.0).round() as u32;
+    for ix in logical_column_ix..logical_column_ix.saturating_add(span).min(widths.len()) {
+      if !matches!(table.column_widths.get(ix), Some(TableColumnWidth::FixedPx(_))) {
+        widths[ix] = per_column;
+      }
+    }
+    logical_column_ix = logical_column_ix.saturating_add(span);
+  }
+  widths
+}
+
 fn default_table_cell_paragraph() -> TableCellParagraph {
   TableCellParagraph {
     paragraph: Paragraph {
@@ -4423,6 +5469,173 @@ fn default_table_cell_paragraph() -> TableCellParagraph {
     },
     text: String::new(),
   }
+}
+
+pub(super) fn table_cell_paragraph_block_ix(cell: &TableCell, preferred: usize) -> Option<usize> {
+  if matches!(cell.blocks.get(preferred), Some(TableCellBlock::Paragraph(_))) {
+    return Some(preferred);
+  }
+  cell
+    .blocks
+    .iter()
+    .position(|block| matches!(block, TableCellBlock::Paragraph(_)))
+}
+
+fn previous_table_cell_paragraph_block_ix(cell: &TableCell, current_ix: usize) -> Option<usize> {
+  cell
+    .blocks
+    .get(..current_ix)?
+    .iter()
+    .rposition(|block| matches!(block, TableCellBlock::Paragraph(_)))
+}
+
+fn next_table_cell_paragraph_block_ix(cell: &TableCell, current_ix: usize) -> Option<usize> {
+  cell
+    .blocks
+    .iter()
+    .enumerate()
+    .skip(current_ix.saturating_add(1))
+    .find_map(|(ix, block)| matches!(block, TableCellBlock::Paragraph(_)).then_some(ix))
+}
+
+pub(super) fn split_table_cell_paragraph_at(cell: &mut TableCell, paragraph_block_ix: usize, byte: usize) -> Option<usize> {
+  let paragraph_ix = table_cell_paragraph_block_ix(cell, paragraph_block_ix).unwrap_or_else(|| {
+    cell
+      .blocks
+      .push(TableCellBlock::Paragraph(default_table_cell_paragraph()));
+    cell.blocks.len() - 1
+  });
+  let TableCellBlock::Paragraph(paragraph) = cell.blocks.get_mut(paragraph_ix)? else {
+    return None;
+  };
+  let byte = byte.min(paragraph.text.len());
+  if !paragraph.text.is_char_boundary(byte) {
+    return None;
+  }
+  let right_text = paragraph.text[byte..].to_string();
+  paragraph.text.truncate(byte);
+  let (left_runs, right_runs) = split_runs_at(&paragraph.paragraph.runs, byte);
+  paragraph.paragraph.runs = left_runs;
+  paragraph.paragraph.byte_range = 0..paragraph.text.len();
+  paragraph.paragraph.version = paragraph.paragraph.version.wrapping_add(1);
+  let new_paragraph = TableCellParagraph {
+    paragraph: Paragraph {
+      style: paragraph.paragraph.style,
+      byte_range: 0..right_text.len(),
+      runs: right_runs,
+      version: paragraph.paragraph.version,
+    },
+    text: right_text,
+  };
+  cell
+    .blocks
+    .insert(paragraph_ix + 1, TableCellBlock::Paragraph(new_paragraph));
+  Some(paragraph_ix + 1)
+}
+
+pub(super) fn insert_table_cell_paragraphs_at(
+  cell: &mut TableCell,
+  paragraph_block_ix: usize,
+  byte: usize,
+  paragraphs: &[InputParagraph],
+) -> Option<(usize, usize)> {
+  if paragraphs.is_empty() {
+    return Some((paragraph_block_ix, byte));
+  }
+  let paragraph_ix = table_cell_paragraph_block_ix(cell, paragraph_block_ix).unwrap_or_else(|| {
+    cell
+      .blocks
+      .push(TableCellBlock::Paragraph(default_table_cell_paragraph()));
+    cell.blocks.len() - 1
+  });
+  let TableCellBlock::Paragraph(paragraph) = cell.blocks.get_mut(paragraph_ix)? else {
+    return None;
+  };
+  let byte = byte.min(paragraph.text.len());
+  if !paragraph.text.is_char_boundary(byte) {
+    return None;
+  }
+
+  let right_text = paragraph.text[byte..].to_string();
+  paragraph.text.truncate(byte);
+  let (left_runs, right_runs) = split_runs_at(&paragraph.paragraph.runs, byte);
+  paragraph.paragraph.runs = left_runs;
+  paragraph.paragraph.byte_range = 0..paragraph.text.len();
+  paragraph.paragraph.version = paragraph.paragraph.version.wrapping_add(1);
+
+  let mut inserted = paragraphs
+    .iter()
+    .map(table_cell_paragraph_from_input_paragraph)
+    .collect::<Vec<_>>();
+  let first = inserted.remove(0);
+  let first_insert_start = paragraph.text.len();
+  paragraph.text.push_str(&first.text);
+  let mut paragraph_runs = std::mem::take(&mut paragraph.paragraph.runs);
+  paragraph_runs.extend(first.paragraph.runs);
+  paragraph.paragraph.runs = merge_adjacent_runs(paragraph_runs);
+  paragraph.paragraph.byte_range = 0..paragraph.text.len();
+  paragraph.paragraph.version = paragraph.paragraph.version.wrapping_add(1);
+  let mut caret_block_ix = paragraph_ix;
+  let mut caret_byte = first_insert_start + first.text.len();
+
+  let mut insert_ix = paragraph_ix + 1;
+  for inserted_paragraph in inserted {
+    caret_block_ix = insert_ix;
+    caret_byte = inserted_paragraph.text.len();
+    cell
+      .blocks
+      .insert(insert_ix, TableCellBlock::Paragraph(inserted_paragraph));
+    insert_ix += 1;
+  }
+
+  let TableCellBlock::Paragraph(caret_paragraph) = cell.blocks.get_mut(caret_block_ix)? else {
+    return None;
+  };
+  caret_paragraph.text.push_str(&right_text);
+  let mut caret_runs = std::mem::take(&mut caret_paragraph.paragraph.runs);
+  caret_runs.extend(right_runs);
+  caret_paragraph.paragraph.runs = merge_adjacent_runs(caret_runs);
+  caret_paragraph.paragraph.byte_range = 0..caret_paragraph.text.len();
+  caret_paragraph.paragraph.version = caret_paragraph.paragraph.version.wrapping_add(1);
+  Some((caret_block_ix, caret_byte))
+}
+
+pub(super) fn merge_table_cell_paragraph_with_previous(cell: &mut TableCell, paragraph_block_ix: usize) -> Option<(usize, usize)> {
+  let current_ix = table_cell_paragraph_block_ix(cell, paragraph_block_ix)?;
+  let previous_ix = previous_table_cell_paragraph_block_ix(cell, current_ix)?;
+  let TableCellBlock::Paragraph(current) = cell.blocks.remove(current_ix) else {
+    return None;
+  };
+  let TableCellBlock::Paragraph(previous) = cell.blocks.get_mut(previous_ix)? else {
+    return None;
+  };
+  let caret = previous.text.len();
+  previous.text.push_str(&current.text);
+  let mut runs = std::mem::take(&mut previous.paragraph.runs);
+  runs.extend(current.paragraph.runs);
+  previous.paragraph.runs = merge_adjacent_runs(runs);
+  previous.paragraph.byte_range = 0..previous.text.len();
+  previous.paragraph.version = previous.paragraph.version.wrapping_add(1);
+  Some((previous_ix, caret))
+}
+
+fn merge_table_cell_paragraph_with_next(cell: &mut TableCell, paragraph_block_ix: usize) -> Option<(usize, usize)> {
+  let current_ix = table_cell_paragraph_block_ix(cell, paragraph_block_ix)?;
+  let next_ix = next_table_cell_paragraph_block_ix(cell, current_ix)?;
+  let TableCellBlock::Paragraph(next) = cell.blocks.remove(next_ix) else {
+    return None;
+  };
+  let TableCellBlock::Paragraph(current) = cell.blocks.get_mut(current_ix)? else {
+    return None;
+  };
+  let caret = current.text.len();
+  current.text.push_str(&next.text);
+  let mut runs = std::mem::take(&mut current.paragraph.runs);
+  runs.extend(next.paragraph.runs);
+  current.paragraph.runs = merge_adjacent_runs(runs);
+  current.paragraph.byte_range = 0..current.text.len();
+  current.paragraph.version = current.paragraph.version.wrapping_add(1);
+  Some((current_ix, caret))
 }
 
 fn table_cell_styles_at(cell_paragraph: &TableCellParagraph, byte: usize) -> RunStyles {
@@ -4488,6 +5701,73 @@ fn delete_range_in_table_cell_paragraph(cell_paragraph: &mut TableCellParagraph,
   cell_paragraph.paragraph.version = cell_paragraph.paragraph.version.wrapping_add(1);
 }
 
+fn table_cell_range_all_run_styles(cell_paragraph: &TableCellParagraph, range: Range<usize>, predicate: impl Fn(RunStyles) -> bool) -> bool {
+  if range.start >= range.end {
+    return false;
+  }
+  let mut offset = 0;
+  let mut saw_run = false;
+  for run in &cell_paragraph.paragraph.runs {
+    let run_start = offset;
+    let run_end = offset + run.len;
+    offset = run_end;
+    if run_end <= range.start || run_start >= range.end {
+      continue;
+    }
+    saw_run = true;
+    if !predicate(run.styles) {
+      return false;
+    }
+  }
+  saw_run
+}
+
+pub(super) fn mutate_table_cell_runs_in_range(
+  cell_paragraph: &mut TableCellParagraph,
+  range: Range<usize>,
+  mut mutate: impl FnMut(&mut RunStyles),
+) {
+  let start = range.start.min(cell_paragraph.text.len());
+  let end = range.end.min(cell_paragraph.text.len());
+  if start >= end {
+    return;
+  }
+  let mut new_runs = Vec::with_capacity(cell_paragraph.paragraph.runs.len() + 2);
+  let mut offset = 0;
+  let old_runs = std::mem::take(&mut cell_paragraph.paragraph.runs);
+  for run in &old_runs {
+    let run_start = offset;
+    let run_end = offset + run.len;
+    offset = run_end;
+    if run_end <= start || run_start >= end {
+      new_runs.push(run.clone());
+      continue;
+    }
+    if run_start < start {
+      new_runs.push(TextRun {
+        len: start - run_start,
+        styles: run.styles,
+      });
+    }
+    let selected_start = run_start.max(start);
+    let selected_end = run_end.min(end);
+    let mut selected_styles = run.styles;
+    mutate(&mut selected_styles);
+    new_runs.push(TextRun {
+      len: selected_end - selected_start,
+      styles: selected_styles,
+    });
+    if run_end > end {
+      new_runs.push(TextRun {
+        len: run_end - end,
+        styles: run.styles,
+      });
+    }
+  }
+  cell_paragraph.paragraph.runs = merge_adjacent_runs(new_runs);
+  cell_paragraph.paragraph.version = cell_paragraph.paragraph.version.wrapping_add(1);
+}
+
 fn insert_standalone_paragraphs_into_projection(
   document: &mut Document,
   insert_paragraph_ix: usize,
@@ -4539,6 +5819,7 @@ fn render_image_block(
   block_ix: usize,
   row_size: Size<Pixels>,
   selected_block: Option<BlockSelection>,
+  editor: Entity<RichTextEditor>,
 ) -> gpui::AnyElement {
   let selected = selected_block == Some(BlockSelection::Image(block_ix));
   let Some(asset) = document.assets.assets.get(&image.asset_id) else {
@@ -4566,6 +5847,66 @@ fn render_image_block(
             .into_any_element()
         }),
     )
+    .when(selected, |this| this.children(image_resize_handles(editor, block_ix)))
+    .into_any_element()
+}
+
+fn image_resize_handles(editor: Entity<RichTextEditor>, block_ix: usize) -> Vec<gpui::AnyElement> {
+  [
+    ImageResizeHandle::TopLeft,
+    ImageResizeHandle::TopRight,
+    ImageResizeHandle::Left,
+    ImageResizeHandle::Right,
+    ImageResizeHandle::BottomLeft,
+    ImageResizeHandle::BottomRight,
+  ]
+  .into_iter()
+  .map(|handle| image_resize_handle(editor.clone(), block_ix, handle))
+  .collect()
+}
+
+fn image_resize_handle(editor: Entity<RichTextEditor>, block_ix: usize, handle: ImageResizeHandle) -> gpui::AnyElement {
+  let cursor = match handle {
+    ImageResizeHandle::Left | ImageResizeHandle::Right => CursorStyle::ResizeLeftRight,
+    ImageResizeHandle::TopLeft | ImageResizeHandle::BottomRight => CursorStyle::ResizeUpLeftDownRight,
+    ImageResizeHandle::TopRight | ImageResizeHandle::BottomLeft => CursorStyle::ResizeUpRightDownLeft,
+  };
+  div()
+    .absolute()
+    .when(
+      matches!(
+        handle,
+        ImageResizeHandle::Left | ImageResizeHandle::TopLeft | ImageResizeHandle::BottomLeft
+      ),
+      |this| this.left(px(-4.0)),
+    )
+    .when(
+      matches!(
+        handle,
+        ImageResizeHandle::Right | ImageResizeHandle::TopRight | ImageResizeHandle::BottomRight
+      ),
+      |this| this.right(px(-4.0)),
+    )
+    .when(matches!(handle, ImageResizeHandle::TopLeft | ImageResizeHandle::TopRight), |this| {
+      this.top(px(-4.0))
+    })
+    .when(matches!(handle, ImageResizeHandle::BottomLeft | ImageResizeHandle::BottomRight), |this| {
+      this.bottom(px(-4.0))
+    })
+    .when(handle == ImageResizeHandle::Left || handle == ImageResizeHandle::Right, |this| {
+      this.top(px(24.0))
+    })
+    .size(px(9.0))
+    .bg(rgb(0xffffff))
+    .border_1()
+    .border_color(rgb(0x0969da))
+    .cursor(cursor)
+    .on_mouse_down(MouseButton::Left, move |event, window, cx| {
+      cx.stop_propagation();
+      editor.update(cx, |editor, cx| {
+        editor.start_image_resize_drag(block_ix, handle, event.position, window, cx);
+      });
+    })
     .into_any_element()
 }
 
@@ -4574,26 +5915,59 @@ fn render_equation_block(
   equation: &EquationBlock,
   block_ix: usize,
   row_size: Size<Pixels>,
-  selected_block: Option<BlockSelection>,
+  selected: bool,
+  source_selection: Option<EquationSourceSelection>,
 ) -> gpui::AnyElement {
-  let selected = selected_block == Some(BlockSelection::Equation(block_ix));
+  let _ = block_ix;
   let frame = reserved_object_frame(document, row_size, selected);
-  match equation_svg_bytes(equation) {
-    Ok(svg) => {
-      let image = Image::from_bytes(ImageFormat::Svg, svg.as_ref().clone());
+  let equation_width = {
+    let source_width = equation.source.len().max(4) as f32 * 26.0;
+    let max_width: f32 = (row_size.width - document.theme.pageless_inset_x * 2.0)
+      .max(px(240.0))
+      .into();
+    px(source_width.clamp(240.0, max_width))
+  };
+  let source_strip = || {
+    div()
+      .w_full()
+      .px_2()
+      .py_1()
+      .text_xs()
+      .font_family("Consolas")
+      .text_color(rgb(0x000000))
+      .bg(rgb(0xf6f8fa))
+      .flex()
+      .flex_row()
+      .children(equation_source_text_elements(&equation.source, source_selection))
+      .into_any_element()
+  };
+  match EquationRenderer::png_bytes(equation) {
+    Ok(png) => {
+      let image = Image::from_bytes(ImageFormat::Png, png.as_ref().clone());
       frame
         .child(
-          img(Arc::new(image))
+          div()
             .size_full()
-            .object_fit(gpui::ObjectFit::Contain)
-            .with_loading(|| div().size_full().bg(rgb(0xffffff)).into_any_element())
-            .with_fallback(|| {
-              div()
-                .size_full()
-                .bg(rgb(0xffffff))
-                .child("Equation unavailable")
-                .into_any_element()
-            }),
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_1()
+            .child(
+              img(Arc::new(image))
+                .w(equation_width)
+                .h(px(60.0))
+                .object_fit(gpui::ObjectFit::ScaleDown)
+                .with_loading(|| div().size_full().bg(rgb(0xffffff)).into_any_element())
+                .with_fallback(|| {
+                  div()
+                    .size_full()
+                    .bg(rgb(0xffffff))
+                    .child("Equation unavailable")
+                    .into_any_element()
+                }),
+            )
+            .when(selected, |this| this.child(source_strip())),
         )
         .into_any_element()
     },
@@ -4609,38 +5983,150 @@ fn render_equation_block(
           .font_family("Cambria Math")
           .text_size(px(18.0))
           .text_color(rgb(0x000000))
-          .child(equation.source.to_string())
-          .child(div().text_xs().text_color(rgb(0xa40000)).child(error)),
+          .child(div().text_xs().text_color(rgb(0xa40000)).child(error))
+          .child(source_strip()),
       )
       .into_any_element(),
   }
 }
 
-fn equation_svg_bytes(equation: &EquationBlock) -> Result<Arc<Vec<u8>>, String> {
-  static CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
-  let display = matches!(equation.display, EquationDisplay::Display);
-  let key = (equation.source.to_string(), display);
-  let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-  if let Some(cached) = cache.lock().ok().and_then(|cache| cache.get(&key).cloned()) {
-    return cached;
+fn equation_source_text_elements(source: &str, selection: Option<EquationSourceSelection>) -> Vec<gpui::AnyElement> {
+  let range = selection.and_then(|selection| {
+    if selection.anchor == selection.caret {
+      None
+    } else {
+      Some(selection.anchor.min(selection.caret)..selection.anchor.max(selection.caret))
+    }
+  });
+  let caret = selection.map(|selection| selection.caret.min(source.len()));
+  let caret_visible = selection
+    .map(|selection| selection.caret_visible)
+    .unwrap_or(false);
+  let mut children = Vec::new();
+  let mut rendered_caret = false;
+  for (byte, ch) in source.char_indices() {
+    if caret == Some(byte) && caret_visible {
+      children.push(
+        div()
+          .text_color(rgb(0x000000))
+          .child("|")
+          .into_any_element(),
+      );
+      rendered_caret = true;
+    }
+    let end = byte + ch.len_utf8();
+    let selected = range
+      .as_ref()
+      .is_some_and(|range| byte < range.end && end > range.start);
+    children.push(
+      div()
+        .when(selected, |this| this.bg(rgb(0x0969da)).text_color(rgb(0xffffff)))
+        .child(ch.to_string())
+        .into_any_element(),
+    );
   }
-  let result = if display {
-    mathjax_svg::convert_to_svg(&key.0)
-  } else {
-    mathjax_svg::convert_to_svg_inline(&key.0)
+  if !rendered_caret && caret == Some(source.len()) && caret_visible {
+    children.push(
+      div()
+        .text_color(rgb(0x000000))
+        .child("|")
+        .into_any_element(),
+    );
   }
-  .map(|svg| Arc::new(svg.into_bytes()))
-  .map_err(|error| error.to_string());
-  if let Ok(mut cache) = cache.lock() {
-    cache.insert(key, result.clone());
+  children
+}
+
+struct EquationRenderer;
+
+impl EquationRenderer {
+  fn svg_bytes(equation: &EquationBlock) -> Result<Arc<Vec<u8>>, String> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
+    let display = matches!(equation.display, EquationDisplay::Display);
+    let key = (equation.source.to_string(), display);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().ok().and_then(|cache| cache.get(&key).cloned()) {
+      return cached;
+    }
+    let result = if display {
+      mathjax_svg::convert_to_svg(&key.0)
+    } else {
+      mathjax_svg::convert_to_svg_inline(&key.0)
+    }
+    .map(|svg| Arc::new(pad_mathjax_svg_viewbox(&svg).into_bytes()))
+    .map_err(|error| error.to_string());
+    if let Ok(mut cache) = cache.lock() {
+      cache.insert(key, result.clone());
+    }
+    result
   }
-  result
+
+  fn png_bytes(equation: &EquationBlock) -> Result<Arc<Vec<u8>>, String> {
+    static CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
+    let display = matches!(equation.display, EquationDisplay::Display);
+    let key = (equation.source.to_string(), display);
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(cached) = cache.lock().ok().and_then(|cache| cache.get(&key).cloned()) {
+      return cached;
+    }
+    let result = Self::svg_bytes(equation)
+      .and_then(|svg| rasterize_svg_to_png(svg.as_ref()))
+      .map(Arc::new);
+    if let Ok(mut cache) = cache.lock() {
+      cache.insert(key, result.clone());
+    }
+    result
+  }
+}
+
+fn rasterize_svg_to_png(svg: &[u8]) -> Result<Vec<u8>, String> {
+  const EQUATION_RASTER_SCALE: f32 = 4.0;
+  let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default()).map_err(|error| error.to_string())?;
+  let svg_size = tree.size();
+  let width = (svg_size.width() * EQUATION_RASTER_SCALE).ceil().max(1.0) as u32;
+  let height = (svg_size.height() * EQUATION_RASTER_SCALE).ceil().max(1.0) as u32;
+  let mut pixmap = resvg::tiny_skia::Pixmap::new(width, height).ok_or_else(|| "equation SVG has invalid raster size".to_string())?;
+  resvg::render(
+    &tree,
+    resvg::tiny_skia::Transform::from_scale(EQUATION_RASTER_SCALE, EQUATION_RASTER_SCALE),
+    &mut pixmap.as_mut(),
+  );
+
+  pixmap.encode_png().map_err(|error| error.to_string())
+}
+
+fn pad_mathjax_svg_viewbox(svg: &str) -> String {
+  let Some(viewbox_start) = svg.find("viewBox=\"") else {
+    return svg.to_string();
+  };
+  let values_start = viewbox_start + "viewBox=\"".len();
+  let Some(values_end) = svg[values_start..]
+    .find('"')
+    .map(|offset| values_start + offset)
+  else {
+    return svg.to_string();
+  };
+  let values = &svg[values_start..values_end];
+  let mut parts = values
+    .split_whitespace()
+    .filter_map(|part| part.parse::<f32>().ok());
+  let (Some(x), Some(y), Some(width), Some(height)) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
+    return svg.to_string();
+  };
+  let top_pad = height * 0.08;
+  let bottom_pad = height * 0.18;
+  let replacement = format!("{} {} {} {}", x, y - top_pad, width, height + top_pad + bottom_pad);
+  let mut output = String::with_capacity(svg.len() + replacement.len());
+  output.push_str(&svg[..values_start]);
+  output.push_str(&replacement);
+  output.push_str(&svg[values_end..]);
+  output
 }
 
 fn reserved_object_frame(document: &Document, row_size: Size<Pixels>, selected: bool) -> gpui::Div {
   let object_height = (row_size.height - document.theme.paragraph_after).max(px(1.0));
   let object_width = (row_size.width - document.theme.pageless_inset_x * 2.0).max(px(1.0));
   div()
+    .relative()
     .w(object_width)
     .h(object_height)
     .ml(document.theme.pageless_inset_x)
@@ -4670,6 +6156,7 @@ fn image_object_frame(document: &Document, image: &ImageBlock, asset: &AssetReco
       BlockAlignment::Right => (available_width - object_width).max(px(0.0)),
     };
   div()
+    .relative()
     .w(object_width)
     .h(object_height)
     .ml(left_margin)
@@ -4729,23 +6216,24 @@ fn image_format_for_path(path: &Path) -> Option<ImageFormat> {
 }
 
 fn block_fragment_plain_text(fragment: &RichClipboardFragment) -> String {
-  fragment
-    .blocks
+  let mut parts = fragment
+    .paragraphs
     .iter()
-    .map(|block| match block {
-      InputBlock::Paragraph(paragraph) => input_paragraph_text(paragraph),
-      InputBlock::Image(image) => {
-        if image.alt_text.is_empty() {
-          "[Image]".to_string()
-        } else {
-          image.alt_text.clone()
-        }
-      },
-      InputBlock::Equation(equation) => equation.source.clone(),
-      InputBlock::Table(table) => table_plain_text(table),
-    })
-    .collect::<Vec<_>>()
-    .join("\n")
+    .map(input_paragraph_text)
+    .collect::<Vec<_>>();
+  parts.extend(fragment.blocks.iter().map(|block| match block {
+    InputBlock::Paragraph(paragraph) => input_paragraph_text(paragraph),
+    InputBlock::Image(image) => {
+      if image.alt_text.is_empty() {
+        "[Image]".to_string()
+      } else {
+        image.alt_text.clone()
+      }
+    },
+    InputBlock::Equation(equation) => equation.source.clone(),
+    InputBlock::Table(table) => table_plain_text(table),
+  }));
+  parts.join("\n")
 }
 
 fn table_plain_text(table: &InputTableBlock) -> String {
@@ -4918,6 +6406,34 @@ pub(super) fn input_paragraph_from_table_cell_paragraph(paragraph: &TableCellPar
         }
       })
       .collect(),
+  }
+}
+
+fn input_paragraph_from_table_cell_range(paragraph: &TableCellParagraph, range: Range<usize>) -> InputParagraph {
+  let start = range.start.min(paragraph.text.len());
+  let end = range.end.min(paragraph.text.len()).max(start);
+  let mut runs = Vec::new();
+  let mut byte = 0;
+  for run in &paragraph.paragraph.runs {
+    let run_start = byte;
+    let run_end = run_start + run.len;
+    byte = run_end;
+    let clipped_start = run_start.max(start);
+    let clipped_end = run_end.min(end);
+    if clipped_start < clipped_end {
+      runs.push(InputRun {
+        text: paragraph
+          .text
+          .get(clipped_start..clipped_end)
+          .unwrap_or("")
+          .to_string(),
+        styles: run.styles,
+      });
+    }
+  }
+  InputParagraph {
+    style: paragraph.paragraph.style,
+    runs,
   }
 }
 

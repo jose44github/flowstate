@@ -135,9 +135,16 @@ pub fn write_db8(path: impl AsRef<Path>, document: &Document) -> io::Result<()> 
   if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
     fs::create_dir_all(parent)?;
   }
-  validate_document(document)?;
-  let bytes = serialize_db8(document)?;
+  let document = document_for_serialization(document);
+  validate_document(&document)?;
+  let bytes = serialize_db8(&document)?;
   write_bytes_atomic(path, &bytes)
+}
+
+fn document_for_serialization(document: &Document) -> Document {
+  let mut document = document.clone();
+  document.blocks = Arc::new(serializable_blocks(&document));
+  document
 }
 
 fn serialize_db8(document: &Document) -> io::Result<Vec<u8>> {
@@ -661,25 +668,90 @@ fn validate_document(document: &Document) -> io::Result<()> {
   {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "last paragraph does not end at text length"));
   }
+  validate_paragraph_block_projection(document)?;
   for block in document.blocks.iter() {
-    validate_block_payload(block, document)?;
+    validate_block_payload(block, document, 0)?;
   }
   Ok(())
 }
 
-fn validate_block_payload(block: &Block, _document: &Document) -> io::Result<()> {
+fn validate_paragraph_block_projection(document: &Document) -> io::Result<()> {
+  let paragraph_blocks = document
+    .blocks
+    .iter()
+    .filter_map(|block| match block {
+      Block::Paragraph(paragraph) => Some(paragraph),
+      Block::Image(_) | Block::Equation(_) | Block::Table(_) => None,
+    })
+    .collect::<Vec<_>>();
+  if paragraph_blocks.len() != document.paragraphs.len() {
+    return Err(io::Error::new(
+      io::ErrorKind::InvalidData,
+      "paragraph block count does not match paragraph metadata",
+    ));
+  }
+  for (block_paragraph, paragraph) in paragraph_blocks.iter().zip(document.paragraphs.iter()) {
+    if *block_paragraph != paragraph {
+      return Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "paragraph block payload does not match paragraph metadata",
+      ));
+    }
+  }
+  Ok(())
+}
+
+fn validate_block_payload(block: &Block, document: &Document, table_depth: usize) -> io::Result<()> {
   match block {
     // Missing assets are allowed so a partially damaged document can still
     // open and show a visible missing-image block instead of failing load.
-    Block::Image(_) => {},
-    Block::Equation(_) => {},
-    Block::Table(table) => validate_table_payload(table)?,
-    Block::Paragraph(_) => {},
+    Block::Image(image) => validate_image_payload(image, document)?,
+    Block::Equation(equation) => validate_equation_payload(equation)?,
+    Block::Table(table) => validate_table_payload(table, table_depth)?,
+    Block::Paragraph(paragraph) => {
+      if paragraph_runs_len(paragraph) != paragraph_text_len(paragraph) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "paragraph block run lengths are invalid"));
+      }
+    },
   }
   Ok(())
 }
 
-fn validate_table_payload(table: &TableBlock) -> io::Result<()> {
+fn validate_image_payload(image: &ImageBlock, document: &Document) -> io::Result<()> {
+  match image.sizing {
+    ImageSizing::Fixed { width_px, height_px } => {
+      if width_px == 0 || height_px == Some(0) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "fixed image dimensions must be nonzero"));
+      }
+    },
+    ImageSizing::Intrinsic | ImageSizing::FitWidth => {},
+  }
+  if let Some(caption) = &image.caption {
+    if paragraph_runs_len(caption) != paragraph_text_len(caption) {
+      return Err(io::Error::new(io::ErrorKind::InvalidData, "image caption run lengths are invalid"));
+    }
+  }
+  if let Some(asset) = document.assets.assets.get(&image.asset_id) {
+    let mut hasher = DefaultHasher::new();
+    asset.bytes.hash(&mut hasher);
+    if asset.content_hash != hasher.finish() {
+      return Err(io::Error::new(io::ErrorKind::InvalidData, "image asset content hash mismatch"));
+    }
+  }
+  Ok(())
+}
+
+fn validate_equation_payload(equation: &EquationBlock) -> io::Result<()> {
+  if equation.source.len() > 64 * 1024 {
+    return Err(io::Error::new(io::ErrorKind::InvalidData, "equation source is too large"));
+  }
+  Ok(())
+}
+
+fn validate_table_payload(table: &TableBlock, depth: usize) -> io::Result<()> {
+  if depth > 8 {
+    return Err(io::Error::new(io::ErrorKind::InvalidData, "nested tables are too deep"));
+  }
   if table.rows.is_empty() {
     return Err(io::Error::new(io::ErrorKind::InvalidData, "table has no rows"));
   }
@@ -714,7 +786,7 @@ fn validate_table_payload(table: &TableBlock) -> io::Result<()> {
               }
             }
           },
-          TableCellBlock::Table(nested) => validate_table_payload(nested)?,
+          TableCellBlock::Table(nested) => validate_table_payload(nested, depth + 1)?,
         }
       }
     }

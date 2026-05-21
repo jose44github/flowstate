@@ -777,6 +777,7 @@ impl Workspace {
           .items_center()
           .gap_1()
           .child(top_bar_button("top-file", "File"))
+          .child(insert_top_bar_button(cx, self.active_editor.is_some()))
           .child(styles_top_bar_button(cx))
           .child(theme_top_bar_button(cx))
           .child(top_bar_button("top-settings", "Settings")),
@@ -1157,7 +1158,7 @@ impl Workspace {
           .child(
             Button::new("empty-open-demo")
               .icon(IconName::FolderOpen)
-              .label("Open Demo [REMOVE THIS IN PROD]")
+              .label("Open Demo")
               .on_click(open_demo),
           ),
       )
@@ -1533,6 +1534,75 @@ fn styles_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
           cx.notify();
         })),
     )
+}
+
+fn insert_top_bar_button(cx: &mut Context<Workspace>, has_document: bool) -> impl IntoElement {
+  let workspace = cx.entity().downgrade();
+  div()
+    .h_full()
+    .flex_none()
+    .flex()
+    .items_center()
+    .justify_center()
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .child(
+      Button::new("top-insert")
+        .label("Insert")
+        .xsmall()
+        .ghost()
+        .disabled(!has_document)
+        .dropdown_menu(move |menu, _, _| {
+          let image_workspace = workspace.clone();
+          let table_workspace = workspace.clone();
+          let equation_workspace = workspace.clone();
+          menu
+            .item(
+              PopupMenuItem::new("Image...")
+                .disabled(!has_document)
+                .on_click(move |_, _, cx| {
+                  insert_image_from_top_bar(&image_workspace, cx);
+                }),
+            )
+            .item(
+              PopupMenuItem::new("Table")
+                .disabled(!has_document)
+                .on_click(move |_, _, cx| {
+                  insert_default_table_from_top_bar(&table_workspace, cx);
+                }),
+            )
+            .item(
+              PopupMenuItem::new("Equation")
+                .disabled(!has_document)
+                .on_click(move |_, _, cx| {
+                  insert_default_equation_from_top_bar(&equation_workspace, cx);
+                }),
+            )
+        }),
+    )
+}
+
+fn insert_image_from_top_bar(workspace: &WeakEntity<Workspace>, cx: &mut App) {
+  let _ = workspace.update(cx, |workspace, cx| {
+    if let Some(editor) = workspace.active_editor.clone() {
+      let _ = editor.update(cx, |editor, cx| editor.prompt_insert_image(cx));
+    }
+  });
+}
+
+fn insert_default_table_from_top_bar(workspace: &WeakEntity<Workspace>, cx: &mut App) {
+  let _ = workspace.update(cx, |workspace, cx| {
+    if let Some(editor) = workspace.active_editor.clone() {
+      let _ = editor.update(cx, |editor, cx| editor.insert_default_table(2, 2, cx));
+    }
+  });
+}
+
+fn insert_default_equation_from_top_bar(workspace: &WeakEntity<Workspace>, cx: &mut App) {
+  let _ = workspace.update(cx, |workspace, cx| {
+    if let Some(editor) = workspace.active_editor.clone() {
+      let _ = editor.update(cx, |editor, cx| editor.insert_equation("x^2 + y^2 = z^2", cx));
+    }
+  });
 }
 
 fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {

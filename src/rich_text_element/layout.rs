@@ -149,7 +149,7 @@ impl LaidOutParagraph {
     }
   }
 
-  fn hit_test(&self, position: Point<Pixels>) -> DocumentOffset {
+  pub(super) fn hit_test(&self, position: Point<Pixels>) -> DocumentOffset {
     let line_ix = first_line_with_bottom_at_or_after(&self.lines, position.y);
     if let Some(line) = self.lines.get(line_ix) {
       return DocumentOffset {
@@ -629,8 +629,8 @@ fn image_height_for_width(intrinsic: Option<(Pixels, Pixels)>, width: Pixels) ->
 
 fn equation_placeholder_height(document: &Document, equation: &EquationBlock) -> Pixels {
   match equation.display {
-    EquationDisplay::Display => (document.theme.body_font_size * 2.5).max(px(40.0)),
-    EquationDisplay::InlineLikeParagraph => (document.theme.body_font_size * 1.5).max(px(24.0)),
+    EquationDisplay::Display => (document.theme.body_font_size * 3.7).max(px(72.0)),
+    EquationDisplay::InlineLikeParagraph => (document.theme.body_font_size * 2.75).max(px(56.0)),
   }
 }
 
@@ -1821,6 +1821,13 @@ pub(super) fn caret_bounds(layout: &LayoutState, offset: DocumentOffset, origin:
   Some(Bounds::new(origin + line.origin + point(x, px(0.0)), size(px(1.0), line.line_height)))
 }
 
+pub(super) fn caret_bounds_in_paragraph(paragraph: &LaidOutParagraph, byte: usize, origin: Point<Pixels>) -> Option<Bounds<Pixels>> {
+  let line_ix = line_ix_for_byte(paragraph, byte)?;
+  let line = paragraph.lines.get(line_ix)?;
+  let x = x_for_byte(line, byte);
+  Some(Bounds::new(origin + line.origin + point(x, px(0.0)), size(px(1.0), line.line_height)))
+}
+
 pub(super) fn x_for_byte(line: &LaidOutLine, byte: usize) -> Pixels {
   for segment in &line.segments {
     let segment_end = segment.start_byte + segment.shaped.len();
@@ -1832,6 +1839,29 @@ pub(super) fn x_for_byte(line: &LaidOutLine, byte: usize) -> Pixels {
     }
   }
   line.width
+}
+
+fn line_ix_for_byte(paragraph: &LaidOutParagraph, byte: usize) -> Option<usize> {
+  let mut low = 0;
+  let mut high = paragraph.lines.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if paragraph.lines[mid].end_byte < byte {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  if let Some(line) = paragraph.lines.get(low)
+    && byte >= line.start_byte
+    && byte <= line.end_byte
+  {
+    if byte == line.end_byte && low + 1 < paragraph.lines.len() && paragraph.lines[low + 1].start_byte == byte {
+      return Some(low + 1);
+    }
+    return Some(low);
+  }
+  paragraph.lines.len().checked_sub(1)
 }
 
 // Locate the `LaidOutLine` containing the given offset. Returns
