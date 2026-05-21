@@ -13,7 +13,7 @@ mod selection;
 mod tools;
 mod word_boundary;
 
-pub use demo::demo_document;
+pub use demo::{blank_document, demo_document};
 pub use document::{
   AssetId, AssetRecord, AssetStore, Block, BlockAlignment, Document, DocumentOffset, DocumentPosition, DocumentTheme, EquationBlock,
   EquationDisplay, EquationSyntax, HighlightStyle, ImageBlock, ImageSizing, ObjectAffinity, Paragraph, ParagraphStyle, RunSemanticStyle,

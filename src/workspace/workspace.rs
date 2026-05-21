@@ -20,9 +20,11 @@ use uuid::Uuid;
 
 use crate::app_settings::{load_document_theme, save_document_theme, save_theme_name};
 use crate::rich_text_element::{
-  Document, DocumentTheme, ParagraphStyle, RichTextEditor, ThemeUnderline, demo_document, load_or_create_document,
+  Document, DocumentTheme, ParagraphStyle, RichTextEditor, Save, ThemeUnderline, demo_document, load_or_create_document,
 };
 use crate::workspace::document_panel::DocumentPanel;
+use crate::workspace::file_management::{UNTITLED_DOCUMENT_NAME, default_save_directory, new_blank_document, normalize_db8_path};
+use crate::workspace::file_search_overlay::FileSearchOverlay;
 use crate::workspace::icons::{AppIcon, icon_button};
 
 pub struct Workspace {
@@ -44,6 +46,7 @@ pub struct Workspace {
   outline_caret_paragraph: Option<usize>,
   editor_subscriptions: Vec<Subscription>,
   styles_settings_open: bool,
+  file_search_overlay: Option<Entity<FileSearchOverlay>>,
 }
 
 #[derive(Clone)]
@@ -85,6 +88,7 @@ impl Workspace {
       outline_caret_paragraph: None,
       editor_subscriptions: Vec::new(),
       styles_settings_open: false,
+      file_search_overlay: None,
     };
 
     if let Some(path) = initial_path {
@@ -156,13 +160,23 @@ impl Workspace {
   }
 
   pub fn new_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.add_document_panel(demo_document(), None, window, cx);
+    self.add_document_panel(new_blank_document(), None, window, cx);
   }
 
   pub fn open_demo_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let path = PathBuf::from("data/demo.db8");
     let document = load_or_create_document(&path).unwrap_or_else(|_| demo_document());
     self.add_document_panel(document, Some(path), window, cx);
+  }
+
+  pub fn open_document_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    match load_or_create_document(&path) {
+      Ok(document) => self.add_document_panel(document, Some(path), window, cx),
+      Err(error) => {
+        let detail = format!("Failed to open {}: {error}", path.display());
+        let _ = window.prompt(PromptLevel::Critical, "Open failed", Some(&detail), &[PromptButton::ok("Ok")], cx);
+      },
+    }
   }
 
   pub fn prompt_open_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -321,6 +335,10 @@ impl Workspace {
     let Some(editor) = self.active_editor.clone() else {
       return;
     };
+    if editor.read(cx).document_path().is_none() {
+      self.prompt_save_active_as(editor, window, cx);
+      return;
+    }
     match editor.update(cx, |editor, cx| editor.save(cx)) {
       Ok(()) => {},
       Err(error) => {
@@ -329,6 +347,88 @@ impl Workspace {
       },
     }
     cx.notify();
+  }
+
+  pub fn save_active_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(editor) = self.active_editor.clone() else {
+      return;
+    };
+    self.prompt_save_active_as(editor, window, cx);
+  }
+
+  pub fn close_active_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(panel_id) = self.active_document_id else {
+      return;
+    };
+    self.close_document_panel(panel_id, window, cx);
+  }
+
+  pub fn open_file_search_overlay(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    if let Some(overlay) = self.file_search_overlay.clone() {
+      overlay.update(cx, |overlay, cx| overlay.focus_search(window, cx));
+      return;
+    }
+
+    let workspace = cx.entity().downgrade();
+    let overlay = cx.new(|cx| FileSearchOverlay::new(workspace, window, cx));
+    overlay.update(cx, |overlay, cx| overlay.focus_search(window, cx));
+    self.file_search_overlay = Some(overlay);
+    cx.notify();
+  }
+
+  pub fn close_file_search_overlay(&mut self, cx: &mut Context<Self>) {
+    self.file_search_overlay = None;
+    cx.notify();
+  }
+
+  fn prompt_save_active_as(&mut self, editor: Entity<RichTextEditor>, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(panel_id) = self.active_document_id else {
+      return;
+    };
+    let save_path = cx.prompt_for_new_path(&default_save_directory(), Some(UNTITLED_DOCUMENT_NAME));
+    let window_handle = window.window_handle();
+    cx.spawn(async move |workspace, cx| {
+      let path = match save_path.await {
+        Ok(Ok(Some(path))) => normalize_db8_path(path),
+        Ok(Ok(None)) => return,
+        Ok(Err(error)) => {
+          let detail = error.to_string();
+          let _ = window_handle.update(cx, |_, window, cx| {
+            window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
+          });
+          return;
+        },
+        Err(error) => {
+          eprintln!("save dialog was canceled before completion: {error}");
+          return;
+        },
+      };
+
+      match editor.update(cx, |editor, cx| editor.save_as(path.clone(), cx)) {
+        Ok(Ok(())) => {
+          let _ = workspace.update(cx, |workspace, cx| {
+            if let Some(panel) = workspace
+              .document_panels
+              .iter()
+              .find(|panel| panel.read(cx).id() == panel_id)
+            {
+              panel.update(cx, |panel, cx| panel.set_path(path, cx));
+            }
+            cx.notify();
+          });
+        },
+        Ok(Err(error)) => {
+          let detail = error.to_string();
+          let _ = window_handle.update(cx, |_, window, cx| {
+            window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
+          });
+        },
+        Err(error) => {
+          eprintln!("failed to access editor before save: {error}");
+        },
+      }
+    })
+    .detach();
   }
 
   pub fn toggle_ribbon(&mut self, cx: &mut Context<Self>) {
@@ -495,20 +595,31 @@ impl Workspace {
 
 impl Render for Workspace {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    v_flex()
+    div()
       .size_full()
-      .bg(cx.theme().background)
-      .child(self.render_top_bar(window, cx))
-      .when(self.styles_settings_open, |this| this.child(self.render_styles_settings_view(cx)))
-      .when(!self.styles_settings_open, |this| {
-        this
-          .child(self.render_resizable_workspace(cx))
-          .child(self.render_status_bar(cx))
-      })
+      .relative()
+      .child(
+        v_flex()
+          .on_action(cx.listener(Self::on_save))
+          .size_full()
+          .bg(cx.theme().background)
+          .child(self.render_top_bar(window, cx))
+          .when(self.styles_settings_open, |this| this.child(self.render_styles_settings_view(cx)))
+          .when(!self.styles_settings_open, |this| {
+            this
+              .child(self.render_resizable_workspace(cx))
+              .child(self.render_status_bar(cx))
+          }),
+      )
+      .when_some(self.file_search_overlay.clone(), |this, overlay| this.child(overlay))
   }
 }
 
 impl Workspace {
+  fn on_save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+    self.save_active(window, cx);
+  }
+
   fn render_styles_settings_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
     let workspace = cx.entity().downgrade();
     let has_document = self.active_editor.is_some();
@@ -819,7 +930,7 @@ impl Workspace {
           .h_full()
           .items_center()
           .gap_1()
-          .child(top_bar_button("top-file", "File"))
+          .child(file_top_bar_button(self.active_editor.is_some(), cx))
           .child(insert_top_bar_button(cx, self.active_editor.is_some()))
           .child(styles_top_bar_button(cx))
           .child(theme_top_bar_button(cx))
@@ -1339,7 +1450,8 @@ impl Workspace {
     // dispatch grows beyond direct callbacks, keep the buttons mapped to
     // `CommandId::NewDocument` and `CommandId::OpenDemoDocument`.
     let new_doc = cx.listener(|workspace, _, window, cx| workspace.new_document(window, cx));
-    let open_demo = cx.listener(|workspace, _, window, cx| workspace.open_demo_document(window, cx));
+    let open_document = cx.listener(|workspace, _, window, cx| workspace.prompt_open_document(window, cx));
+    let open_search = cx.listener(|workspace, _, window, cx| workspace.open_file_search_overlay(window, cx));
     v_flex()
       .size_full()
       .items_center()
@@ -1363,15 +1475,22 @@ impl Workspace {
               .on_click(new_doc),
           )
           .child(
-            Button::new("empty-open-demo")
+            Button::new("empty-open-document")
               .icon(IconName::FolderOpen)
-              .label("Open Demo")
-              .on_click(open_demo),
+              .label("Open")
+              .on_click(open_document),
+          )
+          .child(
+            Button::new("empty-search-document")
+              .icon(IconName::Search)
+              .label("Search")
+              .on_click(open_search),
           ),
       )
   }
 
   fn render_toolkit(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    let open_file_search = cx.listener(|workspace, _, window, cx| workspace.open_file_search_overlay(window, cx));
     v_flex()
       .size_full()
       .h_full()
@@ -1403,6 +1522,13 @@ impl Workspace {
               .font_weight(gpui::FontWeight::SEMIBOLD)
               .child("Toolkit"),
           ),
+      )
+      .child(
+        Button::new("toolkit-global-db8-search")
+          .icon(IconName::Search)
+          .label("Find DB8 File")
+          .small()
+          .on_click(open_file_search),
       )
       .child(
         div()
@@ -1759,6 +1885,62 @@ fn styles_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
           cx.notify();
         })),
     )
+}
+
+fn file_top_bar_button(has_document: bool, cx: &mut Context<Workspace>) -> impl IntoElement {
+  let workspace = cx.entity().downgrade();
+  div()
+    .h_full()
+    .flex_none()
+    .flex()
+    .items_center()
+    .justify_center()
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .child(
+      Button::new("top-file")
+        .label("File")
+        .xsmall()
+        .ghost()
+        .dropdown_menu(move |menu, _, _| {
+          menu
+            .item(file_menu_item(workspace.clone(), "New File", false, |workspace, window, cx| {
+              workspace.new_document(window, cx);
+            }))
+            .item(PopupMenuItem::new("New Window").on_click(|_, _, cx| {
+              open_workspace_window(None, cx);
+            }))
+            .separator()
+            .item(file_menu_item(workspace.clone(), "Open File", false, |workspace, window, cx| {
+              workspace.prompt_open_document(window, cx);
+            }))
+            .item(file_menu_item(workspace.clone(), "Save", !has_document, |workspace, window, cx| {
+              workspace.save_active(window, cx);
+            }))
+            .item(file_menu_item(workspace.clone(), "Save As", !has_document, |workspace, window, cx| {
+              workspace.save_active_as(window, cx);
+            }))
+            .separator()
+            .item(file_menu_item(workspace.clone(), "Close File", !has_document, |workspace, window, cx| {
+              workspace.close_active_document(window, cx);
+            }))
+            .item(file_menu_item(workspace.clone(), "Close Window", false, |workspace, window, cx| {
+              workspace.request_close_window(window, cx);
+            }))
+        }),
+    )
+}
+
+fn file_menu_item(
+  workspace: WeakEntity<Workspace>,
+  label: &'static str,
+  disabled: bool,
+  action: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+) -> PopupMenuItem {
+  PopupMenuItem::new(label)
+    .disabled(disabled)
+    .on_click(move |_, window, cx| {
+      let _ = workspace.update(cx, |workspace, cx| action(workspace, window, cx));
+    })
 }
 
 fn insert_top_bar_button(cx: &mut Context<Workspace>, has_document: bool) -> impl IntoElement {
