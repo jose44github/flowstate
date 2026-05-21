@@ -33,6 +33,7 @@ pub struct Workspace {
   body_resizable_state: Entity<ResizableState>,
   content_resizable_state: Entity<ResizableState>,
   ribbon_resizable_state: Entity<ResizableState>,
+  committed_ribbon_height: Pixels,
   outline_tree: Entity<TreeState>,
   outline_cache: Option<(Uuid, u64, u64)>,
   collapsed_outline_items: HashSet<usize>,
@@ -71,6 +72,7 @@ impl Workspace {
       body_resizable_state: cx.new(|_| ResizableState::default()),
       content_resizable_state: cx.new(|_| ResizableState::default()),
       ribbon_resizable_state: cx.new(|_| ResizableState::default()),
+      committed_ribbon_height: px(112.0),
       outline_tree: cx.new(|cx| TreeState::new(cx)),
       outline_cache: None,
       collapsed_outline_items: HashSet::new(),
@@ -639,7 +641,7 @@ impl Workspace {
 
     h_flex()
       .h(ribbon_height)
-      .min_h(px(78.0))
+      .min_h(px(56.0))
       .w_full()
       .items_start()
       .border_b_1()
@@ -667,20 +669,24 @@ impl Workspace {
         .into_any_element();
     }
 
-    let ribbon_height = self
-      .ribbon_resizable_state
-      .read(cx)
-      .sizes()
-      .first()
-      .copied()
-      .unwrap_or(px(112.0));
+    let ribbon_height = self.committed_ribbon_height;
+    let workspace = cx.entity().downgrade();
 
     v_resizable("workspace-ribbon-resizable")
       .with_state(&self.ribbon_resizable_state)
+      .on_resize(move |state, _, cx| {
+        let Some(height) = state.read(cx).sizes().first().copied() else {
+          return;
+        };
+        let _ = workspace.update(cx, |workspace, cx| {
+          workspace.committed_ribbon_height = height;
+          cx.notify();
+        });
+      })
       .child(
         resizable_panel()
           .size(px(112.0))
-          .size_range(px(78.0)..px(224.0))
+          .size_range(px(56.0)..px(158.0))
           .grow(false)
           .child(self.render_ribbon(ribbon_height, cx)),
       )

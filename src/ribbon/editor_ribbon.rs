@@ -333,9 +333,10 @@ struct RibbonLayoutMetrics {
   chip_max_width: gpui::Pixels,
   chip_padding_x: gpui::Pixels,
   chip_text_size: gpui::Pixels,
+  chip_gap: gpui::Pixels,
+  max_chip_rows: usize,
   group_gap: gpui::Pixels,
   group_padding_top: gpui::Pixels,
-  group_padding_bottom: gpui::Pixels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -405,7 +406,7 @@ impl ModernStylesRibbon {
       .min_h(min_ribbon_height())
       .px_2()
       .pt_0()
-      .pb_2()
+      .pb_0()
       .child(
         div()
           .w_full()
@@ -418,14 +419,15 @@ impl ModernStylesRibbon {
           .bg(cx.theme().background)
           .px_2()
           .pt(metrics.group_padding_top)
-          .pb(metrics.group_padding_bottom)
+          .pb(px(1.0))
           .child(
             div()
               .flex()
-              .flex_initial()
+              .flex_1()
               .flex_row()
               .flex_nowrap()
               .items_start()
+              .justify_between()
               .gap(metrics.group_gap)
               .min_w_0()
               .children(groups.iter().enumerate().map(|(index, group)| {
@@ -443,17 +445,21 @@ impl RibbonLayoutMetrics {
     let scale = ((height.as_f32() - min_ribbon_height().as_f32())
       / (max_ribbon_height().as_f32() - min_ribbon_height().as_f32()))
     .clamp(0.0, 1.0);
+    let max_chip_rows = chip_rows_for_height(height);
+    let group_padding_top = px(3.0 + 3.0 * scale);
+    let chip_gap = px(4.0 + 2.0 * scale);
 
     Self {
       height,
-      chip_height: px(24.0 + 10.0 * scale),
-      chip_min_width: px(58.0 + 18.0 * scale),
-      chip_max_width: px(132.0 + 34.0 * scale),
-      chip_padding_x: px(6.0 + 4.0 * scale),
-      chip_text_size: px(10.5 + 2.5 * scale),
+      chip_height: px(24.0 + 12.0 * scale),
+      chip_min_width: px(58.0 + 24.0 * scale),
+      chip_max_width: px(132.0 + 48.0 * scale),
+      chip_padding_x: px(6.0 + 6.0 * scale),
+      chip_text_size: px(10.5 + 4.0 * scale),
+      chip_gap,
+      max_chip_rows,
       group_gap: px(6.0 + 5.0 * scale),
-      group_padding_top: px(5.0 + 4.0 * scale),
-      group_padding_bottom: px(5.0 + 5.0 * scale),
+      group_padding_top,
     }
   }
 }
@@ -463,11 +469,11 @@ fn default_ribbon_height() -> gpui::Pixels {
 }
 
 fn min_ribbon_height() -> gpui::Pixels {
-  px(78.0)
+  px(56.0)
 }
 
 fn max_ribbon_height() -> gpui::Pixels {
-  px(224.0)
+  px(158.0)
 }
 
 fn clamp_pixels(value: gpui::Pixels, min: gpui::Pixels, max: gpui::Pixels) -> gpui::Pixels {
@@ -486,7 +492,7 @@ fn modern_group(
     .flex()
     .flex_row()
     .flex_shrink()
-    .min_w(group_min_width(group, metrics))
+    .w(group_width(group, metrics))
     .gap_2()
     .when(has_divider, |this| {
       this.pl_2().border_l_1().border_color(cx.theme().border.opacity(0.72))
@@ -512,7 +518,7 @@ fn modern_group(
             .flex_wrap()
             .items_center()
             .content_start()
-            .gap_1()
+            .gap(metrics.chip_gap)
             .min_w_0()
             .children(group.commands.iter().map(|command| {
               modern_command_chip(command, editor.clone(), options, metrics, cx)
@@ -522,16 +528,50 @@ fn modern_group(
     .into_any_element()
 }
 
-fn group_min_width(group: &RibbonCommandGroup, metrics: RibbonLayoutMetrics) -> gpui::Pixels {
-  let preferred_columns: usize = match group.commands.len() {
-    0 | 1 => 1,
-    2 => 2,
-    3 | 4 => 2,
-    _ => 3,
-  };
-  let command_width = metrics.chip_min_width.as_f32() * preferred_columns as f32;
-  let gap_width = 4.0 * preferred_columns.saturating_sub(1) as f32;
-  px(command_width + gap_width)
+fn chip_rows_for_height(height: gpui::Pixels) -> usize {
+  let height = height.as_f32();
+
+  if height < 118.0 {
+    1
+  } else if height < 168.0 {
+    2
+  } else {
+    3
+  }
+}
+
+fn group_width(group: &RibbonCommandGroup, metrics: RibbonLayoutMetrics) -> gpui::Pixels {
+  let command_count = group.commands.len().max(1);
+  let rows = metrics.max_chip_rows.min(command_count);
+  let columns = command_count.div_ceil(rows).max(1);
+  let mut command_widths = group
+    .commands
+    .iter()
+    .map(|command| command_chip_width(command, metrics).as_f32())
+    .collect::<Vec<_>>();
+  command_widths.sort_by(|left, right| right.total_cmp(left));
+
+  let commands_width = command_widths.into_iter().take(columns).sum::<f32>();
+  let gap_width = metrics.chip_gap.as_f32() * columns.saturating_sub(1) as f32;
+
+  px(commands_width + gap_width)
+}
+
+fn command_chip_width(command: &RibbonCommand, metrics: RibbonLayoutMetrics) -> gpui::Pixels {
+  let label_width = command.label.chars().count() as f32 * metrics.chip_text_size.as_f32() * 0.62;
+  let shortcut_width = command
+    .shortcut
+    .as_ref()
+    .map(|shortcut| shortcut.chars().count() as f32 * 5.6 + 16.0)
+    .unwrap_or(0.0);
+  let accent_width = if command.accent.is_some() { 14.0 } else { 0.0 };
+  let chrome_width = metrics.chip_padding_x.as_f32() * 2.0 + 14.0;
+
+  clamp_pixels(
+    px(label_width + shortcut_width + accent_width + chrome_width),
+    metrics.chip_min_width,
+    metrics.chip_max_width,
+  )
 }
 
 fn modern_command_chip(
