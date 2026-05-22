@@ -29,6 +29,9 @@ use crate::workspace::file_management::{UNTITLED_DOCUMENT_NAME, default_save_dir
 use crate::workspace::file_search_overlay::FileSearchOverlay;
 use crate::workspace::icons::{AppIcon, icon_button};
 
+#[path = "toolkit_panel.rs"]
+mod toolkit_panel;
+
 pub struct Workspace {
   document_panels: Vec<Entity<DocumentPanel>>,
   active_document_id: Option<Uuid>,
@@ -1158,32 +1161,6 @@ impl Workspace {
       )
   }
 
-  fn render_content_area(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let toolkit_width = if self.toolkit_collapsed { px(30.0) } else { px(300.0) };
-    let toolkit_range_end = if self.toolkit_collapsed { px(30.0) } else { px(520.0) };
-    h_resizable("workspace-content-resizable")
-      .with_state(&self.content_resizable_state)
-      .child(
-        resizable_panel()
-          .size(px(560.0))
-          .size_range(px(360.0)..Pixels::MAX)
-          .child(self.render_document_pane(cx)),
-      )
-      .child(
-        resizable_panel()
-          .size(toolkit_width)
-          .size_range(toolkit_width..toolkit_range_end)
-          .grow(false)
-          .child(if self.toolkit_collapsed {
-            self
-              .render_collapsed_side_panel("Show toolkit", IconName::PanelRightOpen, |workspace, cx| workspace.toggle_toolkit(cx), cx)
-              .into_any_element()
-          } else {
-            self.render_toolkit(cx).into_any_element()
-          }),
-      )
-  }
-
   fn render_collapsed_ribbon_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
     h_flex()
       .h(px(30.0))
@@ -1532,55 +1509,6 @@ impl Workspace {
               .label("Search")
               .on_click(open_search),
           ),
-      )
-  }
-
-  fn render_toolkit(&self, cx: &mut Context<Self>) -> impl IntoElement {
-    let open_file_search = cx.listener(|workspace, _, window, cx| workspace.open_file_search_overlay(window, cx));
-    v_flex()
-      .size_full()
-      .h_full()
-      .gap_2()
-      .p_3()
-      .border_l_1()
-      .border_color(cx.theme().border)
-      .bg(cx.theme().background)
-      .child(
-        div()
-          .w_full()
-          .flex()
-          .flex_row()
-          .items_center()
-          .justify_between()
-          .child(
-            Button::new("collapse-toolkit-panel")
-              .icon(IconName::PanelRightClose)
-              .xsmall()
-              .ghost()
-              .tooltip("Collapse toolkit")
-              .on_click(cx.listener(|workspace, _, _, cx| {
-                workspace.toggle_toolkit(cx);
-              })),
-          )
-          .child(
-            div()
-              .text_sm()
-              .font_weight(gpui::FontWeight::SEMIBOLD)
-              .child("Toolkit"),
-          ),
-      )
-      .child(
-        Button::new("toolkit-global-db8-search")
-          .icon(IconName::Search)
-          .label("Find DB8 File")
-          .small()
-          .on_click(open_file_search),
-      )
-      .child(
-        div()
-          .text_sm()
-          .text_color(cx.theme().muted_foreground)
-          .child("Search, file tools, and document utilities will live here."),
       )
   }
 
