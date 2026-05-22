@@ -1682,14 +1682,14 @@ pub fn open_workspace_window(document_path: Option<PathBuf>, cx: &mut App) {
     WindowOptions {
       window_bounds: Some(WindowBounds::Maximized(bounds)),
       titlebar: Some(TitlebarOptions {
-        title: Some("Odrenrir - Debate Processor".into()),
+        title: Some("Flowstate".into()),
         appears_transparent: true,
         traffic_light_position: Some(point(px(12.0), px(18.0))),
       }),
       ..Default::default()
     },
     |window, cx| {
-      window.set_window_title("Odrenrir - Debate Processor");
+      window.set_window_title("Flowstate");
       let workspace = cx.new(|cx| Workspace::new(document_path, window, cx));
       install_workspace_close_prompt(workspace.clone(), window, cx);
       cx.new(|cx| Root::new(workspace, window, cx))
