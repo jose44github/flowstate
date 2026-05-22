@@ -7,6 +7,7 @@
 pub mod app;
 pub mod app_settings;
 pub mod commands;
+pub mod file_search;
 pub mod ribbon;
 pub mod rich_text_element;
 pub mod workspace;

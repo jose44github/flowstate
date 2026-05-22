@@ -46,6 +46,10 @@ pub(super) fn document_from_input(theme: DocumentTheme, paragraphs: Vec<InputPar
   }
 }
 
+pub fn blank_document() -> Document {
+  document_from_input(DocumentTheme::default(), Vec::new())
+}
+
 pub fn demo_document() -> Document {
   let mut paragraphs = vec![
     InputParagraph {

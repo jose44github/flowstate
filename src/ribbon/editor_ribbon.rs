@@ -132,7 +132,7 @@ impl EditorRibbon {
 }
 
 impl Render for EditorRibbon {
-  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
     let (style_state, armed_tool, document_theme) = {
       let editor = self.editor.read(cx);
       (editor.style_state(), editor.armed_inline_tool(), editor.document_theme())
@@ -147,6 +147,7 @@ impl Render for EditorRibbon {
         &document_theme,
         self.modern_options,
         self.height,
+        window.viewport_size().width,
         cx,
       ),
     }
@@ -319,7 +320,6 @@ pub struct ModernStylesRibbon;
 struct RibbonLayoutMetrics {
   height: gpui::Pixels,
   chip_height: gpui::Pixels,
-  chip_min_width: gpui::Pixels,
   chip_max_width: gpui::Pixels,
   chip_padding_x: gpui::Pixels,
   chip_text_size: gpui::Pixels,
@@ -327,6 +327,9 @@ struct RibbonLayoutMetrics {
   max_chip_rows: usize,
   group_gap: gpui::Pixels,
   group_padding_top: gpui::Pixels,
+  outer_padding_x: gpui::Pixels,
+  inner_padding_x: gpui::Pixels,
+  group_divider_padding_left: gpui::Pixels,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -386,16 +389,22 @@ impl ModernStylesRibbon {
     document_theme: &DocumentTheme,
     options: ModernRibbonOptions,
     height: gpui::Pixels,
+    available_width: gpui::Pixels,
     cx: &mut Context<EditorRibbon>,
   ) -> AnyElement {
     let groups = modern_command_groups(style_state, armed_tool, document_theme);
-    let metrics = RibbonLayoutMetrics::from_height(height);
+    let mut metrics = RibbonLayoutMetrics::from_height(height);
+    let rows_allowed_by_height = metrics.max_chip_rows;
+    let rows_requested_by_width = rows_that_fit_width(&groups, metrics, available_width);
+    // Width can ask for more rows, but height decides whether those rows can
+    // actually be displayed without clipping into the document tabs below.
+    metrics.max_chip_rows = rows_requested_by_width.min(rows_allowed_by_height);
 
     div()
       .w_full()
       .h(metrics.height)
       .min_h(min_ribbon_height())
-      .px_2()
+      .px(metrics.outer_padding_x)
       .pt_0()
       .pb_0()
       .child(
@@ -408,7 +417,7 @@ impl ModernStylesRibbon {
           .items_start()
           .gap_2()
           .bg(cx.theme().background)
-          .px_2()
+          .px(metrics.inner_padding_x)
           .pt(metrics.group_padding_top)
           .pb(px(1.0))
           .child(
@@ -438,21 +447,27 @@ impl RibbonLayoutMetrics {
     let height = clamp_pixels(height, min_ribbon_height(), max_ribbon_height());
     let scale =
       ((height.as_f32() - min_ribbon_height().as_f32()) / (max_ribbon_height().as_f32() - min_ribbon_height().as_f32())).clamp(0.0, 1.0);
-    let max_chip_rows = chip_rows_for_height(height);
     let group_padding_top = px(3.0 + 3.0 * scale);
-    let chip_gap = px(4.0 + 2.0 * scale);
+    let chip_gap = px(2.0 + 4.0 * scale);
+    let chip_height = px(24.0 + 12.0 * scale);
+    let max_chip_rows = chip_rows_for_height(height, chip_height, chip_gap, group_padding_top);
+    let outer_padding_x = px(8.0);
+    let inner_padding_x = px(8.0);
+    let group_divider_padding_left = px(8.0);
 
     Self {
       height,
-      chip_height: px(24.0 + 12.0 * scale),
-      chip_min_width: px(58.0 + 24.0 * scale),
+      chip_height,
       chip_max_width: px(132.0 + 48.0 * scale),
-      chip_padding_x: px(6.0 + 6.0 * scale),
+      chip_padding_x: px(4.0 + 8.0 * scale),
       chip_text_size: px(10.5 + 4.0 * scale),
       chip_gap,
       max_chip_rows,
-      group_gap: px(6.0 + 5.0 * scale),
+      group_gap: px(4.0 + 7.0 * scale),
       group_padding_top,
+      outer_padding_x,
+      inner_padding_x,
+      group_divider_padding_left,
     }
   }
 }
@@ -481,20 +496,25 @@ fn modern_group(
   metrics: RibbonLayoutMetrics,
   cx: &mut Context<EditorRibbon>,
 ) -> AnyElement {
+  let wrap_width = (metrics.max_chip_rows > 1).then(|| group_row_width(group, metrics, metrics.max_chip_rows));
+
   div()
     .flex()
     .flex_row()
-    .flex_shrink()
-    .w(group_width(group, metrics))
+    .flex_none()
+    .flex_grow()
+    .min_w_0()
+    .when_some(wrap_width, |this, wrap_width| this.max_w(wrap_width))
     .gap_2()
     .when(has_divider, |this| {
       this
-        .pl_2()
+        .pl(metrics.group_divider_padding_left)
         .border_l_1()
         .border_color(cx.theme().border.opacity(0.72))
     })
     .child(
       div()
+        .w_full()
         .flex()
         .flex_col()
         .min_w_0()
@@ -511,7 +531,8 @@ fn modern_group(
             .id(group.id)
             .flex()
             .flex_row()
-            .flex_wrap()
+            .when(metrics.max_chip_rows == 1, |this| this.flex_nowrap())
+            .when(metrics.max_chip_rows > 1, |this| this.flex_wrap())
             .items_center()
             .content_start()
             .gap(metrics.chip_gap)
@@ -527,31 +548,77 @@ fn modern_group(
     .into_any_element()
 }
 
-fn chip_rows_for_height(height: gpui::Pixels) -> usize {
-  let height = height.as_f32();
+fn chip_rows_for_height(
+  height: gpui::Pixels,
+  chip_height: gpui::Pixels,
+  chip_gap: gpui::Pixels,
+  group_padding_top: gpui::Pixels,
+) -> usize {
+  // The label, top padding, and bottom breathing room are fixed vertical costs
+  // before chips can stack. Calculate this instead of using a magic threshold
+  // so the default 112px ribbon can wrap to two rows when the window is narrow.
+  let fixed_height = group_padding_top.as_f32() + 10.0 + 3.0 + 2.0;
+  let available_for_chips = (height.as_f32() - fixed_height).max(0.0);
+  let one_row = chip_height.as_f32();
+  let two_rows = chip_height.as_f32() * 2.0 + chip_gap.as_f32();
+  let three_rows = chip_height.as_f32() * 3.0 + chip_gap.as_f32() * 2.0;
 
-  if height < 118.0 {
-    1
-  } else if height < 168.0 {
-    2
-  } else {
+  if available_for_chips >= three_rows {
     3
+  } else if available_for_chips >= two_rows {
+    2
+  } else if available_for_chips >= one_row {
+    1
+  } else {
+    1
   }
 }
 
-fn group_width(group: &RibbonCommandGroup, metrics: RibbonLayoutMetrics) -> gpui::Pixels {
-  let command_count = group.commands.len().max(1);
-  let rows = metrics.max_chip_rows.min(command_count);
-  let columns = command_count.div_ceil(rows).max(1);
-  let mut command_widths = group
-    .commands
-    .iter()
-    .map(|command| command_chip_width(command, metrics).as_f32())
-    .collect::<Vec<_>>();
-  command_widths.sort_by(|left, right| right.total_cmp(left));
+fn command_columns(commands: &[RibbonCommand], max_rows: usize) -> Vec<Vec<&RibbonCommand>> {
+  let rows = max_rows.max(1);
+  commands.chunks(rows).map(|chunk| chunk.iter().collect()).collect()
+}
 
-  let commands_width = command_widths.into_iter().take(columns).sum::<f32>();
-  let gap_width = metrics.chip_gap.as_f32() * columns.saturating_sub(1) as f32;
+fn rows_that_fit_width(groups: &[RibbonCommandGroup], metrics: RibbonLayoutMetrics, available_width: gpui::Pixels) -> usize {
+  // Keep room for the collapse button overlay and small measurement differences
+  // between our estimate and GPUI-component's internal button chrome.
+  let available_width = (available_width - metrics.outer_padding_x * 2.0 - metrics.inner_padding_x * 2.0 - px(48.0)).max(px(0.0));
+  let max_rows = groups
+    .iter()
+    .map(|group| group.commands.len())
+    .max()
+    .unwrap_or(1)
+    .min(3)
+    .max(1);
+
+  (1..=max_rows)
+    .find(|rows| total_group_row_width(groups, metrics, *rows) <= available_width)
+    .unwrap_or(max_rows)
+}
+
+fn total_group_row_width(groups: &[RibbonCommandGroup], metrics: RibbonLayoutMetrics, rows: usize) -> gpui::Pixels {
+  let group_widths = groups
+    .iter()
+    .map(|group| group_row_width(group, metrics, rows).as_f32())
+    .sum::<f32>();
+  let group_gaps = metrics.group_gap.as_f32() * groups.len().saturating_sub(1) as f32;
+  let divider_padding = metrics.group_divider_padding_left.as_f32() * groups.len().saturating_sub(1) as f32;
+
+  px(group_widths + group_gaps + divider_padding)
+}
+
+fn group_row_width(group: &RibbonCommandGroup, metrics: RibbonLayoutMetrics, rows: usize) -> gpui::Pixels {
+  let columns = command_columns(&group.commands, rows);
+  let commands_width = columns
+    .iter()
+    .map(|column| {
+      column
+        .iter()
+        .map(|command| command_chip_width(command, metrics).as_f32())
+        .fold(0.0, f32::max)
+    })
+    .sum::<f32>();
+  let gap_width = metrics.chip_gap.as_f32() * columns.len().saturating_sub(1) as f32;
 
   px(commands_width + gap_width)
 }
@@ -564,13 +631,10 @@ fn command_chip_width(command: &RibbonCommand, metrics: RibbonLayoutMetrics) -> 
     .map(|shortcut| shortcut.chars().count() as f32 * 5.6 + 16.0)
     .unwrap_or(0.0);
   let accent_width = if command.accent.is_some() { 14.0 } else { 0.0 };
-  let chrome_width = metrics.chip_padding_x.as_f32() * 2.0 + 14.0;
+  let component_padding_x = px(6.0);
+  let chrome_width = metrics.chip_padding_x.as_f32() * 2.0 + component_padding_x.as_f32() * 2.0 + 14.0;
 
-  clamp_pixels(
-    px(label_width + shortcut_width + accent_width + chrome_width),
-    metrics.chip_min_width,
-    metrics.chip_max_width,
-  )
+  px(label_width + shortcut_width + accent_width + chrome_width)
 }
 
 fn modern_command_chip(
@@ -589,7 +653,6 @@ fn modern_command_chip(
     .compact()
     .outline()
     .h(metrics.chip_height)
-    .min_w(metrics.chip_min_width)
     .max_w(metrics.chip_max_width)
     .px(metrics.chip_padding_x)
     .rounded(px(6.0))

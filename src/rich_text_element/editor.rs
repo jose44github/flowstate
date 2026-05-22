@@ -636,6 +636,10 @@ impl RichTextEditor {
     &self.document
   }
 
+  pub fn document_path(&self) -> Option<&PathBuf> {
+    self.document_path.as_ref()
+  }
+
   pub fn config(&self) -> &RichTextEditorConfig {
     &self.config
   }
@@ -1280,8 +1284,18 @@ impl RichTextEditor {
 
   pub fn save(&mut self, cx: &mut Context<Self>) -> io::Result<()> {
     let Some(path) = self.document_path.clone() else {
-      return Ok(());
+      return Err(io::Error::new(io::ErrorKind::InvalidInput, "choose a save location before saving"));
     };
+    self.save_to_path(path, cx)
+  }
+
+  pub fn save_as(&mut self, path: PathBuf, cx: &mut Context<Self>) -> io::Result<()> {
+    self.document_path = Some(path.clone());
+    self.recovery_path = Some(recovery_path_for_document(&path));
+    self.save_to_path(path, cx)
+  }
+
+  fn save_to_path(&mut self, path: PathBuf, cx: &mut Context<Self>) -> io::Result<()> {
     self.save_status = SaveStatus::Saving;
     cx.notify();
     let result = write_db8(&path, &self.document);
@@ -3033,11 +3047,6 @@ impl RichTextEditor {
   }
   fn on_paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
     self.paste(cx);
-  }
-  fn on_save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
-    if let Err(error) = self.save(cx) {
-      eprintln!("failed to save: {error}");
-    }
   }
   fn on_undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
     self.undo(cx);
@@ -5350,7 +5359,6 @@ impl Render for RichTextEditor {
       .on_action(cx.listener(Self::on_copy))
       .on_action(cx.listener(Self::on_cut))
       .on_action(cx.listener(Self::on_paste))
-      .on_action(cx.listener(Self::on_save))
       .on_action(cx.listener(Self::on_undo))
       .on_action(cx.listener(Self::on_redo))
       .on_action(cx.listener(Self::on_set_paragraph_pocket))
