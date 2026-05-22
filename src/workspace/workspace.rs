@@ -15,7 +15,9 @@ use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
-use gpui_component::{ActiveTheme as _, Disableable, Icon, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, h_flex, v_flex};
+use gpui_component::{
+  ActiveTheme as _, Disableable, Icon, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, h_flex, v_flex,
+};
 use uuid::Uuid;
 
 use crate::app_settings::{load_document_theme, save_document_theme, save_theme_name};
@@ -456,7 +458,12 @@ impl Workspace {
   }
 
   fn current_document_panel_width(&self, cx: &mut Context<Self>) -> Option<Pixels> {
-    self.content_resizable_state.read(cx).sizes().first().copied()
+    self
+      .content_resizable_state
+      .read(cx)
+      .sizes()
+      .first()
+      .copied()
   }
 
   fn expected_document_width_after_outline_toggle(&self, cx: &mut Context<Self>) -> Option<Pixels> {
@@ -1136,7 +1143,9 @@ impl Workspace {
           .size_range(outline_width..outline_range_end)
           .grow(false)
           .child(if self.outline_collapsed {
-            self.render_collapsed_side_panel("Show outline", IconName::PanelLeftOpen, |workspace, cx| workspace.toggle_outline(cx), cx).into_any_element()
+            self
+              .render_collapsed_side_panel("Show outline", IconName::PanelLeftOpen, |workspace, cx| workspace.toggle_outline(cx), cx)
+              .into_any_element()
           } else {
             self.render_left_nav(nav_width, cx).into_any_element()
           }),
@@ -1166,7 +1175,9 @@ impl Workspace {
           .size_range(toolkit_width..toolkit_range_end)
           .grow(false)
           .child(if self.toolkit_collapsed {
-            self.render_collapsed_side_panel("Show toolkit", IconName::PanelRightOpen, |workspace, cx| workspace.toggle_toolkit(cx), cx).into_any_element()
+            self
+              .render_collapsed_side_panel("Show toolkit", IconName::PanelRightOpen, |workspace, cx| workspace.toggle_toolkit(cx), cx)
+              .into_any_element()
           } else {
             self.render_toolkit(cx).into_any_element()
           }),
@@ -1473,16 +1484,11 @@ impl Workspace {
   }
 
   fn render_document_tab_bar_suffix(&self) -> impl IntoElement {
-    h_flex()
-      .h_full()
-      .items_center()
-      .gap_1()
-      .px_1()
-      .child(
-        icon_button("tab-bar-multipanel-placeholder", AppIcon::MultiPanel)
-          .tooltip("Multi-panel layout")
-          .disabled(true),
-      )
+    h_flex().h_full().items_center().gap_1().px_1().child(
+      icon_button("tab-bar-multipanel-placeholder", AppIcon::MultiPanel)
+        .tooltip("Multi-panel layout")
+        .disabled(true),
+    )
   }
 
   fn render_empty_state(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2072,12 +2078,7 @@ fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
     )
 }
 
-fn view_top_bar_button(
-  cx: &mut Context<Workspace>,
-  outline_open: bool,
-  ribbon_open: bool,
-  toolkit_open: bool,
-) -> impl IntoElement {
+fn view_top_bar_button(cx: &mut Context<Workspace>, outline_open: bool, ribbon_open: bool, toolkit_open: bool) -> impl IntoElement {
   let workspace = cx.entity().downgrade();
   div()
     .h_full()

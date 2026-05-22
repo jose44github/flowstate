@@ -33,7 +33,9 @@ impl DocumentPanel {
   ) -> Self {
     let ribbon_mode = load_ribbon_mode();
     let ribbon = cx.new(|_| EditorRibbon::new_with_mode(editor.clone(), ribbon_mode));
-    let title = title.map(Into::into).unwrap_or_else(|| title_for_path(path.as_ref()));
+    let title = title
+      .map(Into::into)
+      .unwrap_or_else(|| title_for_path(path.as_ref()));
 
     Self {
       id: Uuid::new_v4(),

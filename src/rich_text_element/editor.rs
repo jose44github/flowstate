@@ -708,7 +708,9 @@ impl RichTextEditor {
     } else {
       self.select_block(fallback, cx);
       if matches!(fallback, BlockSelection::Equation(_)) {
-        let byte = self.equation_source_byte_at(block_ix, position, window, cx).unwrap_or(self.equation_source_caret);
+        let byte = self
+          .equation_source_byte_at(block_ix, position, window, cx)
+          .unwrap_or(self.equation_source_caret);
         self.equation_source_anchor = byte;
         self.equation_source_caret = byte;
         self.reset_caret_blink(cx);
@@ -717,13 +719,7 @@ impl RichTextEditor {
     }
   }
 
-  fn equation_source_byte_at(
-    &mut self,
-    block_ix: usize,
-    position: Point<Pixels>,
-    window: &mut Window,
-    cx: &mut Context<Self>,
-  ) -> Option<usize> {
+  fn equation_source_byte_at(&mut self, block_ix: usize, position: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) -> Option<usize> {
     let Block::Equation(equation) = self.document.blocks.get(block_ix)? else {
       return None;
     };
@@ -925,7 +921,7 @@ impl RichTextEditor {
         .sizes
         .iter()
         .take(block_ix)
-      .fold(px(0.0), |top, size| top + size.height),
+        .fold(px(0.0), |top, size| top + size.height),
     )
   }
 

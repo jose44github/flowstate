@@ -898,7 +898,7 @@ fn decode_highlight_style(value: u8) -> io::Result<Option<HighlightStyle>> {
       return Err(io::Error::new(
         io::ErrorKind::InvalidData,
         "highlight slot is reserved but has no app style yet",
-      ))
+      ));
     },
   })
 }

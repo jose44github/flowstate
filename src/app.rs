@@ -1,4 +1,7 @@
-use std::{borrow::Cow, path::{Path, PathBuf}};
+use std::{
+  borrow::Cow,
+  path::{Path, PathBuf},
+};
 
 use gpui::{App, Application, AssetSource, Context, Entity, IntoElement, Render, Result, SharedString, Window, div, prelude::*, rgb};
 use gpui_component::{Theme, ThemeRegistry};

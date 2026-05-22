@@ -548,12 +548,7 @@ fn modern_group(
     .into_any_element()
 }
 
-fn chip_rows_for_height(
-  height: gpui::Pixels,
-  chip_height: gpui::Pixels,
-  chip_gap: gpui::Pixels,
-  group_padding_top: gpui::Pixels,
-) -> usize {
+fn chip_rows_for_height(height: gpui::Pixels, chip_height: gpui::Pixels, chip_gap: gpui::Pixels, group_padding_top: gpui::Pixels) -> usize {
   // The label, top padding, and bottom breathing room are fixed vertical costs
   // before chips can stack. Calculate this instead of using a magic threshold
   // so the default 112px ribbon can wrap to two rows when the window is narrow.
@@ -576,7 +571,10 @@ fn chip_rows_for_height(
 
 fn command_columns(commands: &[RibbonCommand], max_rows: usize) -> Vec<Vec<&RibbonCommand>> {
   let rows = max_rows.max(1);
-  commands.chunks(rows).map(|chunk| chunk.iter().collect()).collect()
+  commands
+    .chunks(rows)
+    .map(|chunk| chunk.iter().collect())
+    .collect()
 }
 
 fn rows_that_fit_width(groups: &[RibbonCommandGroup], metrics: RibbonLayoutMetrics, available_width: gpui::Pixels) -> usize {
