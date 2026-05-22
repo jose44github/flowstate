@@ -75,6 +75,7 @@ impl Workspace {
               .child("Toolkit"),
           ),
       )
+      // Both of these need moving. Toolkit is for rendering live views of elements from other files. Todo:
       .child(
         Button::new("toolkit-global-db8-search")
           .icon(IconName::Search)
