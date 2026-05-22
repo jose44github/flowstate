@@ -84,6 +84,7 @@ impl AssetSource for AppAssets {
   fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
     match path {
       "icons/save.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/save.svg")))),
+      "icons/highlighter.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/highlighter.svg")))),
       "icons/panel-top-open.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/panel-top-open.svg")))),
       "icons/panel-top-close.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/panel-top-close.svg")))),
       _ => gpui_component_assets::Assets.load(path),
@@ -94,6 +95,9 @@ impl AssetSource for AppAssets {
     let mut assets = gpui_component_assets::Assets.list(path)?;
     if "icons/save.svg".starts_with(path) {
       assets.push("icons/save.svg".into());
+    }
+    if "icons/highlighter.svg".starts_with(path) {
+      assets.push("icons/highlighter.svg".into());
     }
     if "icons/panel-top-open.svg".starts_with(path) {
       assets.push("icons/panel-top-open.svg".into());

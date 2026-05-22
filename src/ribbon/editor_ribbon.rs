@@ -1,15 +1,20 @@
 use gpui::{
-  AnyElement, Context, Entity, Hsla, IntoElement, Keystroke, ParentElement as _, Render, Styled as _, Window, div, prelude::*, px, relative,
+  AnyElement, App, Context, Entity, Hsla, IntoElement, Keystroke, ParentElement as _, Render, Styled as _, Window, div, prelude::*, px,
+  relative,
 };
 use gpui_component::button::{Button, ButtonGroup, ButtonVariants as _, Toggle, ToggleVariants as _};
 use gpui_component::kbd::Kbd;
-use gpui_component::{ActiveTheme as _, Disableable as _, PixelsExt as _, Selectable as _, Sizable as _, StyledExt as _};
+use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+use gpui_component::button::DropdownButton;
+use gpui_component::{ActiveTheme as _, Disableable as _, Icon, PixelsExt as _, Selectable as _, Sizable as _, StyledExt as _};
+use gpui_component::Size;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{CommandId, default_keys_for};
 use crate::ribbon::style_catalog::{HIGHLIGHT_STYLE_SPECS, PARAGRAPH_STYLE_SPECS, SEMANTIC_STYLE_SPECS};
 use crate::rich_text_element::{
-  ArmedInlineTool, DocumentTheme, HighlightStyle, ParagraphStyle, RichTextEditor, RichTextEditorStyleState, RunSemanticStyle, SelectionState,
+  ApplyHighlightToSelection, ArmedInlineTool, DocumentTheme, HighlightStyle, ParagraphStyle, RichTextEditor, RichTextEditorStyleState,
+  RunSemanticStyle, SelectionState,
 };
 
 /// User-selectable ribbon renderer.
@@ -133,9 +138,15 @@ impl EditorRibbon {
 
 impl Render for EditorRibbon {
   fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-    let (style_state, armed_tool, document_theme) = {
+    let (style_state, armed_tool, document_theme, current_highlight, highlight_mode_active) = {
       let editor = self.editor.read(cx);
-      (editor.style_state(), editor.armed_inline_tool(), editor.document_theme())
+      (
+        editor.style_state(),
+        editor.armed_inline_tool(),
+        editor.document_theme(),
+        editor.current_highlight_style(),
+        editor.highlight_mode_active(),
+      )
     };
 
     match self.mode {
@@ -145,9 +156,12 @@ impl Render for EditorRibbon {
         &style_state,
         armed_tool,
         &document_theme,
+        current_highlight,
+        highlight_mode_active,
         self.modern_options,
         self.height,
         window.viewport_size().width,
+        window,
         cx,
       ),
     }
@@ -339,6 +353,7 @@ pub enum RibbonAccent {
   Green,
   Yellow,
   Gray,
+  Transparent,
   Color(Hsla),
 }
 
@@ -357,6 +372,8 @@ pub enum RibbonCommandId {
   Strikethrough,
   Highlight(HighlightStyle),
   ClearHighlight,
+  HighlightMenu,
+  ToggleHighlightMode(HighlightStyle),
   ClearFormatting,
 }
 
@@ -387,18 +404,27 @@ impl ModernStylesRibbon {
     style_state: &RichTextEditorStyleState,
     armed_tool: Option<ArmedInlineTool>,
     document_theme: &DocumentTheme,
+    current_highlight: HighlightStyle,
+    highlight_mode_active: bool,
     options: ModernRibbonOptions,
     height: gpui::Pixels,
     available_width: gpui::Pixels,
+    window: &mut Window,
     cx: &mut Context<EditorRibbon>,
   ) -> AnyElement {
-    let groups = modern_command_groups(style_state, armed_tool, document_theme);
+    let groups = modern_command_groups(style_state, armed_tool, document_theme, current_highlight, highlight_mode_active);
     let mut metrics = RibbonLayoutMetrics::from_height(height);
     let rows_allowed_by_height = metrics.max_chip_rows;
-    let rows_requested_by_width = rows_that_fit_width(&groups, metrics, available_width);
+    let rows_requested_by_width = rows_that_fit_width(&groups, metrics, available_width, window, cx);
     // Width can ask for more rows, but height decides whether those rows can
     // actually be displayed without clipping into the document tabs below.
     metrics.max_chip_rows = rows_requested_by_width.min(rows_allowed_by_height);
+    let wrap_widths = groups
+      .iter()
+      .map(|group| {
+        (metrics.max_chip_rows > 1).then(|| group_row_width(group, metrics, metrics.max_chip_rows, window, cx))
+      })
+      .collect::<Vec<_>>();
 
     div()
       .w_full()
@@ -434,7 +460,7 @@ impl ModernStylesRibbon {
                 groups
                   .iter()
                   .enumerate()
-                  .map(|(index, group)| modern_group(index > 0, group, editor.clone(), options, metrics, cx)),
+                  .map(|(index, group)| modern_group(index > 0, group, editor.clone(), document_theme, options, metrics, wrap_widths[index], cx)),
               ),
           ),
       )
@@ -449,7 +475,7 @@ impl RibbonLayoutMetrics {
       ((height.as_f32() - min_ribbon_height().as_f32()) / (max_ribbon_height().as_f32() - min_ribbon_height().as_f32())).clamp(0.0, 1.0);
     let group_padding_top = px(3.0 + 3.0 * scale);
     let chip_gap = px(2.0 + 4.0 * scale);
-    let chip_height = px(24.0 + 12.0 * scale);
+    let chip_height = px(20.0 + 10.0 * scale);
     let max_chip_rows = chip_rows_for_height(height, chip_height, chip_gap, group_padding_top);
     let outer_padding_x = px(8.0);
     let inner_padding_x = px(8.0);
@@ -458,9 +484,9 @@ impl RibbonLayoutMetrics {
     Self {
       height,
       chip_height,
-      chip_max_width: px(132.0 + 48.0 * scale),
-      chip_padding_x: px(4.0 + 8.0 * scale),
-      chip_text_size: px(10.5 + 4.0 * scale),
+      chip_max_width: px(112.0 + 40.0 * scale),
+      chip_padding_x: px(3.0 + 7.0 * scale),
+      chip_text_size: px(9.5 + 3.0 * scale),
       chip_gap,
       max_chip_rows,
       group_gap: px(4.0 + 7.0 * scale),
@@ -492,12 +518,12 @@ fn modern_group(
   has_divider: bool,
   group: &RibbonCommandGroup,
   editor: Entity<RichTextEditor>,
+  document_theme: &DocumentTheme,
   options: ModernRibbonOptions,
   metrics: RibbonLayoutMetrics,
+  wrap_width: Option<gpui::Pixels>,
   cx: &mut Context<EditorRibbon>,
 ) -> AnyElement {
-  let wrap_width = (metrics.max_chip_rows > 1).then(|| group_row_width(group, metrics, metrics.max_chip_rows));
-
   div()
     .flex()
     .flex_row()
@@ -541,7 +567,13 @@ fn modern_group(
               group
                 .commands
                 .iter()
-                .map(|command| modern_command_chip(command, editor.clone(), options, metrics, cx)),
+                .map(|command| {
+                  if matches!(command.id, RibbonCommandId::ToggleHighlightMode(_)) {
+                    modern_highlight_menu(command, editor.clone(), document_theme, metrics, cx)
+                  } else {
+                    modern_command_chip(command, editor.clone(), options, metrics, cx)
+                  }
+                }),
             ),
         ),
     )
@@ -577,9 +609,14 @@ fn command_columns(commands: &[RibbonCommand], max_rows: usize) -> Vec<Vec<&Ribb
     .collect()
 }
 
-fn rows_that_fit_width(groups: &[RibbonCommandGroup], metrics: RibbonLayoutMetrics, available_width: gpui::Pixels) -> usize {
-  // Keep room for the collapse button overlay and small measurement differences
-  // between our estimate and GPUI-component's internal button chrome.
+fn rows_that_fit_width(
+  groups: &[RibbonCommandGroup],
+  metrics: RibbonLayoutMetrics,
+  available_width: gpui::Pixels,
+  window: &mut Window,
+  cx: &mut Context<EditorRibbon>,
+) -> usize {
+  // Keep room for the collapse button overlay.
   let available_width = (available_width - metrics.outer_padding_x * 2.0 - metrics.inner_padding_x * 2.0 - px(48.0)).max(px(0.0));
   let max_rows = groups
     .iter()
@@ -590,14 +627,20 @@ fn rows_that_fit_width(groups: &[RibbonCommandGroup], metrics: RibbonLayoutMetri
     .max(1);
 
   (1..=max_rows)
-    .find(|rows| total_group_row_width(groups, metrics, *rows) <= available_width)
+    .find(|rows| total_group_row_width(groups, metrics, *rows, window, cx) <= available_width)
     .unwrap_or(max_rows)
 }
 
-fn total_group_row_width(groups: &[RibbonCommandGroup], metrics: RibbonLayoutMetrics, rows: usize) -> gpui::Pixels {
+fn total_group_row_width(
+  groups: &[RibbonCommandGroup],
+  metrics: RibbonLayoutMetrics,
+  rows: usize,
+  window: &mut Window,
+  cx: &mut Context<EditorRibbon>,
+) -> gpui::Pixels {
   let group_widths = groups
     .iter()
-    .map(|group| group_row_width(group, metrics, rows).as_f32())
+    .map(|group| group_row_width(group, metrics, rows, window, cx).as_f32())
     .sum::<f32>();
   let group_gaps = metrics.group_gap.as_f32() * groups.len().saturating_sub(1) as f32;
   let divider_padding = metrics.group_divider_padding_left.as_f32() * groups.len().saturating_sub(1) as f32;
@@ -605,14 +648,20 @@ fn total_group_row_width(groups: &[RibbonCommandGroup], metrics: RibbonLayoutMet
   px(group_widths + group_gaps + divider_padding)
 }
 
-fn group_row_width(group: &RibbonCommandGroup, metrics: RibbonLayoutMetrics, rows: usize) -> gpui::Pixels {
+fn group_row_width(
+  group: &RibbonCommandGroup,
+  metrics: RibbonLayoutMetrics,
+  rows: usize,
+  window: &mut Window,
+  cx: &mut Context<EditorRibbon>,
+) -> gpui::Pixels {
   let columns = command_columns(&group.commands, rows);
   let commands_width = columns
     .iter()
     .map(|column| {
       column
         .iter()
-        .map(|command| command_chip_width(command, metrics).as_f32())
+        .map(|command| command_chip_width(command, metrics, window, cx).as_f32())
         .fold(0.0, f32::max)
     })
     .sum::<f32>();
@@ -621,18 +670,28 @@ fn group_row_width(group: &RibbonCommandGroup, metrics: RibbonLayoutMetrics, row
   px(commands_width + gap_width)
 }
 
-fn command_chip_width(command: &RibbonCommand, metrics: RibbonLayoutMetrics) -> gpui::Pixels {
-  let label_width = command.label.chars().count() as f32 * metrics.chip_text_size.as_f32() * 0.62;
+fn command_chip_width(command: &RibbonCommand, metrics: RibbonLayoutMetrics, window: &mut Window, cx: &mut Context<EditorRibbon>) -> gpui::Pixels {
+  let label_width = measure_ribbon_text(command.label, metrics.chip_text_size, window, cx).as_f32();
   let shortcut_width = command
     .shortcut
     .as_ref()
-    .map(|shortcut| shortcut.chars().count() as f32 * 5.6 + 16.0)
+    .map(|shortcut| measure_ribbon_text(shortcut, px(10.0), window, cx).as_f32() + 16.0)
     .unwrap_or(0.0);
   let accent_width = if command.accent.is_some() { 14.0 } else { 0.0 };
-  let component_padding_x = px(6.0);
-  let chrome_width = metrics.chip_padding_x.as_f32() * 2.0 + component_padding_x.as_f32() * 2.0 + 14.0;
+  let component_padding_x = px(4.0);
+  let caret_width = if matches!(command.id, RibbonCommandId::HighlightMenu) { 10.0 } else { 0.0 };
+  let chrome_width = metrics.chip_padding_x.as_f32() * 2.0 + component_padding_x.as_f32() * 2.0 + 10.0 + caret_width;
 
   px(label_width + shortcut_width + accent_width + chrome_width)
+}
+
+fn measure_ribbon_text(text: &str, font_size: gpui::Pixels, window: &mut Window, _cx: &mut App) -> gpui::Pixels {
+  if text.is_empty() {
+    return px(0.0);
+  }
+  let text_style = window.text_style();
+  let runs = vec![text_style.to_run(text.len())];
+  window.text_system().layout_line(text, font_size, &runs, None).width
 }
 
 fn modern_command_chip(
@@ -647,7 +706,7 @@ fn modern_command_chip(
   let shortcut = command.shortcut.clone();
 
   Button::new(("modern-ribbon-command", ribbon_command_key(command_id)))
-    .small()
+    .xsmall()
     .compact()
     .outline()
     .h(metrics.chip_height)
@@ -684,10 +743,132 @@ fn modern_command_chip(
     .into_any_element()
 }
 
+fn modern_highlight_menu(
+  command: &RibbonCommand,
+  editor: Entity<RichTextEditor>,
+  document_theme: &DocumentTheme,
+  metrics: RibbonLayoutMetrics,
+  cx: &mut Context<EditorRibbon>,
+) -> AnyElement {
+  let accent = command.accent.unwrap_or(RibbonAccent::Gray);
+  let selected_highlight = if let RibbonCommandId::ToggleHighlightMode(style) = command.id {
+    Some(style)
+  } else {
+    None
+  };
+  let mode_active = command.selected;
+  let document_theme = document_theme.clone();
+
+  let chip_height = metrics.chip_height;
+  let caret_width = px(f32::from(chip_height).round());
+
+  div()
+    .flex()
+    .flex_row()
+    .items_center()
+    .gap_0()
+    .child(
+      div()
+        .relative()
+        .h(chip_height)
+        .child(
+          DropdownButton::new("modern-ribbon-highlight-dropdown")
+            .with_size(Size::Size(chip_height))
+            .compact()
+            .outline()
+            .button(
+              Button::new(("modern-ribbon-highlight-toggle", 0_u64))
+                .compact()
+                .ghost()
+                .h(chip_height)
+                .px(metrics.chip_padding_x)
+                .selected(mode_active)
+                .tooltip_with_action("Highlight mode", &ApplyHighlightToSelection, Some("RichTextEditor"))
+                .child(match accent {
+                  RibbonAccent::Transparent => transparent_accent_bar(cx),
+                  _ => accent_bar(accent_color(accent, cx)),
+                })
+                .child(Icon::default().path("icons/highlighter.svg").xsmall())
+                .when_some(shortcut_for(CommandId::ApplyHighlightToSelection), |this, shortcut| {
+                  this.child(keycap(shortcut, cx))
+                })
+                .on_click({
+                  let editor = editor.clone();
+                  move |_, _, cx| {
+                    editor.update(cx, |editor, cx| {
+                      editor.toggle_highlight_mode(cx);
+                    });
+                  }
+                }),
+            )
+            .dropdown_menu(move |menu, _, _| {
+              let menu = menu.min_w(px(180.0)).max_w(px(220.0));
+
+              let menu = HIGHLIGHT_STYLE_SPECS.iter().fold(menu, |menu, spec| {
+                let style = spec.style;
+                let label = spec.label;
+                let editor = editor.clone();
+                let color = highlight_color(style, &document_theme);
+
+                menu.item(
+                  PopupMenuItem::element(move |_, _| {
+                    div()
+                      .flex()
+                      .flex_row()
+                      .items_center()
+                      .gap_2()
+                      .child(highlight_menu_swatch(color))
+                      .child(label)
+                  })
+                  .checked(selected_highlight == Some(style))
+                  .on_click(move |_, _, cx| {
+                    editor.update(cx, |editor, cx| {
+                      editor.select_highlight_style(style, cx);
+                    });
+                  }),
+                )
+              });
+
+              let editor = editor.clone();
+
+              menu.item(
+                PopupMenuItem::new("Clear highlight")
+                  .on_click(move |_, _, cx| {
+                    editor.update(cx, |editor, cx| {
+                      editor.clear_armed_inline_tool(cx);
+                      editor.set_highlight_for_selection(None, cx);
+                    });
+                  }),
+              )
+            }),
+        )
+        .child(
+          div()
+            .absolute()
+            .right(caret_width - px(1.0))
+            .top(px(1.0))
+            .bottom(px(1.0))
+            .w(px(3.0))
+            .flex()
+            .justify_center()
+            .bg(cx.theme().background)
+            .child(
+              div()
+                .w(px(1.0))
+                .h_full()
+                .bg(cx.theme().border)
+            )
+        ),
+    )
+    .into_any_element()
+}
+
 fn modern_command_groups(
   state: &RichTextEditorStyleState,
   armed_tool: Option<ArmedInlineTool>,
   document_theme: &DocumentTheme,
+  current_highlight: HighlightStyle,
+  highlight_mode_active: bool,
 ) -> Vec<RibbonCommandGroup> {
   vec![
     RibbonCommandGroup {
@@ -720,7 +901,7 @@ fn modern_command_groups(
     RibbonCommandGroup {
       id: "highlight",
       label: "Highlight",
-      commands: highlight_commands(state, armed_tool, document_theme),
+      commands: highlight_commands(document_theme, current_highlight, highlight_mode_active),
     },
     RibbonCommandGroup {
       id: "reset",
@@ -789,44 +970,19 @@ fn inline_commands(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInl
   commands
 }
 
-fn highlight_commands(
-  state: &RichTextEditorStyleState,
-  armed_tool: Option<ArmedInlineTool>,
-  document_theme: &DocumentTheme,
-) -> Vec<RibbonCommand> {
-  let mut commands = HIGHLIGHT_STYLE_SPECS
-    .iter()
-    .map(|spec| {
-      let command_id = highlight_command_id(spec.style);
-      RibbonCommand {
-        id: RibbonCommandId::Highlight(spec.style),
-        label: spec.label,
-        group_id: "highlight",
-        shortcut: command_id.and_then(shortcut_for),
-        command_id,
-        priority: highlight_priority(spec.style),
-        accent: Some(RibbonAccent::Color(highlight_color(spec.style, document_theme))),
-        selected: EditorRibbon::highlight_selected(state, armed_tool, spec.style),
-        disabled: false,
-        overflow_behavior: highlight_overflow_behavior(spec.style),
-      }
-    })
-    .collect::<Vec<_>>();
-
-  commands.push(RibbonCommand {
-    id: RibbonCommandId::ClearHighlight,
-    label: "Clear",
+fn highlight_commands(document_theme: &DocumentTheme, current_highlight: HighlightStyle, highlight_mode_active: bool) -> Vec<RibbonCommand> {
+  vec![RibbonCommand {
+    id: RibbonCommandId::ToggleHighlightMode(current_highlight),
+    label: "",
     group_id: "highlight",
-    shortcut: shortcut_for(CommandId::ClearHighlight),
-    command_id: Some(CommandId::ClearHighlight),
+    shortcut: None,
+    command_id: None,
     priority: 74,
-    accent: Some(RibbonAccent::Gray),
-    selected: matches!(state.highlight, SelectionState::Uniform(None)),
+    accent: Some(RibbonAccent::Color(highlight_color(current_highlight, document_theme))),
+    selected: highlight_mode_active,
     disabled: false,
     overflow_behavior: OverflowBehavior::KeepVisible,
-  });
-
-  commands
+  }]
 }
 
 fn perform_ribbon_command(editor: &mut RichTextEditor, command_id: RibbonCommandId, cx: &mut Context<RichTextEditor>) {
@@ -846,10 +1002,14 @@ fn perform_ribbon_command(editor: &mut RichTextEditor, command_id: RibbonCommand
     RibbonCommandId::Highlight(style) => {
       editor.toggle_inline_tool(ArmedInlineTool::Highlight(style), cx);
     },
+    RibbonCommandId::ToggleHighlightMode(_) => {
+      editor.toggle_highlight_mode(cx);
+    },
     RibbonCommandId::ClearHighlight => {
       editor.clear_armed_inline_tool(cx);
       editor.set_highlight_for_selection(None, cx);
     },
+    RibbonCommandId::HighlightMenu => {},
     RibbonCommandId::ClearFormatting => {
       editor.clear_formatting(cx);
     },
@@ -864,7 +1024,7 @@ fn paragraph_command_id(style: ParagraphStyle) -> Option<CommandId> {
     ParagraphStyle::Block => Some(CommandId::SetParagraphBlock),
     ParagraphStyle::Tag => Some(CommandId::SetParagraphTag),
     ParagraphStyle::Analytic => Some(CommandId::SetParagraphAnalytic),
-    ParagraphStyle::Undertag => None,
+    ParagraphStyle::Undertag => Some(CommandId::SetParagraphUndertag),
   }
 }
 
@@ -876,14 +1036,6 @@ fn semantic_command_id(style: RunSemanticStyle) -> Option<CommandId> {
     RunSemanticStyle::Ultracondensed => None,
     RunSemanticStyle::Underline => Some(CommandId::ToggleUnderline),
     RunSemanticStyle::Plain => Some(CommandId::ClearFormatting),
-  }
-}
-
-fn highlight_command_id(style: HighlightStyle) -> Option<CommandId> {
-  match style {
-    HighlightStyle::Spoken => Some(CommandId::SetHighlightSpoken),
-    HighlightStyle::Insert => None,
-    HighlightStyle::Alternative => None,
   }
 }
 
@@ -910,14 +1062,6 @@ fn semantic_priority(style: RunSemanticStyle) -> u8 {
   }
 }
 
-fn highlight_priority(style: HighlightStyle) -> u8 {
-  match style {
-    HighlightStyle::Spoken => 88,
-    HighlightStyle::Insert => 84,
-    HighlightStyle::Alternative => 72,
-  }
-}
-
 fn paragraph_overflow_behavior(style: ParagraphStyle) -> OverflowBehavior {
   match style {
     ParagraphStyle::Normal | ParagraphStyle::Pocket | ParagraphStyle::Hat | ParagraphStyle::Block => OverflowBehavior::KeepVisible,
@@ -930,13 +1074,6 @@ fn semantic_overflow_behavior(style: RunSemanticStyle) -> OverflowBehavior {
     RunSemanticStyle::Cite | RunSemanticStyle::Emphasis | RunSemanticStyle::Underline => OverflowBehavior::KeepVisible,
     RunSemanticStyle::Condensed | RunSemanticStyle::Ultracondensed => OverflowBehavior::MoveToOverflow,
     RunSemanticStyle::Plain => OverflowBehavior::HideInCompact,
-  }
-}
-
-fn highlight_overflow_behavior(style: HighlightStyle) -> OverflowBehavior {
-  match style {
-    HighlightStyle::Spoken | HighlightStyle::Insert => OverflowBehavior::KeepVisible,
-    HighlightStyle::Alternative => OverflowBehavior::MoveToOverflow,
   }
 }
 
@@ -997,6 +1134,39 @@ fn accent_dot(color: Hsla) -> AnyElement {
     .into_any_element()
 }
 
+fn accent_bar(color: Hsla) -> AnyElement {
+  div()
+    .flex_none()
+    .w(px(3.0))
+    .h(px(12.0))
+    .rounded(px(2.0))
+    .bg(color)
+    .into_any_element()
+}
+
+fn transparent_accent_bar(cx: &mut Context<EditorRibbon>) -> AnyElement {
+  div()
+    .flex_none()
+    .w(px(3.0))
+    .h(px(12.0))
+    .rounded(px(2.0))
+    .border_1()
+    .border_color(cx.theme().border.opacity(0.62))
+    .bg(cx.theme().background.opacity(0.0))
+    .into_any_element()
+}
+
+fn highlight_menu_swatch(color: Hsla) -> AnyElement {
+  div()
+    .flex_none()
+    .size(px(10.0))
+    .rounded(px(2.0))
+    .border_1()
+    .border_color(color.opacity(0.8))
+    .bg(color.opacity(0.72))
+    .into_any_element()
+}
+
 fn accent_color(accent: RibbonAccent, cx: &mut Context<EditorRibbon>) -> Hsla {
   match accent {
     RibbonAccent::Blue => cx.theme().blue,
@@ -1004,6 +1174,7 @@ fn accent_color(accent: RibbonAccent, cx: &mut Context<EditorRibbon>) -> Hsla {
     RibbonAccent::Green => cx.theme().green,
     RibbonAccent::Yellow => cx.theme().yellow,
     RibbonAccent::Gray => cx.theme().muted_foreground,
+    RibbonAccent::Transparent => cx.theme().background.opacity(0.0),
     RibbonAccent::Color(color) => color,
   }
 }
@@ -1016,6 +1187,8 @@ fn ribbon_command_key(command_id: RibbonCommandId) -> u64 {
     RibbonCommandId::Strikethrough => 3_100,
     RibbonCommandId::Highlight(style) => 4_000 + style as u64,
     RibbonCommandId::ClearHighlight => 5_000,
+    RibbonCommandId::HighlightMenu => 5_002,
+    RibbonCommandId::ToggleHighlightMode(style) => 5_100 + style as u64,
     RibbonCommandId::ClearFormatting => 5_001,
   }
 }

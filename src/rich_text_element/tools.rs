@@ -19,6 +19,52 @@ impl RichTextEditor {
     self.armed_inline_tool
   }
 
+  pub fn current_highlight_style(&self) -> HighlightStyle {
+    self.current_highlight_style
+  }
+
+  pub fn highlight_mode_active(&self) -> bool {
+    matches!(self.armed_inline_tool, Some(ArmedInlineTool::Highlight(_)))
+  }
+
+  pub fn select_highlight_style(&mut self, highlight: HighlightStyle, cx: &mut Context<Self>) {
+    self.current_highlight_style = highlight;
+    if matches!(self.armed_inline_tool, Some(ArmedInlineTool::Highlight(_))) {
+      self.armed_inline_tool = Some(ArmedInlineTool::Highlight(highlight));
+      if self.selection.is_caret() {
+        let mut styles = self.styles_at_caret();
+        styles.highlight = Some(highlight);
+        self.pending_styles = Some(styles);
+      }
+    }
+    cx.notify();
+  }
+
+  pub fn toggle_highlight_mode(&mut self, cx: &mut Context<Self>) {
+    if matches!(self.armed_inline_tool, Some(ArmedInlineTool::Highlight(_))) {
+      self.armed_inline_tool = None;
+      if self.selection.is_caret() {
+        self.pending_styles = None;
+      }
+      self.reset_caret_blink(cx);
+      cx.notify();
+      return;
+    }
+
+    self.armed_inline_tool = Some(ArmedInlineTool::Highlight(self.current_highlight_style));
+    if self.selection.is_caret() {
+      let mut styles = self.styles_at_caret();
+      styles.highlight = Some(self.current_highlight_style);
+      self.pending_styles = Some(styles);
+      self.reset_caret_blink(cx);
+    }
+    cx.notify();
+  }
+
+  pub fn apply_current_highlight_to_selection(&mut self, cx: &mut Context<Self>) {
+    self.force_apply_inline_tool_to_current_target(ArmedInlineTool::Highlight(self.current_highlight_style), cx);
+  }
+
   /// Activate a Word-highlighter-like inline tool.
   ///
   /// If text is selected, the tool is applied immediately and is not armed. If

@@ -62,11 +62,13 @@ actions!(
     SetParagraphBlock,
     SetParagraphTag,
     SetParagraphAnalytic,
+    SetParagraphUndertag,
     ToggleCite,
     ToggleUnderline,
     ToggleStrikethrough,
     ToggleEmphasis,
     SetHighlightSpoken,
+    ApplyHighlightToSelection,
     ClearFormatting,
     ClearHighlight,
     InsertImage,
@@ -524,6 +526,7 @@ pub struct RichTextEditor {
   paste_cache: Option<PasteCache>,
   pub(super) pending_styles: Option<RunStyles>,
   pub(super) armed_inline_tool: Option<ArmedInlineTool>,
+  pub(super) current_highlight_style: HighlightStyle,
   selecting: bool,
   drag_granularity: SelectionGranularity,
   drag_anchor: Option<DocumentOffset>,
@@ -590,6 +593,7 @@ impl RichTextEditor {
       paste_cache: None,
       pending_styles: None,
       armed_inline_tool: None,
+      current_highlight_style: HighlightStyle::Spoken,
       selecting: false,
       drag_granularity: SelectionGranularity::Character,
       drag_anchor: None,
@@ -2852,6 +2856,7 @@ impl RichTextEditor {
   }
 
   pub fn set_highlight(&mut self, highlight: HighlightStyle, cx: &mut Context<Self>) {
+    self.current_highlight_style = highlight;
     if self.clear_matching_armed_inline_tool(ArmedInlineTool::Highlight(highlight), cx) {
       return;
     }
@@ -3078,6 +3083,9 @@ impl RichTextEditor {
   fn on_set_paragraph_analytic(&mut self, _: &SetParagraphAnalytic, _: &mut Window, cx: &mut Context<Self>) {
     self.set_paragraph_style_for_selection(ParagraphStyle::Analytic, cx);
   }
+  fn on_set_paragraph_undertag(&mut self, _: &SetParagraphUndertag, _: &mut Window, cx: &mut Context<Self>) {
+    self.set_paragraph_style_for_selection(ParagraphStyle::Undertag, cx);
+  }
   fn on_toggle_cite(&mut self, _: &ToggleCite, _: &mut Window, cx: &mut Context<Self>) {
     self.toggle_cite(cx);
   }
@@ -3092,6 +3100,9 @@ impl RichTextEditor {
   }
   fn on_set_highlight_spoken(&mut self, _: &SetHighlightSpoken, _: &mut Window, cx: &mut Context<Self>) {
     self.set_highlight(HighlightStyle::Spoken, cx);
+  }
+  fn on_apply_highlight_to_selection(&mut self, _: &ApplyHighlightToSelection, _: &mut Window, cx: &mut Context<Self>) {
+    self.apply_current_highlight_to_selection(cx);
   }
   fn on_clear_formatting(&mut self, _: &ClearFormatting, _: &mut Window, cx: &mut Context<Self>) {
     self.clear_formatting(cx);
@@ -5391,11 +5402,13 @@ impl Render for RichTextEditor {
       .on_action(cx.listener(Self::on_set_paragraph_block))
       .on_action(cx.listener(Self::on_set_paragraph_tag))
       .on_action(cx.listener(Self::on_set_paragraph_analytic))
+      .on_action(cx.listener(Self::on_set_paragraph_undertag))
       .on_action(cx.listener(Self::on_toggle_cite))
       .on_action(cx.listener(Self::on_toggle_underline))
       .on_action(cx.listener(Self::on_toggle_strikethrough))
       .on_action(cx.listener(Self::on_toggle_emphasis))
       .on_action(cx.listener(Self::on_set_highlight_spoken))
+      .on_action(cx.listener(Self::on_apply_highlight_to_selection))
       .on_action(cx.listener(Self::on_clear_formatting))
       .on_action(cx.listener(Self::on_clear_highlight))
       .on_action(cx.listener(Self::on_insert_image))
