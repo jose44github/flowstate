@@ -373,7 +373,7 @@ pub enum RibbonCommandId {
   Highlight(HighlightStyle),
   ClearHighlight,
   HighlightMenu,
-  ToggleHighlightMode(HighlightStyle),
+  ToggleHighlightMode(Option<HighlightStyle>),
   ClearFormatting,
 }
 
@@ -389,6 +389,7 @@ pub struct RibbonCommand {
   pub selected: bool,
   pub disabled: bool,
   pub overflow_behavior: OverflowBehavior,
+  pub checked_highlight: Option<HighlightStyle>,
 }
 
 #[derive(Clone, Debug)]
@@ -751,10 +752,9 @@ fn modern_highlight_menu(
   cx: &mut Context<EditorRibbon>,
 ) -> AnyElement {
   let accent = command.accent.unwrap_or(RibbonAccent::Gray);
-  let selected_highlight = if let RibbonCommandId::ToggleHighlightMode(style) = command.id {
-    Some(style)
-  } else {
-    None
+  let selected_highlight = match command.id {
+    RibbonCommandId::ToggleHighlightMode(style) => style,
+    _ => None,
   };
   let mode_active = command.selected;
   let document_theme = document_theme.clone();
@@ -823,7 +823,7 @@ fn modern_highlight_menu(
                   .checked(selected_highlight == Some(style))
                   .on_click(move |_, _, cx| {
                     editor.update(cx, |editor, cx| {
-                      editor.select_highlight_style(style, cx);
+                      editor.select_highlight_style(Some(style), cx);
                     });
                   }),
                 )
@@ -833,12 +833,12 @@ fn modern_highlight_menu(
 
               menu.item(
                 PopupMenuItem::new("Clear highlight")
-                  .on_click(move |_, _, cx| {
-                    editor.update(cx, |editor, cx| {
-                      editor.clear_armed_inline_tool(cx);
-                      editor.set_highlight_for_selection(None, cx);
-                    });
-                  }),
+                    .checked(selected_highlight.is_none())
+                    .on_click(move |_, _, cx| {
+                      editor.update(cx, |editor, cx| {
+                        editor.select_highlight_style(None, cx);
+                      });
+                    }),
               )
             }),
         )
@@ -872,6 +872,7 @@ fn modern_command_groups(
             selected: EditorRibbon::paragraph_selected(state, spec.style),
             disabled: false,
             overflow_behavior: paragraph_overflow_behavior(spec.style),
+            checked_highlight: None,
           }
         })
         .collect(),
@@ -884,7 +885,11 @@ fn modern_command_groups(
     RibbonCommandGroup {
       id: "highlight",
       label: "Highlight",
-      commands: highlight_commands(document_theme, current_highlight, highlight_mode_active),
+      commands: highlight_commands(
+        document_theme,
+        current_highlight,
+        highlight_mode_active,
+      ),
     },
     RibbonCommandGroup {
       id: "reset",
@@ -900,6 +905,7 @@ fn modern_command_groups(
         selected: false,
         disabled: false,
         overflow_behavior: OverflowBehavior::KeepVisible,
+        checked_highlight: None,
       }],
     },
   ]
@@ -921,6 +927,7 @@ fn inline_commands(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInl
         selected: EditorRibbon::semantic_selected(state, armed_tool, spec.style),
         disabled: false,
         overflow_behavior: semantic_overflow_behavior(spec.style),
+        checked_highlight: None,
       }
     })
     .collect::<Vec<_>>();
@@ -936,6 +943,7 @@ fn inline_commands(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInl
     selected: EditorRibbon::underline_selected(state, armed_tool),
     disabled: false,
     overflow_behavior: OverflowBehavior::KeepVisible,
+    checked_highlight: None,
   });
   commands.push(RibbonCommand {
     id: RibbonCommandId::Strikethrough,
@@ -948,23 +956,34 @@ fn inline_commands(state: &RichTextEditorStyleState, armed_tool: Option<ArmedInl
     selected: EditorRibbon::strikethrough_selected(state, armed_tool),
     disabled: false,
     overflow_behavior: OverflowBehavior::KeepVisible,
+    checked_highlight: None,
   });
 
   commands
 }
 
-fn highlight_commands(document_theme: &DocumentTheme, current_highlight: HighlightStyle, highlight_mode_active: bool) -> Vec<RibbonCommand> {
+fn highlight_commands(
+  document_theme: &DocumentTheme,
+  current_highlight: HighlightStyle,
+  highlight_mode_active: bool,
+) -> Vec<RibbonCommand> {
+  let selected_highlight = highlight_mode_active.then_some(current_highlight);
+
   vec![RibbonCommand {
-    id: RibbonCommandId::ToggleHighlightMode(current_highlight),
+    id: RibbonCommandId::ToggleHighlightMode(selected_highlight),
     label: "",
     group_id: "highlight",
     shortcut: None,
     command_id: None,
     priority: 74,
-    accent: Some(RibbonAccent::Color(highlight_color(current_highlight, document_theme))),
+    accent: Some(match selected_highlight {
+      Some(style) => RibbonAccent::Color(highlight_color(style, document_theme)),
+      None => RibbonAccent::Transparent,
+    }),
     selected: highlight_mode_active,
     disabled: false,
     overflow_behavior: OverflowBehavior::KeepVisible,
+    checked_highlight: selected_highlight,
   }]
 }
 
@@ -1171,7 +1190,13 @@ fn ribbon_command_key(command_id: RibbonCommandId) -> u64 {
     RibbonCommandId::Highlight(style) => 4_000 + style as u64,
     RibbonCommandId::ClearHighlight => 5_000,
     RibbonCommandId::HighlightMenu => 5_002,
-    RibbonCommandId::ToggleHighlightMode(style) => 5_100 + style as u64,
+    RibbonCommandId::ToggleHighlightMode(style) => {
+      5_100
+        + match style {
+          Some(style) => style as u64,
+          None => 999,
+        }
+    },
     RibbonCommandId::ClearFormatting => 5_001,
   }
 }

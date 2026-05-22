@@ -27,16 +27,38 @@ impl RichTextEditor {
     matches!(self.armed_inline_tool, Some(ArmedInlineTool::Highlight(_)))
   }
 
-  pub fn select_highlight_style(&mut self, highlight: HighlightStyle, cx: &mut Context<Self>) {
-    self.current_highlight_style = highlight;
-    if matches!(self.armed_inline_tool, Some(ArmedInlineTool::Highlight(_))) {
-      self.armed_inline_tool = Some(ArmedInlineTool::Highlight(highlight));
-      if self.selection.is_caret() {
-        let mut styles = self.styles_at_caret();
-        styles.highlight = Some(highlight);
-        self.pending_styles = Some(styles);
-      }
+  /// Select the highlight picker mode.
+  ///
+  /// `Some(style)` means the picker is set to a real highlight color and the
+  /// highlighter tool is armed. `None` means the picker is set to clear /
+  /// transparent mode and any current selection highlight is removed.
+  pub fn select_highlight_style(&mut self, highlight: Option<HighlightStyle>, cx: &mut Context<Self>) {
+    match highlight {
+      Some(highlight) => {
+        self.current_highlight_style = highlight;
+        self.armed_inline_tool = Some(ArmedInlineTool::Highlight(highlight));
+
+        if self.selection.is_caret() {
+          let mut styles = self.styles_at_caret();
+          styles.highlight = Some(highlight);
+          self.pending_styles = Some(styles);
+          self.reset_caret_blink(cx);
+        }
+      },
+      None => {
+        self.armed_inline_tool = None;
+
+        if self.selection.is_caret() {
+          let mut styles = self.styles_at_caret();
+          styles.highlight = None;
+          self.pending_styles = Some(styles);
+          self.reset_caret_blink(cx);
+        } else {
+          self.set_highlight_for_selection(None, cx);
+        }
+      },
     }
+
     cx.notify();
   }
 
