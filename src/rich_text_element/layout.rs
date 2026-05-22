@@ -493,18 +493,26 @@ pub(super) fn build_layout(
   layout
 }
 
-pub(super) fn build_single_paragraph_layout(
+pub(super) fn build_single_paragraph_layout_with_visibility(
   document: &Document,
   paragraph_ix: usize,
   width: Pixels,
   previous_layout: Option<&LayoutState>,
+  invisibility_mode: bool,
   window: &mut Window,
   cx: &mut App,
 ) -> LayoutState {
   let timing = Instant::now();
   let start_y = if paragraph_ix == 0 { document.theme.pageless_inset_top } else { px(0.0) };
+  let projected_document = invisibility_mode
+    .then(|| invisibility_projected_document(document, paragraph_ix))
+    .flatten();
+  let layout_document = projected_document.as_ref().unwrap_or(document);
+  let layout_paragraph_ix = if projected_document.is_some() { 0 } else { paragraph_ix };
   let previous_paragraph = previous_layout.and_then(|layout| paragraph_layout(layout, paragraph_ix));
-  let (paragraph, mut height, max_width, reused) = layout_paragraph_at(document, paragraph_ix, width, start_y, previous_paragraph, window, cx);
+  let (mut paragraph, mut height, max_width, reused) =
+    layout_paragraph_at(layout_document, layout_paragraph_ix, width, start_y, previous_paragraph, window, cx);
+  paragraph.index = paragraph_ix;
   if paragraph_ix + 1 == document.paragraphs.len() {
     height += document.theme.pageless_inset_bottom;
   }
@@ -966,23 +974,37 @@ pub(super) fn layout_paragraph_at(
 }
 
 pub(super) fn estimate_paragraph_item_height(document: &Document, paragraph_ix: usize, width: Pixels) -> Pixels {
-  let paragraph = &document.paragraphs[paragraph_ix];
-  let p_format = paragraph_format(document, paragraph.style);
+  estimate_paragraph_item_height_with_visibility(document, paragraph_ix, width, false)
+}
+
+pub(super) fn estimate_paragraph_item_height_with_visibility(
+  document: &Document,
+  paragraph_ix: usize,
+  width: Pixels,
+  invisibility_mode: bool,
+) -> Pixels {
+  let projected_document = invisibility_mode
+    .then(|| invisibility_projected_document(document, paragraph_ix))
+    .flatten();
+  let estimate_document = projected_document.as_ref().unwrap_or(document);
+  let estimate_paragraph_ix = if projected_document.is_some() { 0 } else { paragraph_ix };
+  let paragraph = &estimate_document.paragraphs[estimate_paragraph_ix];
+  let p_format = paragraph_format(estimate_document, paragraph.style);
   let border = p_format.border;
   let border_inset = border.map_or(px(0.0), |border| border.width + border.space_x);
   let content_top = border.map_or(px(0.0), |border| border.width + border.space_y);
-  let content_width = (width - document.theme.pageless_inset_x * 2.0 - border_inset * 2.0).max(px(1.0));
+  let content_width = (width - estimate_document.theme.pageless_inset_x * 2.0 - border_inset * 2.0).max(px(1.0));
   let avg_char_width = (p_format.font_size * 0.52).max(px(1.0));
   let chars_per_line = ((content_width / avg_char_width).floor() as usize).max(1);
   let text_len = paragraph_text_len(paragraph);
-  let forced_line_count = paragraph_text(document, paragraph_ix)
+  let forced_line_count = paragraph_text(estimate_document, estimate_paragraph_ix)
     .matches(SOFT_LINE_BREAK)
     .count();
   let estimated_lines = (text_len / chars_per_line)
     .saturating_add(1)
     .saturating_add(forced_line_count)
     .max(1);
-  let line_gap = p_format.font_size * document.theme.line_gap_fraction;
+  let line_gap = p_format.font_size * estimate_document.theme.line_gap_fraction;
   let line_height = (p_format.font_size + line_gap) * p_format.line_spacing;
   let mut height = p_format.spacing_before + content_top + line_height * estimated_lines as f32 + content_top + p_format.spacing_after;
   if paragraph_ix == 0 {

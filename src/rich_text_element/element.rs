@@ -147,11 +147,25 @@ impl Element for VirtualParagraphElement {
       editor.update(cx, |editor, cx| editor.note_measured_item_width(width, cx));
       let previous_layout = layout_cell.0.borrow().clone();
       let layout = editor.update(cx, |editor, cx| {
-        build_single_paragraph_layout(&editor.document, paragraph_ix, width, previous_layout.as_deref(), window, cx)
+        build_single_paragraph_layout_with_visibility(
+          &editor.document,
+          paragraph_ix,
+          width,
+          previous_layout.as_deref(),
+          editor.invisibility_mode(),
+          window,
+          cx,
+        )
       });
       let size = layout.size;
-      if let Some(paragraph) = layout.paragraphs.first() {
-        let key = paragraph.cache_key;
+      let cache_key = editor.update(cx, |editor, _cx| {
+        editor
+          .document
+          .paragraphs
+          .get(paragraph_ix)
+          .map(|paragraph| paragraph_cache_key(&editor.document, paragraph))
+      });
+      if let Some(key) = cache_key {
         editor.update(cx, |editor, cx| {
           editor.update_paragraph_height_cache(paragraph_ix, width, key, size.height, cx)
         });

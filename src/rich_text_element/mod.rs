@@ -6,6 +6,7 @@ mod document;
 mod edit_ops;
 mod editor;
 mod element;
+mod invisibility;
 mod layout;
 mod paint;
 mod persistence;
@@ -39,6 +40,7 @@ use document::{
 use edit_ops::*;
 use editor::{DocumentSpan, SelectionGranularity};
 use element::*;
+use invisibility::*;
 use layout::*;
 use paint::*;
 use persistence::recovery_path_for_document;

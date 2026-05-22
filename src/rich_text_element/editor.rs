@@ -342,13 +342,6 @@ impl Default for RichTextEditorConfig {
   }
 }
 
-struct ItemSizesCache {
-  width: Pixels,
-  item_count: usize,
-  height_revision: u64,
-  sizes: Rc<Vec<Size<Pixels>>>,
-}
-
 #[derive(Clone)]
 struct ParagraphLayoutCacheEntry {
   key: ParagraphCacheKey,
@@ -563,6 +556,7 @@ pub struct RichTextEditor {
   visible_layout_generation: u64,
   visible_layout_range: Range<usize>,
   visible_layout_parts: Vec<Option<LaidOutParagraph>>,
+  invisibility_mode: bool,
   // Remembered horizontal pixel position for vertical caret motion. When the
   // user presses Up/Down repeatedly we want the caret to track a consistent
   // x even on lines whose contents are shorter than the previous one. The
@@ -628,6 +622,7 @@ impl RichTextEditor {
       visible_layout_generation: 0,
       visible_layout_range: 0..0,
       visible_layout_parts: Vec::new(),
+      invisibility_mode: false,
       goal_x: None,
     }
   }
@@ -1267,6 +1262,24 @@ impl RichTextEditor {
     self.paragraph_height_cache_revision = self.paragraph_height_cache_revision.wrapping_add(1);
     self.item_sizes_cache = None;
     self.height_prefix_index = HeightPrefixIndex::default();
+  }
+
+  pub fn invisibility_mode(&self) -> bool {
+    self.invisibility_mode
+  }
+
+  pub fn set_invisibility_mode(&mut self, enabled: bool, cx: &mut Context<Self>) {
+    if self.invisibility_mode == enabled {
+      return;
+    }
+    self.invisibility_mode = enabled;
+    self.invalidate_document_layout_caches();
+    self.scroll_head_into_view();
+    cx.notify();
+  }
+
+  pub fn toggle_invisibility_mode(&mut self, cx: &mut Context<Self>) {
+    self.set_invisibility_mode(!self.invisibility_mode, cx);
   }
 
   pub fn prepare_for_container_resize(&mut self, expected_width: Option<Pixels>, cx: &mut Context<Self>) {
@@ -3291,11 +3304,12 @@ impl RichTextEditor {
     if let Some(cache) = &self.item_sizes_cache
       && cache.width == width
       && cache.item_count == self.document.blocks.len()
+      && cache.invisibility_mode == self.invisibility_mode
       && cache.height_revision == self.paragraph_height_cache_revision
     {
       return cache.sizes.clone();
     }
-    let mut paragraph_ix = 0;
+    let visibility = VisibilityIndex::build(&self.document, self.invisibility_mode);
     let sizes = Rc::new(
       self
         .document
@@ -3303,12 +3317,18 @@ impl RichTextEditor {
         .iter()
         .enumerate()
         .map(|(block_ix, block)| {
+          if !visibility.is_visible(block_ix) {
+            return size(width, px(0.0));
+          }
           let Block::Paragraph(_) = block else {
             let height = layout_structural_block_at(&self.document, block_ix, width, px(0.0), window, cx)
               .as_ref()
               .map(structural_block_height)
               .unwrap_or_else(|| estimate_structural_block_item_height(&self.document, block_ix, width));
             return size(width, height + self.document.theme.paragraph_after);
+          };
+          let Some(paragraph_ix) = visibility.paragraph_ix_for_block(block_ix) else {
+            return size(width, px(1.0));
           };
           let Some(paragraph) = self.document.paragraphs.get(paragraph_ix) else {
             return size(width, px(1.0));
@@ -3320,8 +3340,7 @@ impl RichTextEditor {
             .and_then(|entry| *entry)
             .filter(|entry| entry.key == key && entry.width == width)
             .map(|entry| entry.height)
-            .unwrap_or_else(|| estimate_paragraph_item_height(&self.document, paragraph_ix, width));
-          paragraph_ix += 1;
+            .unwrap_or_else(|| estimate_paragraph_item_height_with_visibility(&self.document, paragraph_ix, width, self.invisibility_mode));
           size(width, height)
         })
         .collect::<Vec<_>>(),
@@ -3330,7 +3349,9 @@ impl RichTextEditor {
     self.item_sizes_cache = Some(ItemSizesCache {
       width,
       item_count: self.document.blocks.len(),
+      invisibility_mode: self.invisibility_mode,
       height_revision: self.paragraph_height_cache_revision,
+      visibility,
       sizes: sizes.clone(),
     });
     sizes
@@ -3390,7 +3411,7 @@ impl RichTextEditor {
     if cache_is_current {
       return;
     }
-    let layout = build_single_paragraph_layout(&self.document, paragraph_ix, width, None, window, cx);
+    let layout = build_single_paragraph_layout_with_visibility(&self.document, paragraph_ix, width, None, self.invisibility_mode, window, cx);
     self.cache_paragraph_layout(paragraph_ix, width, Rc::new(layout.clone()));
     self.paragraph_height_cache[paragraph_ix] = Some(ParagraphHeightCacheEntry {
       key,
@@ -3663,7 +3684,7 @@ impl RichTextEditor {
         .and_then(|entry| *entry)
         .filter(|entry| entry.key == key && entry.width == width)
         .map(|entry| entry.height)
-        .unwrap_or_else(|| estimate_paragraph_item_height(&self.document, paragraph_ix, width));
+        .unwrap_or_else(|| estimate_paragraph_item_height_with_visibility(&self.document, paragraph_ix, width, self.invisibility_mode));
       let next_y = y + height;
       if !found_start && next_y >= scroll_top - px(256.0) {
         start = paragraph_ix;
@@ -4720,7 +4741,15 @@ impl RichTextEditor {
     if let Some(layout) = self.document_layout_for_paragraph(paragraph_ix, width) {
       return layout.hit_test(position);
     }
-    let layout = Rc::new(build_single_paragraph_layout(&self.document, paragraph_ix, width, None, window, cx));
+    let layout = Rc::new(build_single_paragraph_layout_with_visibility(
+      &self.document,
+      paragraph_ix,
+      width,
+      None,
+      self.invisibility_mode,
+      window,
+      cx,
+    ));
     self.cache_paragraph_layout(paragraph_ix, width, layout.clone());
     let mut layout = layout.as_ref().clone();
     let row_top = if self.height_prefix_index.len() == self.document.blocks.len() {
@@ -5391,6 +5420,13 @@ impl Render for RichTextEditor {
           let generation = editor.begin_visible_layout(range.clone());
           range
             .map(|block_ix| {
+              if editor
+                .item_sizes_cache
+                .as_ref()
+                .is_some_and(|cache| !cache.visibility.is_visible(block_ix))
+              {
+                return div().size_full().into_any_element();
+              }
               if let Some(paragraph_ix) = editor.paragraph_ix_for_block(block_ix) {
                 VirtualParagraphElement {
                   editor: cx.entity(),
