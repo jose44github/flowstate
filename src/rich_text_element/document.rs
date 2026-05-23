@@ -243,6 +243,18 @@ pub struct TextRun {
   pub styles: RunStyles,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentRunInput {
+  pub text: String,
+  pub styles: RunStyles,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentParagraphInput {
+  pub style: ParagraphStyle,
+  pub runs: Vec<DocumentRunInput>,
+}
+
 /// Input-shape used by document builders (demo data, clipboard fragments).
 /// Carries explicit run text instead of byte offsets so the higher-level
 /// helpers can splice in arbitrary content.

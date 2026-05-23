@@ -21,6 +21,7 @@ use gpui_component::{
 use uuid::Uuid;
 
 use crate::app_settings::{load_document_theme, save_document_theme, save_theme_name};
+use crate::docx_conversion::convert_docx_to_document;
 use crate::rich_text_element::{
   Document, DocumentTheme, ParagraphStyle, RichTextEditor, Save, ThemeUnderline, demo_document, load_or_create_document,
 };
@@ -102,8 +103,9 @@ impl Workspace {
       // already run after that first layout pass, so defer startup loading by
       // one frame to give the initial editor the same settled geometry.
       cx.on_next_frame(window, move |workspace, window, cx| {
-        let document = load_or_create_document(&path).unwrap_or_else(|error| panic!("failed to open {}: {error}", path.display()));
-        workspace.add_document_panel(document, Some(path), window, cx);
+        let (document, document_path) =
+          load_document_for_open(&path).unwrap_or_else(|error| panic!("failed to open {}: {error}", path.display()));
+        workspace.add_document_panel(document, document_path, window, cx);
       });
     }
 
@@ -175,8 +177,8 @@ impl Workspace {
   }
 
   pub fn open_document_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-    match load_or_create_document(&path) {
-      Ok(document) => self.add_document_panel(document, Some(path), window, cx),
+    match load_document_for_open(&path) {
+      Ok((document, document_path)) => self.add_document_panel(document, document_path, window, cx),
       Err(error) => {
         let detail = format!("Failed to open {}: {error}", path.display());
         let _ = window.prompt(PromptLevel::Critical, "Open failed", Some(&detail), &[PromptButton::ok("Ok")], cx);
@@ -189,7 +191,7 @@ impl Workspace {
       files: true,
       directories: false,
       multiple: false,
-      prompt: Some("Open .db8 document".into()),
+      prompt: Some("Open .db8 or .docx document".into()),
     });
     let window_handle = window.window_handle();
     cx.spawn(async move |workspace, cx| {
@@ -199,8 +201,8 @@ impl Workspace {
       let Some(path) = paths.into_iter().next() else {
         return;
       };
-      let document = match load_or_create_document(&path) {
-        Ok(document) => document,
+      let (document, document_path) = match load_document_for_open(&path) {
+        Ok(result) => result,
         Err(error) => {
           let detail = format!("Failed to open {}: {error}", path.display());
           let _ = window_handle.update(cx, |_, window, cx| {
@@ -211,7 +213,7 @@ impl Workspace {
       };
       let _ = window_handle.update(cx, |_, window, cx| {
         let _ = workspace.update(cx, |workspace, cx| {
-          workspace.add_document_panel(document, Some(path), window, cx);
+          workspace.add_document_panel(document, document_path, window, cx);
         });
       });
     })
@@ -638,6 +640,19 @@ impl Workspace {
       cx.notify();
     }
   }
+}
+
+fn load_document_for_open(path: &PathBuf) -> std::io::Result<(Document, Option<PathBuf>)> {
+  if path
+    .extension()
+    .and_then(|extension| extension.to_str())
+    .is_some_and(|extension| extension.eq_ignore_ascii_case("docx"))
+  {
+    let (document, _) = convert_docx_to_document(path)?;
+    return Ok((document, Some(path.with_extension("db8"))));
+  }
+
+  load_or_create_document(path).map(|document| (document, Some(path.clone())))
 }
 
 impl Render for Workspace {

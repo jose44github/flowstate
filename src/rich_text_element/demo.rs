@@ -46,6 +46,26 @@ pub(super) fn document_from_input(theme: DocumentTheme, paragraphs: Vec<InputPar
   }
 }
 
+pub fn document_from_paragraphs(theme: DocumentTheme, paragraphs: Vec<DocumentParagraphInput>) -> Document {
+  document_from_input(
+    theme,
+    paragraphs
+      .into_iter()
+      .map(|paragraph| InputParagraph {
+        style: paragraph.style,
+        runs: paragraph
+          .runs
+          .into_iter()
+          .map(|run| InputRun {
+            text: run.text,
+            styles: run.styles,
+          })
+          .collect(),
+      })
+      .collect(),
+  )
+}
+
 pub fn blank_document() -> Document {
   document_from_input(DocumentTheme::default(), Vec::new())
 }

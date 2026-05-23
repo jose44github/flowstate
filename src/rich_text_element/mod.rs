@@ -16,12 +16,12 @@ mod tools;
 mod word_boundary;
 
 pub use collaboration::{BlockId, CanonicalOperation, CollaborationEdit, ParagraphId, TableCellId};
-pub use demo::{blank_document, demo_document};
+pub use demo::{blank_document, demo_document, document_from_paragraphs};
 pub use document::{
-  AssetId, AssetRecord, AssetStore, Block, BlockAlignment, Document, DocumentOffset, DocumentPosition, DocumentTheme, EquationBlock,
-  EquationDisplay, EquationSyntax, HighlightStyle, ImageBlock, ImageSizing, ObjectAffinity, Paragraph, ParagraphStyle, RunSemanticStyle,
-  RunStyle, RunStyles, TableBlock, TableCell, TableCellBlock, TableCellParagraph, TableColumnWidth, TableRow, TableStyle, TextRun,
-  ThemeUnderline,
+  AssetId, AssetRecord, AssetStore, Block, BlockAlignment, Document, DocumentOffset, DocumentParagraphInput, DocumentPosition, DocumentRunInput,
+  DocumentTheme, EquationBlock, EquationDisplay, EquationSyntax, HighlightStyle, ImageBlock, ImageSizing, ObjectAffinity, Paragraph,
+  ParagraphStyle, RunSemanticStyle, RunStyle, RunStyles, TableBlock, TableCell, TableCellBlock, TableCellParagraph, TableColumnWidth, TableRow,
+  TableStyle, TextRun, ThemeUnderline,
 };
 pub use editor::*;
 pub use element::RichTextDocumentElement;
