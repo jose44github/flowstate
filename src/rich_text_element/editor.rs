@@ -135,6 +135,7 @@ struct EditRecord {
   after_selection: EditorSelection,
   after_generation: u64,
   operations: Vec<EditOperation>,
+  canonical_operations: Vec<CanonicalOperation>,
 }
 
 #[derive(Clone, Debug)]
@@ -235,10 +236,10 @@ impl EditOperation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct DocumentSpan {
-  pub(super) start_paragraph: usize,
-  pub(super) paragraphs: Vec<Paragraph>,
-  pub(super) text: String,
+pub struct DocumentSpan {
+  pub start_paragraph: usize,
+  pub paragraphs: Vec<Paragraph>,
+  pub text: String,
 }
 
 #[derive(Clone, Debug)]
@@ -520,6 +521,8 @@ pub struct RichTextEditor {
   save_status: SaveStatus,
   undo_stack: Vec<EditRecord>,
   redo_stack: Vec<EditRecord>,
+  identity_map: DocumentIdentityMap,
+  last_collaboration_edit: Option<CollaborationEdit>,
   recovery_write_in_progress: bool,
   recovery_write_pending: bool,
   last_recovery_generation: u64,
@@ -573,6 +576,7 @@ impl RichTextEditor {
   pub fn new_with_path(document: Document, document_path: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
     let paragraph_count = document.paragraphs.len();
     let saved_generation = if document_path.is_some() { 0 } else { u64::MAX };
+    let identity_map = DocumentIdentityMap::new(&document);
     Self {
       focus_handle: cx.focus_handle(),
       focus_subscriptions: Vec::new(),
@@ -588,6 +592,8 @@ impl RichTextEditor {
       save_status: SaveStatus::Saved,
       undo_stack: Vec::new(),
       redo_stack: Vec::new(),
+      identity_map,
+      last_collaboration_edit: None,
       recovery_write_in_progress: false,
       recovery_write_pending: false,
       last_recovery_generation: 0,
@@ -635,6 +641,148 @@ impl RichTextEditor {
 
   pub fn document(&self) -> &Document {
     &self.document
+  }
+
+  pub fn last_collaboration_edit(&self) -> Option<&CollaborationEdit> {
+    self.last_collaboration_edit.as_ref()
+  }
+
+  pub fn paragraph_id(&self, paragraph_ix: usize) -> Option<ParagraphId> {
+    self.identity_map.paragraph_id(paragraph_ix)
+  }
+
+  pub fn block_id(&self, block_ix: usize) -> Option<BlockId> {
+    self.identity_map.block_id(block_ix)
+  }
+
+  pub fn table_cell_id(&self, block_ix: usize, row_ix: usize, cell_ix: usize) -> Option<TableCellId> {
+    self.identity_map.table_cell_id(block_ix, row_ix, cell_ix)
+  }
+
+  pub fn apply_remote_operations(&mut self, operations: &[CanonicalOperation], cx: &mut Context<Self>) {
+    for operation in operations {
+      self.apply_canonical_operation(operation);
+    }
+    self.identity_map.reconcile(&self.document);
+    self.last_collaboration_edit = None;
+    self.after_text_mutation(cx);
+  }
+
+  fn apply_canonical_operation(&mut self, operation: &CanonicalOperation) {
+    match operation {
+      CanonicalOperation::InsertText {
+        paragraph,
+        byte,
+        text,
+        styles,
+      } => {
+        if let Some(paragraph_ix) = self.identity_map.paragraph_index(*paragraph) {
+          insert_text_at(&mut self.document, paragraph_ix, *byte, text, *styles);
+        }
+      },
+      CanonicalOperation::DeleteRange {
+        start_paragraph,
+        start_byte,
+        end_paragraph,
+        end_byte,
+      } => {
+        let Some(start_paragraph) = self.identity_map.paragraph_index(*start_paragraph) else {
+          return;
+        };
+        let Some(end_paragraph) = self.identity_map.paragraph_index(*end_paragraph) else {
+          return;
+        };
+        delete_cross_paragraph_range(
+          &mut self.document,
+          DocumentOffset {
+            paragraph: start_paragraph,
+            byte: *start_byte,
+          }..DocumentOffset {
+            paragraph: end_paragraph,
+            byte: *end_byte,
+          },
+        );
+      },
+      CanonicalOperation::SplitParagraph {
+        paragraph,
+        byte,
+        ..
+      } => {
+        if let Some(paragraph_ix) = self.identity_map.paragraph_index(*paragraph) {
+          split_paragraph_at(&mut self.document, paragraph_ix, *byte);
+        }
+      },
+      CanonicalOperation::JoinParagraphs { first, second } => {
+        let Some(first_ix) = self.identity_map.paragraph_index(*first) else {
+          return;
+        };
+        let Some(second_ix) = self.identity_map.paragraph_index(*second) else {
+          return;
+        };
+        if second_ix == first_ix + 1 {
+          let byte = paragraph_text_len(&self.document.paragraphs[first_ix]);
+          delete_cross_paragraph_range(
+            &mut self.document,
+            DocumentOffset {
+              paragraph: first_ix,
+              byte,
+            }..DocumentOffset {
+              paragraph: second_ix,
+              byte: 0,
+            },
+          );
+        }
+      },
+      CanonicalOperation::SetParagraphStyle { paragraph, style } => {
+        if let Some(paragraph_ix) = self.identity_map.paragraph_index(*paragraph)
+          && let Some(paragraph) = paragraphs_mut(&mut self.document).get_mut(paragraph_ix)
+        {
+          paragraph.style = *style;
+          bump_paragraph_version(paragraph);
+          update_paragraph_block(&mut self.document, paragraph_ix);
+        }
+      },
+      CanonicalOperation::SetRunStyles {
+        paragraph,
+        range,
+        styles,
+      } => {
+        if let Some(paragraph_ix) = self.identity_map.paragraph_index(*paragraph) {
+          mutate_runs_in_range(
+            &mut self.document,
+            DocumentOffset {
+              paragraph: paragraph_ix,
+              byte: range.start,
+            }..DocumentOffset {
+              paragraph: paragraph_ix,
+              byte: range.end,
+            },
+            |run_styles| *run_styles = *styles,
+          );
+        }
+      },
+      CanonicalOperation::ReplaceParagraphSpan {
+        start_paragraph,
+        before,
+        after,
+      } => {
+        let start = start_paragraph
+          .and_then(|id| self.identity_map.paragraph_index(id))
+          .unwrap_or(before.start_paragraph);
+        let current = capture_document_span(&self.document, start..start + before.paragraphs.len());
+        let replacement = DocumentSpan {
+          start_paragraph: start,
+          paragraphs: after.paragraphs.clone(),
+          text: after.text.clone(),
+        };
+        apply_document_span_replacement(&mut self.document, &current, &replacement);
+      },
+      CanonicalOperation::InsertBlock { .. }
+      | CanonicalOperation::DeleteBlock { .. }
+      | CanonicalOperation::MoveBlock { .. }
+      | CanonicalOperation::ReplaceBlock { .. }
+      | CanonicalOperation::ReplaceDocument => {},
+    }
   }
 
   pub fn document_path(&self) -> Option<&PathBuf> {
@@ -905,6 +1053,9 @@ impl RichTextEditor {
         before: Block::Table(drag.before),
         after: Block::Table(after),
       }],
+      canonical_operations: vec![CanonicalOperation::ReplaceBlock {
+        block: self.identity_map.block_id(drag.block_ix),
+      }],
     });
     self.redo_stack.clear();
     self.invalidate_document_layout_caches();
@@ -1102,6 +1253,7 @@ impl RichTextEditor {
         before: before_document,
         after: after_document,
       }],
+      canonical_operations: vec![CanonicalOperation::ReplaceDocument],
     });
     self.redo_stack.clear();
     self.invalidate_document_layout_caches();
@@ -1141,6 +1293,9 @@ impl RichTextEditor {
       after_selection: self.selection.clone(),
       after_generation,
       operations: vec![EditOperation::DeleteBlock { block_ix, block }],
+      canonical_operations: vec![CanonicalOperation::DeleteBlock {
+        block: self.identity_map.block_id(block_ix).unwrap_or(BlockId(0)),
+      }],
     });
     self.redo_stack.clear();
     self.item_sizes_cache = None;
@@ -2091,6 +2246,9 @@ impl RichTextEditor {
       after_selection: self.selection.clone(),
       after_generation,
       operations: vec![EditOperation::ReplaceBlock { block_ix, before, after }],
+      canonical_operations: vec![CanonicalOperation::ReplaceBlock {
+        block: self.identity_map.block_id(block_ix),
+      }],
     });
     self.redo_stack.clear();
     self.invalidate_document_layout_caches();
@@ -2275,6 +2433,9 @@ impl RichTextEditor {
         before: Block::Image(drag.before),
         after: Block::Image(after),
       }],
+      canonical_operations: vec![CanonicalOperation::ReplaceBlock {
+        block: self.identity_map.block_id(drag.block_ix),
+      }],
     });
     self.redo_stack.clear();
     self.invalidate_document_layout_caches();
@@ -2332,6 +2493,9 @@ impl RichTextEditor {
       after_selection: self.selection.clone(),
       after_generation,
       operations: vec![EditOperation::ReplaceBlock { block_ix, before, after }],
+      canonical_operations: vec![CanonicalOperation::ReplaceBlock {
+        block: self.identity_map.block_id(block_ix),
+      }],
     });
     self.redo_stack.clear();
     self.invalidate_document_layout_caches();
@@ -2513,6 +2677,9 @@ impl RichTextEditor {
       after_selection: self.selection.clone(),
       after_generation,
       operations: vec![EditOperation::ReplaceBlock { block_ix, before, after }],
+      canonical_operations: vec![CanonicalOperation::ReplaceBlock {
+        block: self.identity_map.block_id(block_ix),
+      }],
     });
     self.redo_stack.clear();
     self.table_cell_block_ix = new_paragraph_ix;
@@ -2724,6 +2891,9 @@ impl RichTextEditor {
       after_selection: self.selection.clone(),
       after_generation,
       operations: vec![EditOperation::ReplaceBlock { block_ix, before, after }],
+      canonical_operations: vec![CanonicalOperation::ReplaceBlock {
+        block: self.identity_map.block_id(block_ix),
+      }],
     });
     self.redo_stack.clear();
     self.invalidate_document_layout_caches();
@@ -2777,6 +2947,9 @@ impl RichTextEditor {
       after_selection: self.selection.clone(),
       after_generation,
       operations: vec![EditOperation::ReplaceBlock { block_ix, before, after }],
+      canonical_operations: vec![CanonicalOperation::ReplaceBlock {
+        block: self.identity_map.block_id(block_ix),
+      }],
     });
     self.redo_stack.clear();
     self.invalidate_document_layout_caches();
@@ -3264,6 +3437,11 @@ impl RichTextEditor {
     let before_generation = self.edit_generation;
     let after_generation = self.next_edit_generation;
     self.next_edit_generation = self.next_edit_generation.wrapping_add(1);
+    let canonical_operations = vec![CanonicalOperation::ReplaceParagraphSpan {
+      start_paragraph: self.identity_map.paragraph_id(before_span.start_paragraph),
+      before: before_span.clone(),
+      after: after_span.clone(),
+    }];
     let record = EditRecord {
       before_selection,
       before_generation,
@@ -3273,14 +3451,23 @@ impl RichTextEditor {
         before: before_span,
         after: after_span,
       }],
+      canonical_operations,
     };
     self.undo_stack.push(record);
     self.redo_stack.clear();
+    self.identity_map.reconcile(&self.document);
+    self.last_collaboration_edit = self.undo_stack.last().map(|record| CollaborationEdit {
+      operations: record.canonical_operations.clone(),
+    });
     self.mark_document_changed(after_generation, cx);
   }
 
   fn mark_document_changed(&mut self, generation: u64, cx: &mut Context<Self>) {
     self.edit_generation = generation;
+    self.identity_map.reconcile(&self.document);
+    self.last_collaboration_edit = self.undo_stack.last().map(|record| CollaborationEdit {
+      operations: record.canonical_operations.clone(),
+    });
     self.refresh_save_status();
     self.schedule_recovery_write(cx);
     cx.notify();
@@ -4220,6 +4407,7 @@ impl RichTextEditor {
         before: before_document,
         after: self.document.clone(),
       }],
+      canonical_operations: vec![CanonicalOperation::ReplaceDocument],
     });
     self.redo_stack.clear();
     self.invalidate_document_layout_caches();
@@ -5204,6 +5392,11 @@ impl RichTextEditor {
         adjusted_drop,
         inserted_range: inserted_start..inserted_end,
         fragment: drag.fragment,
+      }],
+      canonical_operations: vec![CanonicalOperation::ReplaceParagraphSpan {
+        start_paragraph: self.identity_map.paragraph_id(inserted_start.paragraph),
+        before: capture_document_span(&self.document, inserted_start.paragraph..(inserted_start.paragraph + 1).min(self.document.paragraphs.len())),
+        after: capture_document_span(&self.document, inserted_start.paragraph..(inserted_end.paragraph + 1).min(self.document.paragraphs.len())),
       }],
     });
     self.redo_stack.clear();

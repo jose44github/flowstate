@@ -2,6 +2,7 @@
 // `rich_text_element` API, while internal imports keep sibling modules able to
 // share implementation details without exposing them outside this module tree.
 mod demo;
+mod collaboration;
 mod document;
 mod edit_ops;
 mod editor;
@@ -15,6 +16,7 @@ mod tools;
 mod word_boundary;
 
 pub use demo::{blank_document, demo_document};
+pub use collaboration::{BlockId, CanonicalOperation, CollaborationEdit, ParagraphId, TableCellId};
 pub use document::{
   AssetId, AssetRecord, AssetStore, Block, BlockAlignment, Document, DocumentOffset, DocumentPosition, DocumentTheme, EquationBlock,
   EquationDisplay, EquationSyntax, HighlightStyle, ImageBlock, ImageSizing, ObjectAffinity, Paragraph, ParagraphStyle, RunSemanticStyle,
@@ -37,8 +39,9 @@ use document::{
   ParagraphOffsetIndex, RichClipboardFragment, SOFT_LINE_BREAK, SOFT_LINE_BREAK_STR, block_ix_for_paragraph, document_offset_for_position,
   document_position_for_offset, paragraph_blocks_from_paragraphs, paragraphs_mut, replace_paragraph_blocks, update_paragraph_block,
 };
+use collaboration::DocumentIdentityMap;
 use edit_ops::*;
-use editor::{DocumentSpan, SelectionGranularity};
+use editor::SelectionGranularity;
 use element::*;
 use invisibility::*;
 use layout::*;
