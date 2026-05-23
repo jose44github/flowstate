@@ -1,13 +1,12 @@
 use gpui::{
-  AnyElement, App, Context, Entity, Hsla, IntoElement, Keystroke, ParentElement as _, Render, Styled as _, Window, div, prelude::*, px,
-  relative,
+  AnyElement, App, Context, Entity, Hsla, IntoElement, Keystroke, ParentElement as _, Render, Styled as _, Window, div, prelude::*, px, relative,
 };
+use gpui_component::Size;
+use gpui_component::button::DropdownButton;
 use gpui_component::button::{Button, ButtonGroup, ButtonVariants as _, Toggle, ToggleVariants as _};
 use gpui_component::kbd::Kbd;
 use gpui_component::menu::PopupMenuItem;
-use gpui_component::button::DropdownButton;
 use gpui_component::{ActiveTheme as _, Disableable as _, Icon, PixelsExt as _, Selectable as _, Sizable as _, StyledExt as _};
-use gpui_component::Size;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::{CommandId, default_keys_for};
@@ -422,9 +421,7 @@ impl ModernStylesRibbon {
     metrics.max_chip_rows = rows_requested_by_width.min(rows_allowed_by_height);
     let wrap_widths = groups
       .iter()
-      .map(|group| {
-        (metrics.max_chip_rows > 1).then(|| group_row_width(group, metrics, metrics.max_chip_rows, window, cx))
-      })
+      .map(|group| (metrics.max_chip_rows > 1).then(|| group_row_width(group, metrics, metrics.max_chip_rows, window, cx)))
       .collect::<Vec<_>>();
 
     div()
@@ -458,10 +455,9 @@ impl ModernStylesRibbon {
               .gap(metrics.group_gap)
               .min_w_0()
               .children(
-                groups
-                  .iter()
-                  .enumerate()
-                  .map(|(index, group)| modern_group(index > 0, group, editor.clone(), document_theme, options, metrics, wrap_widths[index], cx)),
+                groups.iter().enumerate().map(|(index, group)| {
+                  modern_group(index > 0, group, editor.clone(), document_theme, options, metrics, wrap_widths[index], cx)
+                }),
               ),
           ),
       )
@@ -564,18 +560,13 @@ fn modern_group(
             .content_start()
             .gap(metrics.chip_gap)
             .min_w_0()
-            .children(
-              group
-                .commands
-                .iter()
-                .map(|command| {
-                  if matches!(command.id, RibbonCommandId::ToggleHighlightMode(_)) {
-                    modern_highlight_menu(command, editor.clone(), document_theme, metrics, cx)
-                  } else {
-                    modern_command_chip(command, editor.clone(), options, metrics, cx)
-                  }
-                }),
-            ),
+            .children(group.commands.iter().map(|command| {
+              if matches!(command.id, RibbonCommandId::ToggleHighlightMode(_)) {
+                modern_highlight_menu(command, editor.clone(), document_theme, metrics, cx)
+              } else {
+                modern_command_chip(command, editor.clone(), options, metrics, cx)
+              }
+            })),
         ),
     )
     .into_any_element()
@@ -671,7 +662,12 @@ fn group_row_width(
   px(commands_width + gap_width)
 }
 
-fn command_chip_width(command: &RibbonCommand, metrics: RibbonLayoutMetrics, window: &mut Window, cx: &mut Context<EditorRibbon>) -> gpui::Pixels {
+fn command_chip_width(
+  command: &RibbonCommand,
+  metrics: RibbonLayoutMetrics,
+  window: &mut Window,
+  cx: &mut Context<EditorRibbon>,
+) -> gpui::Pixels {
   let label_width = measure_ribbon_text(command.label, metrics.chip_text_size, window, cx).as_f32();
   let shortcut_width = command
     .shortcut
@@ -680,7 +676,11 @@ fn command_chip_width(command: &RibbonCommand, metrics: RibbonLayoutMetrics, win
     .unwrap_or(0.0);
   let accent_width = if command.accent.is_some() { 14.0 } else { 0.0 };
   let component_padding_x = px(4.0);
-  let caret_width = if matches!(command.id, RibbonCommandId::HighlightMenu) { 10.0 } else { 0.0 };
+  let caret_width = if matches!(command.id, RibbonCommandId::HighlightMenu) {
+    10.0
+  } else {
+    0.0
+  };
   let chrome_width = metrics.chip_padding_x.as_f32() * 2.0 + component_padding_x.as_f32() * 2.0 + 10.0 + caret_width;
 
   px(label_width + shortcut_width + accent_width + chrome_width)
@@ -692,7 +692,10 @@ fn measure_ribbon_text(text: &str, font_size: gpui::Pixels, window: &mut Window,
   }
   let text_style = window.text_style();
   let runs = vec![text_style.to_run(text.len())];
-  window.text_system().layout_line(text, font_size, &runs, None).width
+  window
+    .text_system()
+    .layout_line(text, font_size, &runs, None)
+    .width
 }
 
 fn modern_command_chip(
@@ -767,85 +770,82 @@ fn modern_highlight_menu(
     .items_center()
     .gap_0()
     .child(
-      div()
-        .relative()
-        .h(chip_height)
-        .child(
-          DropdownButton::new("modern-ribbon-highlight-dropdown")
-            .with_size(Size::Size(chip_height))
-            .compact()
-            .outline()
-            .button(
-              Button::new(("modern-ribbon-highlight-toggle", 0_u64))
-                .compact()
-                .ghost()
-                .h(chip_height)
-                .px(metrics.chip_padding_x)
-                .when(mode_active, |this| {
-                  this
-                    .bg(cx.theme().secondary_active)
-                    .border_color(cx.theme().border)
-                    .text_color(cx.theme().foreground)
-                })
-                .tooltip_with_action("Highlight mode", &ApplyHighlightToSelection, Some("RichTextEditor"))
-                .child(match accent {
-                  RibbonAccent::Transparent => transparent_accent_bar(cx),
-                  _ => accent_bar(accent_color(accent, cx)),
-                })
-                .child(Icon::default().path("icons/highlighter.svg").xsmall())
-                .when_some(shortcut_for(CommandId::ApplyHighlightToSelection), |this, shortcut| {
-                  this.child(keycap(shortcut, cx))
-                })
-                .on_click({
-                  let editor = editor.clone();
-                  move |_, _, cx| {
-                    editor.update(cx, |editor, cx| {
-                      editor.toggle_highlight_mode(cx);
-                    });
-                  }
-                }),
-            )
-            .dropdown_menu(move |menu, _, _| {
-              let menu = menu.min_w(px(180.0)).max_w(px(220.0));
-
-              let menu = HIGHLIGHT_STYLE_SPECS.iter().fold(menu, |menu, spec| {
-                let style = spec.style;
-                let label = spec.label;
+      div().relative().h(chip_height).child(
+        DropdownButton::new("modern-ribbon-highlight-dropdown")
+          .with_size(Size::Size(chip_height))
+          .compact()
+          .outline()
+          .button(
+            Button::new(("modern-ribbon-highlight-toggle", 0_u64))
+              .compact()
+              .ghost()
+              .h(chip_height)
+              .px(metrics.chip_padding_x)
+              .when(mode_active, |this| {
+                this
+                  .bg(cx.theme().secondary_active)
+                  .border_color(cx.theme().border)
+                  .text_color(cx.theme().foreground)
+              })
+              .tooltip_with_action("Highlight mode", &ApplyHighlightToSelection, Some("RichTextEditor"))
+              .child(match accent {
+                RibbonAccent::Transparent => transparent_accent_bar(cx),
+                _ => accent_bar(accent_color(accent, cx)),
+              })
+              .child(Icon::default().path("icons/highlighter.svg").xsmall())
+              .when_some(shortcut_for(CommandId::ApplyHighlightToSelection), |this, shortcut| {
+                this.child(keycap(shortcut, cx))
+              })
+              .on_click({
                 let editor = editor.clone();
-                let color = highlight_color(style, &document_theme);
+                move |_, _, cx| {
+                  editor.update(cx, |editor, cx| {
+                    editor.toggle_highlight_mode(cx);
+                  });
+                }
+              }),
+          )
+          .dropdown_menu(move |menu, _, _| {
+            let menu = menu.min_w(px(180.0)).max_w(px(220.0));
 
-                menu.item(
-                  PopupMenuItem::element(move |_, _| {
-                    div()
-                      .flex()
-                      .flex_row()
-                      .items_center()
-                      .gap_2()
-                      .child(highlight_menu_swatch(color))
-                      .child(label)
-                  })
-                  .checked(selected_highlight == Some(style))
-                  .on_click(move |_, _, cx| {
-                    editor.update(cx, |editor, cx| {
-                      editor.select_highlight_style(Some(style), cx);
-                    });
-                  }),
-                )
-              });
-
+            let menu = HIGHLIGHT_STYLE_SPECS.iter().fold(menu, |menu, spec| {
+              let style = spec.style;
+              let label = spec.label;
               let editor = editor.clone();
+              let color = highlight_color(style, &document_theme);
 
               menu.item(
-                PopupMenuItem::new("Clear highlight")
-                    .checked(selected_highlight.is_none())
-                    .on_click(move |_, _, cx| {
-                      editor.update(cx, |editor, cx| {
-                        editor.select_highlight_style(None, cx);
-                      });
-                    }),
+                PopupMenuItem::element(move |_, _| {
+                  div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_2()
+                    .child(highlight_menu_swatch(color))
+                    .child(label)
+                })
+                .checked(selected_highlight == Some(style))
+                .on_click(move |_, _, cx| {
+                  editor.update(cx, |editor, cx| {
+                    editor.select_highlight_style(Some(style), cx);
+                  });
+                }),
               )
-            }),
-        )
+            });
+
+            let editor = editor.clone();
+
+            menu.item(
+              PopupMenuItem::new("Clear highlight")
+                .checked(selected_highlight.is_none())
+                .on_click(move |_, _, cx| {
+                  editor.update(cx, |editor, cx| {
+                    editor.select_highlight_style(None, cx);
+                  });
+                }),
+            )
+          }),
+      ),
     )
     .into_any_element()
 }
@@ -889,11 +889,7 @@ fn modern_command_groups(
     RibbonCommandGroup {
       id: "highlight",
       label: "Highlight",
-      commands: highlight_commands(
-        document_theme,
-        current_highlight,
-        highlight_mode_active,
-      ),
+      commands: highlight_commands(document_theme, current_highlight, highlight_mode_active),
     },
     RibbonCommandGroup {
       id: "reset",

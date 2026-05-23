@@ -29,7 +29,10 @@ impl RichTextEditor {
   }
 
   pub fn highlight_mode_active(&self) -> bool {
-    matches!(self.armed_inline_tool, Some(ArmedInlineTool::Highlight(_) | ArmedInlineTool::ClearHighlight))
+    matches!(
+      self.armed_inline_tool,
+      Some(ArmedInlineTool::Highlight(_) | ArmedInlineTool::ClearHighlight)
+    )
   }
 
   /// Select the highlight picker mode.
