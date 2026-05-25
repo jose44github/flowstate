@@ -3893,6 +3893,7 @@ impl RichTextEditor {
 
   fn paragraph_chunk_containing_byte(&self, paragraph_ix: usize, byte: usize, width: Pixels) -> Option<(usize, Rc<LayoutState>)> {
     let paragraph = self.document.paragraphs.get(paragraph_ix)?;
+    let paragraph_len = paragraph_text_len(paragraph);
     let key = paragraph_cache_key(&self.document, paragraph);
     self
       .paragraph_chunk_layout_cache
@@ -3904,7 +3905,9 @@ impl RichTextEditor {
           .chunks
           .iter()
           .enumerate()
-          .find(|(_, chunk)| byte >= chunk.start_byte && byte <= chunk.end_byte)
+          .find(|(_, chunk)| {
+            byte >= chunk.start_byte && (byte < chunk.end_byte || (byte == chunk.end_byte && chunk.end_byte == paragraph_len))
+          })
           .map(|(ix, chunk)| (ix, chunk.layout.clone()))
       })
   }
