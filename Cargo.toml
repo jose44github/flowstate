@@ -1,8 +1,8 @@
 [package]
-name = "debateprocessor"
+name = "flowstate"
 version = "0.1.0"
 edition = "2024"
-default-run = "debateprocessor"
+default-run = "flowstate"
 
 [dependencies]
 anyhow = "1.0.102"

@@ -124,7 +124,10 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
           highlight: direct.highlight || effective.highlight.is_some() || effective.shading.is_some(),
           border: false,
           source_size_pt: run.size().or(direct.size_pt),
-          size_pt: run.size().or(direct.size_pt).or_else(|| effective.sz.map(|size| size.to_pt())),
+          size_pt: run
+            .size()
+            .or(direct.size_pt)
+            .or_else(|| effective.sz.map(|size| size.to_pt())),
           color: run.color().is_some() || direct.color || effective.color.is_some() || effective.color_theme.is_some(),
         }
       })
@@ -198,11 +201,7 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
         ),
         direct_underline: structural_underline_is_direct && run.underline,
         strikethrough: run.strikethrough,
-        highlight: if run.highlight {
-          Some(HighlightStyle::Spoken)
-        } else {
-          None
-        },
+        highlight: if run.highlight { Some(HighlightStyle::Spoken) } else { None },
       };
 
       runs.push(DocumentRunInput { text, styles });
@@ -308,7 +307,11 @@ impl StyleResolver {
     let names_by_id = docx
       .styles()
       .into_iter()
-      .filter_map(|style| style.name().map(|name| (style.style_id().to_string(), name.to_string())))
+      .filter_map(|style| {
+        style
+          .name()
+          .map(|name| (style.style_id().to_string(), name.to_string()))
+      })
       .collect();
     Self { names_by_id }
   }
@@ -318,7 +321,9 @@ impl StyleResolver {
   }
 
   fn canonical_name<'a>(&'a self, style_id: Option<&'a str>) -> &'a str {
-    style_id.and_then(|id| self.name(id)).unwrap_or_else(|| style_id.unwrap_or("Normal"))
+    style_id
+      .and_then(|id| self.name(id))
+      .unwrap_or_else(|| style_id.unwrap_or("Normal"))
   }
 
   fn is_known_paragraph_style(&self, style_id: &str) -> bool {
@@ -341,7 +346,11 @@ fn recognize_paragraph_style(
   if paragraph_properties.outline_lvl() == Some(1) && runs.iter().any(|run| run.bold && run.size_pt == Some(22.0)) {
     return ParagraphStyle::Hat;
   }
-  if paragraph_properties.outline_lvl() == Some(2) && runs.iter().any(|run| run.bold && run.underline && run.size_pt == Some(16.0)) {
+  if paragraph_properties.outline_lvl() == Some(2)
+    && runs
+      .iter()
+      .any(|run| run.bold && run.underline && run.size_pt == Some(16.0))
+  {
     return ParagraphStyle::Block;
   }
   if paragraph_properties.outline_lvl() == Some(3) && runs.iter().any(|run| run.bold && run.color) {
@@ -484,7 +493,11 @@ fn entirely_bold_paragraph_overrides(runs: &[RunFact]) -> Option<Vec<bool>> {
     }
   }
 
-  let highlighted = text_run_indices.iter().filter(|ix| runs[**ix].highlight).copied().collect::<Vec<_>>();
+  let highlighted = text_run_indices
+    .iter()
+    .filter(|ix| runs[**ix].highlight)
+    .copied()
+    .collect::<Vec<_>>();
   if !highlighted.is_empty() {
     for ix in highlighted {
       cite[ix] = true;
@@ -492,7 +505,10 @@ fn entirely_bold_paragraph_overrides(runs: &[RunFact]) -> Option<Vec<bool>> {
     return Some(cite);
   }
 
-  if let Some(first_digit_run) = text_run_indices.iter().position(|ix| runs[*ix].text.chars().any(|ch| ch.is_ascii_digit())) {
+  if let Some(first_digit_run) = text_run_indices
+    .iter()
+    .position(|ix| runs[*ix].text.chars().any(|ch| ch.is_ascii_digit()))
+  {
     for ix in text_run_indices.iter().take(first_digit_run + 1) {
       cite[*ix] = true;
     }

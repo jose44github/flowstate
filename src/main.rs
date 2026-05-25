@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use debateprocessor::{run_standalone, write_demo_document};
+use flowstate::{run_standalone, write_demo_document};
 
 /// Command line arguments for the standalone rich text processor.
 ///
@@ -10,7 +10,7 @@ use debateprocessor::{run_standalone, write_demo_document};
 /// `--help`/`-h`, validates input, and fills in defaults for us. The full
 /// editor can use the library directly without going through this CLI.
 #[derive(Parser)]
-#[command(name = "debateprocessor", about = "A rich-text editor for debate documents.")]
+#[command(name = "Flowstate", about = "A rich-text editor for debate documents.")]
 struct Cli {
   /// Optional path to the `.db8` document to open.
   #[arg(value_name = "PATH")]

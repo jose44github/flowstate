@@ -258,7 +258,7 @@ pub(super) fn selected_rich_fragment(document: &Document, range: Range<DocumentO
     });
   }
   RichClipboardFragment {
-    format: "debateprocessor.rich-text-fragment.v1".to_string(),
+    format: "flowstate.rich-text-fragment.v1".to_string(),
     paragraphs,
     blocks: Vec::new(),
     assets: Vec::new(),

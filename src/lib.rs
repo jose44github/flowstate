@@ -1,4 +1,4 @@
-//! Reusable library surface for the debate processor editor.
+//! Reusable library surface for the Flowstate editor.
 //!
 //! The binary in `main.rs` is intentionally thin: it parses CLI arguments and
 //! calls into this library. The future full editor can depend on this crate,

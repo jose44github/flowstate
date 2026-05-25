@@ -20,21 +20,10 @@ pub(super) struct ItemSizesCache {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum VirtualItem {
-  HiddenBlock {
-    block_ix: usize,
-  },
-  ParagraphChunk {
-    block_ix: usize,
-    paragraph_ix: usize,
-    chunk_ix: usize,
-  },
-  ParagraphRemainder {
-    block_ix: usize,
-    paragraph_ix: usize,
-  },
-  StructuralBlock {
-    block_ix: usize,
-  },
+  HiddenBlock { block_ix: usize },
+  ParagraphChunk { block_ix: usize, paragraph_ix: usize, chunk_ix: usize },
+  ParagraphRemainder { block_ix: usize, paragraph_ix: usize },
+  StructuralBlock { block_ix: usize },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

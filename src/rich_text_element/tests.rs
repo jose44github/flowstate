@@ -187,7 +187,7 @@ fn single_paragraph_edits_refresh_following_cached_byte_ranges() {
 fn db8_round_trip_preserves_text_structure_and_styles() {
   let document = demo_document();
   let dir = std::env::temp_dir();
-  let path = dir.join(format!("debateprocessor-test-{}.db8", std::process::id()));
+  let path = dir.join(format!("flowstate-test-{}.db8", std::process::id()));
   write_db8(&path, &document).unwrap();
   let loaded = read_db8(&path).unwrap();
   let _ = std::fs::remove_file(path);
@@ -261,7 +261,7 @@ fn db8_round_trip_preserves_empty_styled_paragraphs() {
       },
     ],
   );
-  let path = std::env::temp_dir().join(format!("debateprocessor-empty-{}.db8", std::process::id()));
+  let path = std::env::temp_dir().join(format!("flowstate-empty-{}.db8", std::process::id()));
   write_db8(&path, &document).unwrap();
   let loaded = read_db8(&path).unwrap();
   let _ = std::fs::remove_file(path);
@@ -320,7 +320,7 @@ fn db8_v4_round_trip_preserves_mixed_block_order_and_assets() {
     }),
   ]);
 
-  let path = std::env::temp_dir().join(format!("debateprocessor-blocks-{}.db8", uuid::Uuid::new_v4()));
+  let path = std::env::temp_dir().join(format!("flowstate-blocks-{}.db8", uuid::Uuid::new_v4()));
   write_db8(&path, &document).unwrap();
   let loaded = read_db8(&path).unwrap();
   let _ = std::fs::remove_file(path);
@@ -518,7 +518,7 @@ fn db8_v4_round_trip_preserves_table_cell_paragraph_and_run_styles() {
     }),
   ]);
 
-  let path = std::env::temp_dir().join(format!("debateprocessor-table-{}.db8", uuid::Uuid::new_v4()));
+  let path = std::env::temp_dir().join(format!("flowstate-table-{}.db8", uuid::Uuid::new_v4()));
   write_db8(&path, &document).unwrap();
   let loaded = read_db8(&path).unwrap();
   let _ = std::fs::remove_file(path);
@@ -799,7 +799,7 @@ fn default_inserted_table_shape_round_trips_through_db8() {
   });
   document.blocks = std::sync::Arc::new(vec![Block::Paragraph(document.paragraphs[0].clone()), table]);
 
-  let path = std::env::temp_dir().join(format!("debateprocessor-default-table-{}.db8", uuid::Uuid::new_v4()));
+  let path = std::env::temp_dir().join(format!("flowstate-default-table-{}.db8", uuid::Uuid::new_v4()));
   write_db8(&path, &document).unwrap();
   let loaded = read_db8(&path).unwrap();
   let _ = std::fs::remove_file(path);
@@ -1053,7 +1053,7 @@ fn db8_validation_rejects_zero_sized_fixed_images() {
     }),
   ]);
 
-  let path = std::env::temp_dir().join(format!("debateprocessor-invalid-image-{}.db8", uuid::Uuid::new_v4()));
+  let path = std::env::temp_dir().join(format!("flowstate-invalid-image-{}.db8", uuid::Uuid::new_v4()));
   let error = write_db8(&path, &document).unwrap_err();
   assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
   let _ = std::fs::remove_file(path);
@@ -1204,7 +1204,7 @@ fn semantic_run_styles_are_mutually_exclusive() {
 
 #[test]
 fn db8_round_trip_preserves_condensed_semantic_styles() {
-  let path = std::env::temp_dir().join(format!("debateprocessor-semantic-{}.db8", uuid::Uuid::new_v4()));
+  let path = std::env::temp_dir().join(format!("flowstate-semantic-{}.db8", uuid::Uuid::new_v4()));
   let document = document_from_input(
     DocumentTheme::default(),
     vec![InputParagraph {
@@ -1231,7 +1231,7 @@ fn db8_round_trip_preserves_condensed_semantic_styles() {
 
 #[test]
 fn db8_save_can_replace_existing_file() {
-  let path = std::env::temp_dir().join(format!("debateprocessor-replace-{}.db8", uuid::Uuid::new_v4()));
+  let path = std::env::temp_dir().join(format!("flowstate-replace-{}.db8", uuid::Uuid::new_v4()));
   let first = document_from_input(
     DocumentTheme::default(),
     vec![InputParagraph {

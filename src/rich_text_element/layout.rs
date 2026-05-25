@@ -55,11 +55,11 @@ impl LayoutState {
     let Some(last) = self.paragraphs.last() else {
       return DocumentOffset::default();
     };
-  DocumentOffset {
-    paragraph: last.index,
-    byte: last.byte_range.end.min(last.len),
+    DocumentOffset {
+      paragraph: last.index,
+      byte: last.byte_range.end.min(last.len),
+    }
   }
-}
 }
 
 #[derive(Clone)]
@@ -172,8 +172,7 @@ impl LaidOutParagraph {
       return byte == self.byte_range.start;
     }
 
-    (byte >= self.byte_range.start && byte < self.byte_range.end)
-      || (byte == self.byte_range.end && self.byte_range.end == self.len)
+    (byte >= self.byte_range.start && byte < self.byte_range.end) || (byte == self.byte_range.end && self.byte_range.end == self.len)
   }
 }
 
@@ -1156,7 +1155,10 @@ fn layout_paragraph_chunk_at(
   if let Some(border) = border {
     push_chunk_box_rules(
       &mut borders,
-      Bounds::new(point(pageless_left, paragraph_top), size(pageless_width, (row_bottom - paragraph_top).max(px(1.0)))),
+      Bounds::new(
+        point(pageless_left, paragraph_top),
+        size(pageless_width, (row_bottom - paragraph_top).max(px(1.0))),
+      ),
       border.width,
       document.theme.default_text_color,
       is_first_chunk,

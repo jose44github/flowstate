@@ -1,7 +1,4 @@
-use std::{
-  fs,
-  path::Path,
-};
+use std::{fs, path::Path};
 
 pub const CLEANING_RULES: &[CleanAction] = &[
   CleanAction::ReadWithRdocx,

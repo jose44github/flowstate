@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
-  $ExecutablePath = Join-Path (Resolve-Path ".").Path "target\release\debateprocessor.exe"
+  $ExecutablePath = Join-Path (Resolve-Path ".").Path "target\release\flowstate.exe"
 }
 
 $ExecutablePath = (Resolve-Path -LiteralPath $ExecutablePath).Path

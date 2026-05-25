@@ -1,8 +1,8 @@
 // Submodules. Public items are re-exported below to preserve the old
 // `rich_text_element` API, while internal imports keep sibling modules able to
 // share implementation details without exposing them outside this module tree.
-mod collaboration;
 mod benchmarks;
+mod collaboration;
 mod demo;
 mod document;
 mod edit_ops;
@@ -16,8 +16,8 @@ mod selection;
 mod tools;
 mod word_boundary;
 
-pub use collaboration::{BlockId, CanonicalOperation, CollaborationEdit, ParagraphId, TableCellId};
 pub use benchmarks::{BenchmarkOptions, BenchmarkRunner};
+pub use collaboration::{BlockId, CanonicalOperation, CollaborationEdit, ParagraphId, TableCellId};
 pub use demo::{blank_document, demo_document, document_from_paragraphs};
 pub use document::{
   AssetId, AssetRecord, AssetStore, Block, BlockAlignment, Document, DocumentOffset, DocumentParagraphInput, DocumentPosition, DocumentRunInput,
