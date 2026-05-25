@@ -3996,12 +3996,14 @@ impl RichTextEditor {
     }
 
     let mut queue = VecDeque::new();
+    let mut queued = vec![false; paragraph_count];
     for range in [
       self.active_height_range(),
       self.predicted_visible_height_range(width),
     ] {
       for paragraph_ix in expand_paragraph_range(range, paragraph_count, 3) {
-        if !queue.contains(&paragraph_ix) {
+        if !queued[paragraph_ix] {
+          queued[paragraph_ix] = true;
           queue.push_back(paragraph_ix);
         }
       }
