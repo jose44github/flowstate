@@ -1,8 +1,11 @@
-use std::path::{Path, PathBuf};
+use std::{
+  collections::HashSet,
+  path::{Path, PathBuf},
+};
 
 use fff_search::{FFFMode, FilePicker, FilePickerOptions, FuzzySearchOptions, PaginationArgs, QueryParser};
 
-const DB8_FILTER: &str = "*.db8";
+const DOCUMENT_FILE_FILTERS: &[&str] = &["*.db8", "*.docx"];
 
 #[derive(Clone, Debug)]
 pub struct FileSearchHit {
@@ -35,7 +38,7 @@ impl Db8FileSearch {
   }
 
   pub fn search(&self, query: &str, limit: usize) -> Vec<FileSearchHit> {
-    search_db8_files(&self.picker, query, limit)
+    search_document_files(&self.picker, query, limit)
   }
 }
 
@@ -56,39 +59,52 @@ fn normalize_search_root(root: PathBuf) -> anyhow::Result<PathBuf> {
   Ok(root)
 }
 
-fn search_db8_files(picker: &FilePicker, typed_query: &str, limit: usize) -> Vec<FileSearchHit> {
+fn search_document_files(picker: &FilePicker, typed_query: &str, limit: usize) -> Vec<FileSearchHit> {
   let parser = QueryParser::default();
-  let query_text = if typed_query.trim().is_empty() {
-    DB8_FILTER.to_string()
-  } else {
-    format!("{} {}", typed_query.trim(), DB8_FILTER)
-  };
-  let query = parser.parse(&query_text);
-  let results = picker.fuzzy_search(
-    &query,
-    None,
-    FuzzySearchOptions {
-      max_threads: 0,
-      current_file: None,
-      project_path: Some(picker.base_path()),
-      pagination: PaginationArgs { offset: 0, limit },
-      ..Default::default()
-    },
-  );
+  let typed_query = typed_query.trim();
+  let mut seen = HashSet::new();
+  let mut hits = Vec::new();
 
-  results
-    .items
-    .into_iter()
-    .filter(|item| is_db8_path(&item.file_name(picker)))
-    .map(|item| FileSearchHit {
-      path: item.absolute_path(picker, picker.base_path()),
-    })
-    .collect()
+  for file_filter in DOCUMENT_FILE_FILTERS {
+    let query_text = if typed_query.is_empty() {
+      (*file_filter).to_string()
+    } else {
+      format!("{typed_query} {file_filter}")
+    };
+    let query = parser.parse(&query_text);
+    let results = picker.fuzzy_search(
+      &query,
+      None,
+      FuzzySearchOptions {
+        max_threads: 0,
+        current_file: None,
+        project_path: Some(picker.base_path()),
+        pagination: PaginationArgs { offset: 0, limit },
+        ..Default::default()
+      },
+    );
+
+    for item in results.items {
+      if !is_supported_document_path(&item.file_name(picker)) {
+        continue;
+      }
+
+      let path = item.absolute_path(picker, picker.base_path());
+      if seen.insert(path.clone()) {
+        hits.push(FileSearchHit { path });
+        if hits.len() == limit {
+          return hits;
+        }
+      }
+    }
+  }
+
+  hits
 }
 
-fn is_db8_path(path: &str) -> bool {
+fn is_supported_document_path(path: &str) -> bool {
   Path::new(path)
     .extension()
     .and_then(|extension| extension.to_str())
-    .is_some_and(|extension| extension.eq_ignore_ascii_case("db8"))
+    .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "db8" | "docx"))
 }
