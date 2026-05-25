@@ -197,6 +197,7 @@ where
         item_sizes,
         render_items: Box::new(render_range),
         sizing_behavior: ListSizingBehavior::default(),
+        fixed_cross_axis_size: None,
     }
 }
 
@@ -212,6 +213,7 @@ pub struct VirtualList {
         dyn for<'a> Fn(Range<usize>, &'a mut Window, &'a mut App) -> SmallVec<[AnyElement; 64]>,
     >,
     sizing_behavior: ListSizingBehavior,
+    fixed_cross_axis_size: Option<Pixels>,
 }
 
 impl Styled for VirtualList {
@@ -230,6 +232,16 @@ impl VirtualList {
     /// Set the sizing behavior for the list.
     pub fn with_sizing_behavior(mut self, behavior: ListSizingBehavior) -> Self {
         self.sizing_behavior = behavior;
+        self
+    }
+
+    /// Set the list's non-scrolling axis size when the caller already knows it.
+    ///
+    /// For vertical lists this is the row width; for horizontal lists this is
+    /// the row height. Supplying it avoids measuring the first item solely to
+    /// infer the cross-axis content size.
+    pub fn with_fixed_cross_axis_size(mut self, size: Pixels) -> Self {
+        self.fixed_cross_axis_size = Some(size);
         self
     }
 
@@ -398,7 +410,14 @@ impl Element for VirtualList {
         let rem_size = window.rem_size();
         let font_size = window.text_style().font_size.to_pixels(rem_size);
         let mut size_layout = ItemSizeLayout::default();
-        let longest_item_size = self.measure_item(None, window, cx);
+        let longest_item_size = if let Some(cross_axis_size) = self.fixed_cross_axis_size {
+            match self.axis {
+                Axis::Horizontal => size(px(0.), cross_axis_size),
+                Axis::Vertical => size(cross_axis_size, px(0.)),
+            }
+        } else {
+            self.measure_item(None, window, cx)
+        };
 
         let layout_id = self.base.interactivity().request_layout(
             global_id,

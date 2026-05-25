@@ -62,7 +62,32 @@ impl IntoElement for VirtualBlockElement {
 }
 
 #[derive(Clone, Default)]
-pub(super) struct WordElementLayout(Rc<RefCell<Option<Rc<LayoutState>>>>);
+pub(super) struct WordElementLayout(Rc<RefCell<WordElementLayoutState>>);
+
+#[derive(Default)]
+struct WordElementLayoutState {
+  layout: Option<Rc<LayoutState>>,
+  bounds: Option<Bounds<Pixels>>,
+}
+
+impl WordElementLayout {
+  fn set_layout(&self, layout: Rc<LayoutState>) {
+    self.0.borrow_mut().layout = Some(layout);
+  }
+
+  fn set_bounds(&self, bounds: Bounds<Pixels>) {
+    self.0.borrow_mut().bounds = Some(bounds);
+  }
+
+  fn layout(&self) -> Option<Rc<LayoutState>> {
+    self.0.borrow().layout.clone()
+  }
+
+  fn positioned(&self) -> Option<(Rc<LayoutState>, Bounds<Pixels>)> {
+    let state = self.0.borrow();
+    Some((state.layout.as_ref()?.clone(), state.bounds?))
+  }
+}
 
 impl Element for RichTextDocumentElement {
   type RequestLayoutState = ();
@@ -95,9 +120,7 @@ impl Element for RichTextDocumentElement {
     _window: &mut Window,
     _cx: &mut App,
   ) {
-    if let Some(layout) = self.layout.0.borrow_mut().as_mut() {
-      Rc::make_mut(layout).bounds = Some(bounds);
-    }
+    self.layout.set_bounds(bounds);
   }
 
   fn paint(
@@ -110,8 +133,8 @@ impl Element for RichTextDocumentElement {
     window: &mut Window,
     cx: &mut App,
   ) {
-    if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
-      paint_layout(layout.as_ref(), None, None, false, px(1.0), window, cx);
+    if let Some((layout, bounds)) = self.layout.positioned() {
+      paint_layout(layout.as_ref(), bounds, None, None, false, px(1.0), window, cx);
     }
   }
 }
@@ -154,7 +177,7 @@ impl Element for VirtualParagraphChunkElement {
         return gpui::size(width, px(1.0));
       };
       let size = layout.size;
-      layout_cell.0.borrow_mut().replace(Rc::new(layout));
+      layout_cell.set_layout(layout);
       size
     });
     (layout_id, ())
@@ -169,13 +192,9 @@ impl Element for VirtualParagraphChunkElement {
     _window: &mut Window,
     cx: &mut App,
   ) {
-    let layout = {
-      let mut layout_ref = self.layout.0.borrow_mut();
-      let Some(layout) = layout_ref.as_mut() else {
-        return;
-      };
-      Rc::make_mut(layout).bounds = Some(bounds);
-      layout.clone()
+    self.layout.set_bounds(bounds);
+    let Some(layout) = self.layout.layout() else {
+      return;
     };
     self.editor.update(cx, |editor, _| {
       editor.store_visible_paragraph_chunk_layout(self.generation, self.item_ix, self.chunk_ix, layout.as_ref(), bounds);
@@ -207,7 +226,7 @@ impl Element for VirtualParagraphChunkElement {
         editor.caret_paint_width(),
       )
     };
-    if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
+    if let Some((layout, bounds)) = self.layout.positioned() {
       let show_caret = caret_offset.is_some_and(|offset| {
         layout.paragraphs.first().is_some_and(|paragraph| {
           if !paragraph.contains_byte(offset.byte) {
@@ -226,6 +245,7 @@ impl Element for VirtualParagraphChunkElement {
       });
       paint_layout(
         layout.as_ref(),
+        bounds,
         Some(&selection),
         drag_selection.as_ref(),
         show_caret,
@@ -290,7 +310,7 @@ impl Element for VirtualBlockElement {
         width,
         snap_underline_rules_to_pixels,
       };
-      layout_cell.0.borrow_mut().replace(Rc::new(layout));
+      layout_cell.set_layout(Rc::new(layout));
       gpui::size(width, height)
     });
     (layout_id, ())
@@ -305,9 +325,7 @@ impl Element for VirtualBlockElement {
     _window: &mut Window,
     _cx: &mut App,
   ) {
-    if let Some(layout) = self.layout.0.borrow_mut().as_mut() {
-      Rc::make_mut(layout).bounds = Some(bounds);
-    }
+    self.layout.set_bounds(bounds);
   }
 
   fn paint(
@@ -328,10 +346,7 @@ impl Element for VirtualBlockElement {
         editor.block_is_inside_text_selection(self.block_ix),
       )
     };
-    let Some(layout) = self.layout.0.borrow().as_ref().cloned() else {
-      return;
-    };
-    let Some(bounds) = layout.bounds else {
+    let Some((layout, bounds)) = self.layout.positioned() else {
       return;
     };
     for block in &layout.blocks {
@@ -349,10 +364,10 @@ pub(super) fn request_word_layout(document: Document, layout_cell: WordElementLa
         _ => Some(px(900.0)),
       })
       .unwrap_or(px(900.0));
-    let previous_layout = layout_cell.0.borrow().clone();
+    let previous_layout = layout_cell.layout();
     let layout = build_layout(&document, width, previous_layout.as_deref(), window, cx);
     let size = layout.size;
-    layout_cell.0.borrow_mut().replace(Rc::new(layout));
+    layout_cell.set_layout(Rc::new(layout));
     size
   });
   (layout_id, ())

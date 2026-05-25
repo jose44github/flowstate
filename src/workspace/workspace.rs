@@ -46,7 +46,7 @@ pub struct Workspace {
   ribbon_resizable_state: Entity<ResizableState>,
   committed_ribbon_height: Pixels,
   outline_tree: Entity<TreeState>,
-  outline_cache: Option<(Uuid, u64, u64)>,
+  outline_cache: Option<OutlineCache>,
   collapsed_outline_items: HashSet<usize>,
   outline_revision: u64,
   outline_caret_paragraph: Option<usize>,
@@ -513,13 +513,29 @@ impl Workspace {
       return;
     };
     let generation = editor.read(cx).edit_generation();
-    if self.outline_cache == Some((active_id, generation, self.outline_revision)) {
+    if self
+      .outline_cache
+      .as_ref()
+      .is_some_and(|cache| cache.document_id == active_id && cache.generation == generation && cache.visible_revision == self.outline_revision)
+    {
       return;
     }
 
     let document = editor.read(cx).document().clone();
-    let items = outline_tree_items(&document, &self.collapsed_outline_items);
-    self.outline_cache = Some((active_id, generation, self.outline_revision));
+    let rebuild_structure = self
+      .outline_cache
+      .as_ref()
+      .is_none_or(|cache| cache.document_id != active_id || cache.generation != generation);
+    if rebuild_structure {
+      self.outline_cache = Some(OutlineCache::new(active_id, generation, outline_nodes(&document)));
+    }
+    let Some(cache) = self.outline_cache.as_mut() else {
+      return;
+    };
+    if cache.visible_revision != self.outline_revision {
+      cache.rebuild_visible(self.outline_revision, &self.collapsed_outline_items);
+    }
+    let items = cache.tree_items.clone();
     self
       .outline_tree
       .update(cx, |tree, cx| tree.set_items(items, cx));
@@ -631,7 +647,8 @@ impl Workspace {
     let editor = self.active_editor.as_ref()?;
     let editor = editor.read(cx);
     let caret_paragraph = editor.caret_paragraph();
-    active_visible_outline_paragraph(editor.document(), caret_paragraph, &self.collapsed_outline_items)
+    let cache = self.outline_cache.as_ref()?;
+    active_visible_outline_paragraph_from_visible(&cache.visible_paragraphs, caret_paragraph)
   }
 
   fn refresh_outline_caret(&mut self, cx: &mut Context<Self>) {
@@ -1658,34 +1675,45 @@ pub fn open_workspace_window(document_path: Option<PathBuf>, cx: &mut App) {
 }
 
 #[derive(Clone)]
-struct OutlineNode {
-  paragraph_ix: usize,
-  style: ParagraphStyle,
-  text: String,
-  children: Vec<OutlineNode>,
+struct OutlineCache {
+  document_id: Uuid,
+  generation: u64,
+  visible_revision: u64,
+  nodes: Rc<Vec<OutlineNode>>,
+  visible_paragraphs: Vec<usize>,
+  tree_items: Vec<TreeItem>,
 }
 
-fn outline_tree_items(document: &Document, collapsed_items: &HashSet<usize>) -> Vec<TreeItem> {
-  let mut roots = Vec::<OutlineNode>::new();
-  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
-    let Some(level) = outline_level(paragraph.style) else {
-      continue;
-    };
-    insert_outline_node(
-      &mut roots,
-      level,
-      OutlineNode {
-        paragraph_ix,
-        style: paragraph.style,
-        text: outline_paragraph_label(document, paragraph_ix),
-        children: Vec::new(),
-      },
-    );
+impl OutlineCache {
+  fn new(document_id: Uuid, generation: u64, nodes: Vec<OutlineNode>) -> Self {
+    Self {
+      document_id,
+      generation,
+      visible_revision: u64::MAX,
+      nodes: Rc::new(nodes),
+      visible_paragraphs: Vec::new(),
+      tree_items: Vec::new(),
+    }
   }
-  roots
-    .into_iter()
-    .map(|node| outline_node_to_tree_item(node, collapsed_items))
-    .collect()
+
+  fn rebuild_visible(&mut self, revision: u64, collapsed_items: &HashSet<usize>) {
+    self.visible_paragraphs.clear();
+    collect_visible_outline_paragraphs(&self.nodes, collapsed_items, &mut self.visible_paragraphs);
+    self.tree_items = self
+      .nodes
+      .iter()
+      .map(|node| outline_node_to_tree_item(node, collapsed_items))
+      .collect();
+    self.visible_revision = revision;
+  }
+}
+
+#[derive(Clone)]
+struct OutlineNode {
+  paragraph_ix: usize,
+  level: usize,
+  text: String,
+  children: Vec<OutlineNode>,
 }
 
 fn insert_outline_node(nodes: &mut Vec<OutlineNode>, level: usize, node: OutlineNode) {
@@ -1694,24 +1722,24 @@ fn insert_outline_node(nodes: &mut Vec<OutlineNode>, level: usize, node: Outline
     return;
   }
 
-  if let Some(parent) = nodes.iter_mut().rev().find(|candidate| {
-    outline_level(candidate.style)
-      .map(|parent_level| parent_level < level)
-      .unwrap_or(false)
-  }) {
+  if let Some(parent) = nodes
+    .iter_mut()
+    .rev()
+    .find(|candidate| candidate.level < level)
+  {
     insert_outline_node(&mut parent.children, level, node);
   } else {
     nodes.push(node);
   }
 }
 
-fn outline_node_to_tree_item(node: OutlineNode, collapsed_items: &HashSet<usize>) -> TreeItem {
+fn outline_node_to_tree_item(node: &OutlineNode, collapsed_items: &HashSet<usize>) -> TreeItem {
   let paragraph_ix = node.paragraph_ix;
-  TreeItem::new(outline_item_id(paragraph_ix), node.text)
+  TreeItem::new(outline_item_id(paragraph_ix), node.text.clone())
     .children(
       node
         .children
-        .into_iter()
+        .iter()
         .map(|child| outline_node_to_tree_item(child, collapsed_items)),
     )
     .expanded(!collapsed_items.contains(&paragraph_ix))
@@ -1729,7 +1757,7 @@ fn outline_nodes(document: &Document) -> Vec<OutlineNode> {
       level,
       OutlineNode {
         paragraph_ix,
-        style: paragraph.style,
+        level,
         text: outline_paragraph_label(document, paragraph_ix),
         children: Vec::new(),
       },
@@ -1738,30 +1766,29 @@ fn outline_nodes(document: &Document) -> Vec<OutlineNode> {
   roots
 }
 
-fn active_visible_outline_paragraph(document: &Document, caret_paragraph: usize, collapsed_items: &HashSet<usize>) -> Option<usize> {
-  let mut active = None;
-  for node in outline_nodes(document) {
-    active_visible_outline_paragraph_in_node(&node, caret_paragraph, collapsed_items, &mut active);
+fn collect_visible_outline_paragraphs(nodes: &[OutlineNode], collapsed_items: &HashSet<usize>, output: &mut Vec<usize>) {
+  for node in nodes {
+    output.push(node.paragraph_ix);
+    if !collapsed_items.contains(&node.paragraph_ix) {
+      collect_visible_outline_paragraphs(&node.children, collapsed_items, output);
+    }
   }
-  active
 }
 
-fn active_visible_outline_paragraph_in_node(
-  node: &OutlineNode,
-  caret_paragraph: usize,
-  collapsed_items: &HashSet<usize>,
-  active: &mut Option<usize>,
-) {
-  if node.paragraph_ix > caret_paragraph {
-    return;
+fn active_visible_outline_paragraph_from_visible(visible_paragraphs: &[usize], caret_paragraph: usize) -> Option<usize> {
+  let mut low = 0usize;
+  let mut high = visible_paragraphs.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if visible_paragraphs[mid] <= caret_paragraph {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
   }
-  *active = Some(node.paragraph_ix);
-  if collapsed_items.contains(&node.paragraph_ix) {
-    return;
-  }
-  for child in &node.children {
-    active_visible_outline_paragraph_in_node(child, caret_paragraph, collapsed_items, active);
-  }
+  low
+    .checked_sub(1)
+    .and_then(|ix| visible_paragraphs.get(ix).copied())
 }
 
 fn outline_level(style: ParagraphStyle) -> Option<usize> {
@@ -1784,22 +1811,43 @@ fn outline_paragraph_ix(id: &str) -> Option<usize> {
 
 fn outline_paragraph_label(document: &Document, paragraph_ix: usize) -> String {
   let paragraph = &document.paragraphs[paragraph_ix];
-  let mut text = String::new();
-  for chunk in document
+  const MAX_BYTES: usize = 80;
+  const TRUNCATED_BYTES: usize = MAX_BYTES - 3;
+  let mut label = String::new();
+  let mut pending_space = false;
+  let mut truncated = false;
+
+  'chunks: for chunk in document
     .text
     .byte_slice(paragraph.byte_range.clone())
     .chunks()
   {
-    text.push_str(chunk);
+    for ch in chunk.chars() {
+      if ch.is_whitespace() {
+        pending_space = !label.is_empty();
+        continue;
+      }
+
+      let space_len = usize::from(pending_space && !label.is_empty());
+      if label.len() + space_len + ch.len_utf8() > TRUNCATED_BYTES {
+        truncated = true;
+        break 'chunks;
+      }
+      if pending_space && !label.is_empty() {
+        label.push(' ');
+      }
+      label.push(ch);
+      pending_space = false;
+    }
   }
-  let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-  let text = text.trim();
-  if text.is_empty() {
+
+  if label.is_empty() {
     "(empty)".to_string()
-  } else if text.len() > 80 {
-    format!("{}...", &text[..safe_prefix_boundary(text, 77)])
+  } else if truncated {
+    label.push_str("...");
+    label
   } else {
-    text.to_string()
+    label
   }
 }
 
@@ -2607,20 +2655,6 @@ fn apply_app_theme(theme_name: &str, window: Option<&mut Window>, cx: &mut App) 
   }
 }
 
-fn safe_prefix_boundary(text: &str, max: usize) -> usize {
-  if max >= text.len() {
-    return text.len();
-  }
-  let mut boundary = 0;
-  for (ix, _) in text.char_indices() {
-    if ix > max {
-      break;
-    }
-    boundary = ix;
-  }
-  boundary
-}
-
 fn truncate_tab_title(title: &str, max_chars: usize) -> String {
   let mut chars = title.chars();
   let mut short = String::new();
@@ -2644,4 +2678,53 @@ fn untitled_index(title: &str) -> Option<usize> {
     return None;
   }
   number.parse::<usize>().ok().filter(|index| *index > 0)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::rich_text_element::{DocumentParagraphInput, DocumentRunInput, RunStyles, document_from_paragraphs};
+
+  fn paragraph(style: ParagraphStyle, text: &str) -> DocumentParagraphInput {
+    DocumentParagraphInput {
+      style,
+      runs: vec![DocumentRunInput {
+        text: text.to_string(),
+        styles: RunStyles::default(),
+      }],
+    }
+  }
+
+  #[test]
+  fn outline_label_normalizes_whitespace_without_full_join() {
+    let document = document_from_paragraphs(
+      DocumentTheme::default(),
+      vec![paragraph(ParagraphStyle::Pocket, "  alpha\t beta\n\n gamma  ")],
+    );
+
+    assert_eq!(outline_paragraph_label(&document, 0), "alpha beta gamma");
+  }
+
+  #[test]
+  fn active_visible_outline_uses_latest_visible_heading_before_caret() {
+    let document = document_from_paragraphs(
+      DocumentTheme::default(),
+      vec![
+        paragraph(ParagraphStyle::Pocket, "Root"),
+        paragraph(ParagraphStyle::Hat, "Child"),
+        paragraph(ParagraphStyle::Normal, "Body"),
+        paragraph(ParagraphStyle::Block, "Grandchild"),
+        paragraph(ParagraphStyle::Pocket, "Next"),
+      ],
+    );
+    let nodes = outline_nodes(&document);
+    let mut collapsed = HashSet::new();
+    collapsed.insert(0);
+    let mut visible = Vec::new();
+    collect_visible_outline_paragraphs(&nodes, &collapsed, &mut visible);
+
+    assert_eq!(visible, vec![0, 4]);
+    assert_eq!(active_visible_outline_paragraph_from_visible(&visible, 3), Some(0));
+    assert_eq!(active_visible_outline_paragraph_from_visible(&visible, 4), Some(4));
+  }
 }

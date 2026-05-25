@@ -2044,6 +2044,7 @@ dependencies = [
  "rdocx-opc",
  "rdocx-oxml",
  "resvg",
+ "rustc-hash 2.1.2",
  "serde",
  "serde_json",
  "tempfile",

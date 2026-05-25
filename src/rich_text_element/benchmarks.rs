@@ -1054,17 +1054,16 @@ fn benchmark_layout_paths(
       std::hint::black_box(build_structural_block_layout(document, width_px, None, window, cx));
     });
 
-    let mut paint_layout_state = layout.clone();
-    paint_layout_state.bounds = Some(Bounds::new(point(px(0.0), px(0.0)), size(width_px, layout.size.height)));
+    let paint_bounds = Bounds::new(point(px(0.0), px(0.0)), size(width_px, layout.size.height));
     let paint_plain = include_paint.then(|| {
       repeated(iterations, || {
-        paint_layout(&paint_layout_state, None, None, false, px(1.0), window, cx);
+        paint_layout(&layout, paint_bounds, None, None, false, px(1.0), window, cx);
       })
     });
     let selection = top_selection(document);
     let paint_selected = include_paint.then(|| {
       repeated(iterations, || {
-        paint_layout(&paint_layout_state, selection.as_ref(), None, false, px(1.0), window, cx);
+        paint_layout(&layout, paint_bounds, selection.as_ref(), None, false, px(1.0), window, cx);
       })
     });
 

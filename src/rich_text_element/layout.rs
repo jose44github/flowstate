@@ -1,5 +1,5 @@
 use std::{
-  collections::{HashMap, hash_map::DefaultHasher},
+  borrow::Cow,
   hash::{Hash, Hasher},
   ops::Range,
 };
@@ -7,6 +7,7 @@ use std::{
 use gpui::{
   App, Bounds, FontStyle, FontWeight, Hsla, Pixels, Point, ShapedLine, SharedString, Size, TextRun as GpuiTextRun, Window, font, point, px, size,
 };
+use rustc_hash::{FxHashMap, FxHasher};
 
 use super::*;
 
@@ -42,6 +43,14 @@ impl LayoutState {
       Some(bounds) => position - bounds.origin,
       None => position,
     };
+    self.hit_test_unpositioned(position)
+  }
+
+  pub(super) fn hit_test_at_bounds(&self, position: Point<Pixels>, bounds: Bounds<Pixels>) -> DocumentOffset {
+    self.hit_test_unpositioned(position - bounds.origin)
+  }
+
+  fn hit_test_unpositioned(&self, position: Point<Pixels>) -> DocumentOffset {
     let paragraph_ix = first_paragraph_with_bottom_at_or_after(&self.paragraphs, position.y);
     if let Some(paragraph) = self.paragraphs.get(paragraph_ix) {
       if position.y < paragraph.top {
@@ -132,7 +141,7 @@ pub(super) struct ParagraphHeightCacheEntry {
 }
 
 pub(super) fn paragraph_cache_key(_document: &Document, paragraph: &Paragraph) -> ParagraphCacheKey {
-  let mut hasher = DefaultHasher::new();
+  let mut hasher = FxHasher::default();
   paragraph.style.hash(&mut hasher);
   paragraph.version.hash(&mut hasher);
   ParagraphCacheKey {
@@ -1017,7 +1026,7 @@ pub(super) fn layout_paragraph_at(
   )
 }
 
-pub(super) const DEFAULT_PARAGRAPH_CHUNK_TARGET_LINES: usize = 96;
+pub(super) const DEFAULT_PARAGRAPH_CHUNK_TARGET_LINES: usize = 48;
 
 pub(super) struct ParagraphChunkBuildResult {
   pub(super) layout: LayoutState,
@@ -1033,6 +1042,7 @@ pub(super) fn build_paragraph_chunk_layout_with_visibility(
   start_byte: usize,
   target_lines: usize,
   invisibility_mode: bool,
+  paragraph_text_override: Option<&str>,
   window: &mut Window,
   cx: &mut App,
 ) -> Option<ParagraphChunkBuildResult> {
@@ -1060,6 +1070,7 @@ pub(super) fn build_paragraph_chunk_layout_with_visibility(
     target_lines,
     is_first_document_paragraph,
     is_last_document_paragraph,
+    paragraph_text_override.filter(|_| projected_document.is_none()),
     window,
     cx,
   )?;
@@ -1080,11 +1091,15 @@ fn layout_paragraph_chunk_at(
   target_lines: usize,
   is_first_document_paragraph: bool,
   is_last_document_paragraph: bool,
+  paragraph_text_override: Option<&str>,
   window: &mut Window,
   cx: &mut App,
 ) -> Option<ParagraphChunkBuildResult> {
   let paragraph = document.paragraphs.get(layout_paragraph_ix)?;
-  let paragraph_text = paragraph_text(document, layout_paragraph_ix);
+  let paragraph_text = paragraph_text_override
+    .map(Cow::Borrowed)
+    .unwrap_or_else(|| Cow::Owned(paragraph_text(document, layout_paragraph_ix)));
+  let paragraph_text = paragraph_text.as_ref();
   let len = paragraph_text.len();
   let start_byte = clamp_to_char_boundary(&paragraph_text, start_byte.min(len));
   let p_format = paragraph_format(document, paragraph.style);
@@ -1577,32 +1592,38 @@ fn wrap_text_segment_limited(
     .into_iter()
     .map(|byte| segment.start + byte)
     .collect::<Vec<_>>();
-  let mut break_cursor = 0;
 
   while start < segment.end {
-    while break_cursor < break_ends.len() && break_ends[break_cursor] <= start {
-      break_cursor += 1;
-    }
-    let mut last_break = None;
-    let mut wrapped = false;
-    let mut scan_ix = break_cursor;
-
-    while scan_ix < break_ends.len() {
-      let break_at = break_ends[scan_ix];
-      let candidate_width = measure_line_width(
+    let break_cursor = first_break_after(&break_ends, start);
+    let break_limit = first_break_after(&break_ends, segment.end);
+    let last_break = if break_cursor < break_limit {
+      if let Some(over_ix) = first_break_over_width(
         document,
         paragraph,
         &p_format,
         text,
-        start..break_at,
-        break_at - start,
+        start,
+        &break_ends,
+        break_cursor..break_limit,
+        max_width,
         shape_cache,
         window,
-      );
-      if candidate_width > max_width {
-        let line_end = last_break
-          .filter(|break_at| *break_at > start)
-          .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, break_at, max_width, shape_cache, window));
+      ) {
+        let line_end = if over_ix > break_cursor {
+          break_ends[over_ix - 1]
+        } else {
+          first_overflow_line_end(
+            document,
+            paragraph,
+            &p_format,
+            text,
+            start,
+            break_ends[over_ix],
+            max_width,
+            shape_cache,
+            window,
+          )
+        };
         lines.push(shape_line(
           document,
           paragraph,
@@ -1614,19 +1635,51 @@ fn wrap_text_segment_limited(
           cx,
         ));
         start = skip_leading_whitespace(text, line_end);
-        wrapped = true;
         if lines.len() >= max_lines {
           return (lines, start.min(segment.end), start >= segment.end);
         }
-        break;
+        continue;
       }
-      last_break = Some(break_at);
-      scan_ix += 1;
+      break_ends.get(break_limit - 1).copied()
+    } else {
+      None
+    };
+
+    if break_cursor == break_limit {
+      let line_end = first_overflow_line_end(document, paragraph, &p_format, text, start, segment.end, max_width, shape_cache, window);
+      if line_end < segment.end {
+        lines.push(shape_line(
+          document,
+          paragraph,
+          p_format.clone(),
+          text[start..line_end].trim_end(),
+          start..line_end,
+          shape_cache,
+          window,
+          cx,
+        ));
+        start = skip_leading_whitespace(text, line_end);
+        if lines.len() >= max_lines {
+          return (lines, start.min(segment.end), start >= segment.end);
+        }
+        continue;
+      }
+      lines.push(shape_line(
+        document,
+        paragraph,
+        p_format,
+        &text[start..segment.end],
+        start..segment.end,
+        shape_cache,
+        window,
+        cx,
+      ));
+      return (lines, segment.end, true);
     }
 
-    if wrapped {
+    let Some(last_break) = last_break else {
       continue;
-    }
+    };
 
     let remaining_width = measure_line_width(
       document,
@@ -1652,9 +1705,7 @@ fn wrap_text_segment_limited(
       return (lines, segment.end, true);
     }
 
-    let line_end = last_break
-      .filter(|break_at| *break_at > start)
-      .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, segment.end, max_width, shape_cache, window));
+    let line_end = last_break;
     lines.push(shape_line(
       document,
       paragraph,
@@ -1724,32 +1775,38 @@ fn wrap_text_segment(
     .into_iter()
     .map(|byte| segment.start + byte)
     .collect::<Vec<_>>();
-  let mut break_cursor = 0;
 
   while start < segment.end {
-    while break_cursor < break_ends.len() && break_ends[break_cursor] <= start {
-      break_cursor += 1;
-    }
-    let mut last_break = None;
-    let mut wrapped = false;
-    let mut scan_ix = break_cursor;
-
-    while scan_ix < break_ends.len() {
-      let break_at = break_ends[scan_ix];
-      let candidate_width = measure_line_width(
+    let break_cursor = first_break_after(&break_ends, start);
+    let break_limit = first_break_after(&break_ends, segment.end);
+    let last_break = if break_cursor < break_limit {
+      if let Some(over_ix) = first_break_over_width(
         document,
         paragraph,
         &p_format,
         text,
-        start..break_at,
-        break_at - start,
+        start,
+        &break_ends,
+        break_cursor..break_limit,
+        max_width,
         shape_cache,
         window,
-      );
-      if candidate_width > max_width {
-        let line_end = last_break
-          .filter(|break_at| *break_at > start)
-          .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, break_at, max_width, shape_cache, window));
+      ) {
+        let line_end = if over_ix > break_cursor {
+          break_ends[over_ix - 1]
+        } else {
+          first_overflow_line_end(
+            document,
+            paragraph,
+            &p_format,
+            text,
+            start,
+            break_ends[over_ix],
+            max_width,
+            shape_cache,
+            window,
+          )
+        };
         lines.push(shape_line(
           document,
           paragraph,
@@ -1761,16 +1818,45 @@ fn wrap_text_segment(
           cx,
         ));
         start = skip_leading_whitespace(text, line_end);
-        wrapped = true;
-        break;
+        continue;
       }
-      last_break = Some(break_at);
-      scan_ix += 1;
+      break_ends.get(break_limit - 1).copied()
+    } else {
+      None
+    };
+
+    if break_cursor == break_limit {
+      let line_end = first_overflow_line_end(document, paragraph, &p_format, text, start, segment.end, max_width, shape_cache, window);
+      if line_end < segment.end {
+        lines.push(shape_line(
+          document,
+          paragraph,
+          p_format.clone(),
+          text[start..line_end].trim_end(),
+          start..line_end,
+          shape_cache,
+          window,
+          cx,
+        ));
+        start = skip_leading_whitespace(text, line_end);
+        continue;
+      }
+      lines.push(shape_line(
+        document,
+        paragraph,
+        p_format,
+        &text[start..segment.end],
+        start..segment.end,
+        shape_cache,
+        window,
+        cx,
+      ));
+      break;
     }
 
-    if wrapped {
+    let Some(last_break) = last_break else {
       continue;
-    }
+    };
 
     let remaining_width = measure_line_width(
       document,
@@ -1796,9 +1882,7 @@ fn wrap_text_segment(
       break;
     }
 
-    let line_end = last_break
-      .filter(|break_at| *break_at > start)
-      .unwrap_or_else(|| first_overflow_line_end(document, paragraph, &p_format, text, start, segment.end, max_width, shape_cache, window));
+    let line_end = last_break;
     lines.push(shape_line(
       document,
       paragraph,
@@ -1813,6 +1897,57 @@ fn wrap_text_segment(
   }
 
   lines
+}
+
+fn first_break_after(break_ends: &[usize], byte: usize) -> usize {
+  let mut low = 0usize;
+  let mut high = break_ends.len();
+  while low < high {
+    let mid = low + (high - low) / 2;
+    if break_ends[mid] <= byte {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  low
+}
+
+#[allow(clippy::too_many_arguments)]
+fn first_break_over_width(
+  document: &Document,
+  paragraph: &Paragraph,
+  p_format: &EffectiveParagraphFormat,
+  text: &str,
+  start: usize,
+  break_ends: &[usize],
+  range: Range<usize>,
+  max_width: Pixels,
+  shape_cache: &mut FragmentShapeCache,
+  window: &mut Window,
+) -> Option<usize> {
+  let mut low = range.start;
+  let mut high = range.end;
+  while low < high {
+    let mid = low + (high - low) / 2;
+    let break_at = break_ends[mid];
+    let candidate_width = measure_line_width(
+      document,
+      paragraph,
+      p_format,
+      text,
+      start..break_at,
+      break_at - start,
+      shape_cache,
+      window,
+    );
+    if candidate_width > max_width {
+      high = mid;
+    } else {
+      low = mid + 1;
+    }
+  }
+  (low < range.end).then_some(low)
 }
 
 pub(super) fn wrap_break_ends(text: &str) -> Vec<usize> {
@@ -2014,7 +2149,7 @@ pub(super) fn shape_line(
 
 #[derive(Default)]
 pub(super) struct FragmentShapeCache {
-  shapes: HashMap<FragmentShapeCacheKey, ShapedLine>,
+  shapes: FxHashMap<FragmentShapeCacheKey, ShapedLine>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

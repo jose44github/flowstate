@@ -6,6 +6,7 @@ use super::*;
 
 pub(super) fn paint_layout(
   layout: &LayoutState,
+  bounds: Bounds<Pixels>,
   selection: Option<&EditorSelection>,
   drag_selection: Option<&EditorSelection>,
   show_caret: bool,
@@ -14,9 +15,6 @@ pub(super) fn paint_layout(
   cx: &mut App,
 ) {
   let timing = Instant::now();
-  let Some(bounds) = layout.bounds else {
-    return;
-  };
   let content_mask = window.content_mask().bounds;
   let visible_range = visible_paragraph_range(layout, bounds.origin, content_mask);
   let visible_count = visible_range.end.saturating_sub(visible_range.start);
