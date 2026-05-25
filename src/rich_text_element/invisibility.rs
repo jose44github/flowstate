@@ -15,6 +15,8 @@ pub(super) struct ItemSizesCache {
   pub(super) items: Rc<Vec<VirtualItem>>,
   pub(super) block_item_ranges: Vec<Range<usize>>,
   pub(super) block_heights: Vec<Pixels>,
+  pub(super) paragraph_chunk_item_ranges: Vec<Range<usize>>,
+  pub(super) paragraph_remainder_items: Vec<Option<usize>>,
   pub(super) sizes: Rc<Vec<Size<Pixels>>>,
 }
 
@@ -29,44 +31,28 @@ pub(super) enum VirtualItem {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct VisibilityIndex {
   visible_blocks: Vec<bool>,
-  block_to_paragraph: Vec<Option<usize>>,
 }
 
 impl VisibilityIndex {
   pub(super) fn build(document: &Document, invisibility_mode: bool) -> Self {
     let mut visible_blocks = Vec::with_capacity(document.blocks.len());
-    let mut block_to_paragraph = Vec::with_capacity(document.blocks.len());
-    let mut paragraph_ix = 0usize;
 
     for block in document.blocks.iter() {
       match block {
         Block::Paragraph(paragraph) => {
-          block_to_paragraph.push(Some(paragraph_ix));
-          paragraph_ix += 1;
           visible_blocks.push(!invisibility_mode || paragraph_is_visible(paragraph));
         },
         Block::Image(_) | Block::Equation(_) | Block::Table(_) => {
-          block_to_paragraph.push(None);
           visible_blocks.push(!invisibility_mode);
         },
       }
     }
 
-    Self {
-      visible_blocks,
-      block_to_paragraph,
-    }
+    Self { visible_blocks }
   }
 
   pub(super) fn is_visible(&self, block_ix: usize) -> bool {
     self.visible_blocks.get(block_ix).copied().unwrap_or(true)
-  }
-
-  pub(super) fn paragraph_ix_for_block(&self, block_ix: usize) -> Option<usize> {
-    self
-      .block_to_paragraph
-      .get(block_ix)
-      .and_then(|paragraph| *paragraph)
   }
 }
 

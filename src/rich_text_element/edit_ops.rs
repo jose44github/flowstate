@@ -401,13 +401,34 @@ pub(super) fn rebuild_document_offset_index(document: &mut Document) {
 }
 
 pub(super) fn update_paragraph_offsets_after_len_change(document: &mut Document, paragraph_ix: usize) {
+  if paragraph_ix >= document.paragraphs.len() {
+    return;
+  }
+  let old_width = document
+    .offset_index
+    .widths
+    .get(paragraph_ix)
+    .copied()
+    .unwrap_or(0);
+  let start = document.offset_index.paragraph_start(paragraph_ix);
   document
     .offset_index
     .update_paragraph_width(paragraph_ix, &document.paragraphs);
-  // Editing one paragraph shifts every following paragraph's global byte
-  // range. Keep the cached ranges in sync for consumers like the outline.
-  for ix in paragraph_ix..document.paragraphs.len() {
-    refresh_paragraph_range(document, ix);
+  let new_width = document
+    .offset_index
+    .widths
+    .get(paragraph_ix)
+    .copied()
+    .unwrap_or(old_width);
+  let delta = new_width as isize - old_width as isize;
+  {
+    let paragraphs = paragraphs_mut(document);
+    paragraphs[paragraph_ix].byte_range = start..start + paragraph_runs_len(&paragraphs[paragraph_ix]);
+    if delta != 0 {
+      for paragraph in paragraphs.iter_mut().skip(paragraph_ix + 1) {
+        paragraph.byte_range = paragraph.byte_range.start.saturating_add_signed(delta)..paragraph.byte_range.end.saturating_add_signed(delta);
+      }
+    }
   }
   update_paragraph_block(document, paragraph_ix);
 }

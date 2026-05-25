@@ -51,6 +51,15 @@ pub(super) fn paragraph_blocks_from_paragraphs(paragraphs: &[Paragraph]) -> Vec<
 }
 
 pub(super) fn block_ix_for_paragraph(document: &Document, target_paragraph_ix: usize) -> Option<usize> {
+  if document.blocks.len() == document.paragraphs.len()
+    && document
+      .blocks
+      .get(target_paragraph_ix)
+      .is_some_and(|block| matches!(block, Block::Paragraph(_)))
+  {
+    return Some(target_paragraph_ix);
+  }
+
   let mut paragraph_ix = 0;
   for (block_ix, block) in document.blocks.iter().enumerate() {
     if matches!(block, Block::Paragraph(_)) {
@@ -77,6 +86,18 @@ pub(super) fn document_position_for_offset(document: &Document, offset: Document
 pub(super) fn document_offset_for_position(document: &Document, position: &DocumentPosition) -> Option<DocumentOffset> {
   match position {
     DocumentPosition::Text { block_ix, byte } => {
+      if document.blocks.len() == document.paragraphs.len()
+        && let Some(Block::Paragraph(paragraph)) = document.blocks.get(*block_ix)
+      {
+        if *byte <= paragraph_text_len(paragraph) {
+          return Some(DocumentOffset {
+            paragraph: *block_ix,
+            byte: *byte,
+          });
+        }
+        return None;
+      }
+
       let mut paragraph_ix = 0usize;
       for (ix, block) in document.blocks.iter().enumerate() {
         match block {

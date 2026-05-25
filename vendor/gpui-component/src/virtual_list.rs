@@ -245,13 +245,14 @@ impl VirtualList {
     fn scroll_to_deferred_item(
         &self,
         scroll_offset: Point<Pixels>,
-        items_bounds: &[Bounds<Pixels>],
+        item_sizes: &[Pixels],
+        item_origins: &[Pixels],
         content_bounds: &Bounds<Pixels>,
         scroll_to_item: DeferredScrollToItem,
     ) -> Point<Pixels> {
-        let Some(bounds) = items_bounds
-            .get(scroll_to_item.item_index + scroll_to_item.offset)
-            .cloned()
+        let item_ix = scroll_to_item.item_index + scroll_to_item.offset;
+        let Some(bounds) =
+            item_bounds(self.axis, item_ix, item_sizes, item_origins, content_bounds)
         else {
             return scroll_offset;
         };
@@ -330,6 +331,41 @@ pub struct ItemSizeLayout {
     sizes: Vec<Pixels>,
     origins: Vec<Pixels>,
     last_layout_bounds: Bounds<Pixels>,
+}
+
+fn item_bounds(
+    axis: Axis,
+    item_ix: usize,
+    item_sizes: &[Pixels],
+    item_origins: &[Pixels],
+    content_bounds: &Bounds<Pixels>,
+) -> Option<Bounds<Pixels>> {
+    let item_size = *item_sizes.get(item_ix)?;
+    let origin = *item_origins.get(item_ix)?;
+    Some(Bounds {
+        origin: match axis {
+            Axis::Horizontal => point(content_bounds.left() + origin, px(0.)),
+            Axis::Vertical => point(px(0.), content_bounds.top() + origin),
+        },
+        size: match axis {
+            Axis::Horizontal => size(item_size, content_bounds.size.height),
+            Axis::Vertical => size(content_bounds.size.width, item_size),
+        },
+    })
+}
+
+fn first_item_ending_after(item_sizes: &[Pixels], item_origins: &[Pixels], target: Pixels) -> usize {
+    let mut low = 0usize;
+    let mut high = item_sizes.len().min(item_origins.len());
+    while low < high {
+        let mid = low + (high - low) / 2;
+        if item_origins[mid] + item_sizes[mid] > target {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    low
 }
 
 impl IntoElement for VirtualList {
@@ -551,26 +587,6 @@ impl Element for VirtualList {
                 ),
         );
 
-        // Update scroll_handle with the item bounds
-        let items_bounds = item_origins
-            .iter()
-            .enumerate()
-            .map(|(i, &origin)| {
-                let item_size = item_sizes[i];
-
-                Bounds {
-                    origin: match self.axis {
-                        Axis::Horizontal => point(content_bounds.left() + origin, px(0.)),
-                        Axis::Vertical => point(px(0.), content_bounds.top() + origin),
-                    },
-                    size: match self.axis {
-                        Axis::Horizontal => size(item_size, content_bounds.size.height),
-                        Axis::Vertical => size(content_bounds.size.width, item_size),
-                    },
-                }
-            })
-            .collect::<Vec<_>>();
-
         let axis = self.axis;
 
         let mut scroll_state = self.scroll_handle.state.borrow_mut();
@@ -581,7 +597,8 @@ impl Element for VirtualList {
         if let Some(scroll_to_item) = scroll_state.deferred_scroll_to_item.take() {
             scroll_offset = self.scroll_to_deferred_item(
                 scroll_offset,
-                &items_bounds,
+                item_sizes,
+                item_origins,
                 &content_bounds,
                 scroll_to_item,
             );
@@ -626,59 +643,39 @@ impl Element for VirtualList {
 
                     let (first_visible_element_ix, last_visible_element_ix) = match self.axis {
                         Axis::Horizontal => {
-                            let mut cumulative_size = px(0.);
-                            let mut first_visible_element_ix = 0;
-                            for (i, &size) in item_sizes.iter().enumerate() {
-                                cumulative_size += size;
-                                if cumulative_size > -(scroll_offset.x + paddings.left) {
-                                    first_visible_element_ix = i;
-                                    break;
-                                }
-                            }
-
-                            cumulative_size = px(0.);
-                            let mut last_visible_element_ix = 0;
-                            for (i, &size) in item_sizes.iter().enumerate() {
-                                cumulative_size += size;
-                                if cumulative_size > (-scroll_offset.x + content_bounds.size.width)
-                                {
-                                    last_visible_element_ix = i + 1;
-                                    break;
-                                }
-                            }
-                            if last_visible_element_ix == 0 {
-                                last_visible_element_ix = self.items_count;
+                            let first_visible_element_ix = first_item_ending_after(
+                                item_sizes,
+                                item_origins,
+                                -(scroll_offset.x + paddings.left),
+                            );
+                            let end_ix = first_item_ending_after(
+                                item_sizes,
+                                item_origins,
+                                -scroll_offset.x + content_bounds.size.width,
+                            );
+                            let last_visible_element_ix = if end_ix >= self.items_count {
+                                self.items_count
                             } else {
-                                last_visible_element_ix += 1;
-                            }
+                                end_ix + 2
+                            };
                             (first_visible_element_ix, last_visible_element_ix)
                         }
                         Axis::Vertical => {
-                            let mut cumulative_size = px(0.);
-                            let mut first_visible_element_ix = 0;
-                            for (i, &size) in item_sizes.iter().enumerate() {
-                                cumulative_size += size;
-                                if cumulative_size > -(scroll_offset.y + paddings.top) {
-                                    first_visible_element_ix = i;
-                                    break;
-                                }
-                            }
-
-                            cumulative_size = px(0.);
-                            let mut last_visible_element_ix = 0;
-                            for (i, &size) in item_sizes.iter().enumerate() {
-                                cumulative_size += size;
-                                if cumulative_size > (-scroll_offset.y + content_bounds.size.height)
-                                {
-                                    last_visible_element_ix = i + 1;
-                                    break;
-                                }
-                            }
-                            if last_visible_element_ix == 0 {
-                                last_visible_element_ix = self.items_count;
+                            let first_visible_element_ix = first_item_ending_after(
+                                item_sizes,
+                                item_origins,
+                                -(scroll_offset.y + paddings.top),
+                            );
+                            let end_ix = first_item_ending_after(
+                                item_sizes,
+                                item_origins,
+                                -scroll_offset.y + content_bounds.size.height,
+                            );
+                            let last_visible_element_ix = if end_ix >= self.items_count {
+                                self.items_count
                             } else {
-                                last_visible_element_ix += 1;
-                            }
+                                end_ix + 2
+                            };
                             (first_visible_element_ix, last_visible_element_ix)
                         }
                     };
