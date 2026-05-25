@@ -178,7 +178,7 @@ impl Element for VirtualParagraphChunkElement {
       layout.clone()
     };
     self.editor.update(cx, |editor, _| {
-      editor.store_visible_paragraph_chunk_layout(self.generation, self.item_ix, layout.as_ref(), bounds);
+      editor.store_visible_paragraph_chunk_layout(self.generation, self.item_ix, self.chunk_ix, layout.as_ref(), bounds);
     });
   }
 

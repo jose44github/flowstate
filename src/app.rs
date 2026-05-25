@@ -3,13 +3,22 @@ use std::{
   path::{Path, PathBuf},
 };
 
-use gpui::{App, Application, AssetSource, Context, Entity, IntoElement, Render, Result, SharedString, Window, div, prelude::*, rgb};
-use gpui_component::{Theme, ThemeRegistry};
+use gpui::{
+  App, Application, AssetSource, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, InteractiveElement, KeyBinding,
+  ParentElement, PromptButton, PromptHandle, PromptLevel, PromptResponse, Render, RenderablePromptHandle, Result, SharedString, Styled,
+  Window, actions, div, prelude::*, px, relative, rgb,
+};
+use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, Theme, ThemeRegistry, h_flex, v_flex};
 
 use crate::app_settings::load_app_settings;
 use crate::commands::register_default_keybindings;
 use crate::rich_text_element::{Document, RichTextEditor, demo_document, write_db8};
 use crate::workspace::open_workspace_window;
+
+const PROMPT_CONTEXT: &str = "FlowPrompt";
+
+actions!(flow_prompt, [FlowPromptAccept, FlowPromptCancel]);
 
 /// A reusable GPUI render component for the debate rich text editor.
 ///
@@ -57,6 +66,167 @@ pub fn register_rich_text_editor_keybindings(cx: &mut App) {
   register_default_keybindings(cx);
 }
 
+fn install_prompt_renderer(cx: &mut App) {
+  cx.bind_keys([
+    KeyBinding::new("enter", FlowPromptAccept, Some(PROMPT_CONTEXT)),
+    KeyBinding::new("escape", FlowPromptCancel, Some(PROMPT_CONTEXT)),
+  ]);
+  cx.set_prompt_builder(flow_prompt_renderer);
+}
+
+fn flow_prompt_renderer(
+  level: PromptLevel,
+  message: &str,
+  detail: Option<&str>,
+  actions: &[PromptButton],
+  handle: PromptHandle,
+  window: &mut Window,
+  cx: &mut App,
+) -> RenderablePromptHandle {
+  let renderer = cx.new(|cx| FlowPromptRenderer {
+    level,
+    message: message.to_string(),
+    detail: detail.map(ToString::to_string),
+    actions: actions.to_vec(),
+    focus: cx.focus_handle(),
+  });
+  let prompt = handle.with_view(renderer, window, cx);
+  window.refresh();
+  prompt
+}
+
+struct FlowPromptRenderer {
+  level: PromptLevel,
+  message: String,
+  detail: Option<String>,
+  actions: Vec<PromptButton>,
+  focus: FocusHandle,
+}
+
+impl FlowPromptRenderer {
+  fn accept_index(&self) -> Option<usize> {
+    self
+      .actions
+      .iter()
+      .position(|action| matches!(action, PromptButton::Ok(_)))
+      .or_else(|| (!self.actions.is_empty()).then_some(0))
+  }
+
+  fn cancel_index(&self) -> Option<usize> {
+    self
+      .actions
+      .iter()
+      .position(|action| matches!(action, PromptButton::Cancel(_)))
+      .or_else(|| self.actions.len().checked_sub(1))
+  }
+
+  fn on_accept(&mut self, _: &FlowPromptAccept, _: &mut Window, cx: &mut Context<Self>) {
+    if let Some(ix) = self.accept_index() {
+      cx.emit(PromptResponse(ix));
+    }
+  }
+
+  fn on_cancel(&mut self, _: &FlowPromptCancel, _: &mut Window, cx: &mut Context<Self>) {
+    if let Some(ix) = self.cancel_index() {
+      cx.emit(PromptResponse(ix));
+    }
+  }
+}
+
+impl Render for FlowPromptRenderer {
+  fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    let (icon, accent) = match self.level {
+      PromptLevel::Info => (IconName::Info, cx.theme().info),
+      PromptLevel::Warning => (IconName::TriangleAlert, cx.theme().warning),
+      PromptLevel::Critical => (IconName::CircleX, cx.theme().danger),
+    };
+
+    div()
+      .size_full()
+      .bg(cx.theme().overlay)
+      .occlude()
+      .flex()
+      .items_center()
+      .justify_center()
+      .child(
+        v_flex()
+          .key_context(PROMPT_CONTEXT)
+          .track_focus(&self.focus)
+          .tab_group()
+          .w(px(440.0))
+          .max_w(px(560.0))
+          .bg(cx.theme().background)
+          .border_1()
+          .border_color(cx.theme().border)
+          .rounded(cx.theme().radius_lg)
+          .shadow_lg()
+          .p_5()
+          .gap_4()
+          .on_action(cx.listener(Self::on_accept))
+          .on_action(cx.listener(Self::on_cancel))
+          .child(
+            h_flex().items_start().gap_3().child(
+              div()
+                .flex_none()
+                .size_8()
+                .rounded(px(8.0))
+                .bg(accent.opacity(0.14))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(Icon::new(icon).with_size(px(18.0)).text_color(accent)),
+            )
+            .child(
+              v_flex()
+                .gap_1()
+                .child(
+                  div()
+                    .text_lg()
+                    .font_semibold()
+                    .line_height(relative(1.2))
+                    .text_color(cx.theme().foreground)
+                    .child(self.message.clone()),
+                )
+                .children(self.detail.clone().map(|detail| {
+                  div()
+                    .text_sm()
+                    .line_height(relative(1.45))
+                    .text_color(cx.theme().muted_foreground)
+                    .child(detail)
+                })),
+            ),
+          )
+          .child(
+            h_flex()
+              .justify_end()
+              .gap_2()
+              .children(self.actions.iter().enumerate().map(|(ix, action)| {
+                let label = action.label().clone();
+                let button = Button::new(("prompt-action", ix as u64))
+                  .label(label)
+                  .on_click(cx.listener(move |_, _, _, cx| {
+                    cx.emit(PromptResponse(ix));
+                  }));
+
+                match action {
+                  PromptButton::Ok(_) => button.primary(),
+                  PromptButton::Cancel(_) => button,
+                  PromptButton::Other(_) => button.outline(),
+                }
+              })),
+          ),
+      )
+  }
+}
+
+impl EventEmitter<PromptResponse> for FlowPromptRenderer {}
+
+impl Focusable for FlowPromptRenderer {
+  fn focus_handle(&self, _: &App) -> FocusHandle {
+    self.focus.clone()
+  }
+}
+
 /// Regenerate the bundled demo document. Kept in the library so other tooling
 /// can call the same maintenance path as the standalone binary.
 pub fn write_demo_document() -> anyhow::Result<()> {
@@ -73,6 +243,7 @@ pub fn run_standalone(document_path: Option<PathBuf>) {
       init_theme_registry(cx);
       apply_saved_theme(cx);
       register_rich_text_editor_keybindings(cx);
+      install_prompt_renderer(cx);
       open_workspace_window(document_path, cx);
       cx.activate(true);
     });
