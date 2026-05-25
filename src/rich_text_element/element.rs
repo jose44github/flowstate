@@ -214,14 +214,14 @@ impl Element for VirtualParagraphChunkElement {
             return false;
           }
 
-          // Treat chunk ownership as end-exclusive when deciding which
-          // VirtualParagraphChunkElement paints the caret. At a boundary byte,
-          // the trailing chunk should win; otherwise both adjacent chunks can
-          // claim the same caret position when `contains_byte` is inclusive.
-          offset
-            .byte
-            .checked_add(1)
-            .is_some_and(|next_byte| paragraph.contains_byte(next_byte))
+          // Treat chunk ownership as end-exclusive at chunk boundaries so the
+          // trailing chunk paints the caret. The paragraph end is the one
+          // exception: there is no trailing byte, so the final chunk owns it.
+          offset.byte == paragraph.len
+            || offset
+              .byte
+              .checked_add(1)
+              .is_some_and(|next_byte| paragraph.contains_byte(next_byte))
         })
       });
       paint_layout(
