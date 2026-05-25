@@ -169,7 +169,9 @@ impl LaidOutParagraph {
     if self.byte_range.start == self.byte_range.end {
       return byte == self.byte_range.start;
     }
-    byte >= self.byte_range.start && byte <= self.byte_range.end
+
+    (byte >= self.byte_range.start && byte < self.byte_range.end)
+      || (byte == self.byte_range.end && self.byte_range.end == self.len)
   }
 }
 
