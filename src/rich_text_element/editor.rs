@@ -3818,6 +3818,7 @@ impl RichTextEditor {
       self.paragraph_height_cache[paragraph_ix] = Some(ParagraphHeightCacheEntry {
         key: entry.key,
         width,
+        invisibility_mode: self.invisibility_mode,
         height: entry.exact_height,
       });
     }
