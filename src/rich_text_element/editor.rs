@@ -3625,8 +3625,6 @@ impl RichTextEditor {
       let block_start = items.len();
       let mut block_height = px(0.0);
       if !visibility.is_visible(block_ix) {
-        items.push(VirtualItem::HiddenBlock { block_ix });
-        sizes.push(size(width, px(0.0)));
         block_item_ranges.push(block_start..items.len());
         block_heights.push(px(0.0));
         continue;
@@ -3635,8 +3633,6 @@ impl RichTextEditor {
       match self.document.blocks.get(block_ix) {
         Some(Block::Paragraph(_)) => {
           let Some(paragraph_ix) = visibility.paragraph_ix_for_block(block_ix) else {
-            items.push(VirtualItem::HiddenBlock { block_ix });
-            sizes.push(size(width, px(0.0)));
             block_item_ranges.push(block_start..items.len());
             block_heights.push(px(0.0));
             continue;
