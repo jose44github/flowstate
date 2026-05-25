@@ -209,10 +209,20 @@ impl Element for VirtualParagraphChunkElement {
     };
     if let Some(layout) = self.layout.0.borrow().as_ref().cloned() {
       let show_caret = caret_offset.is_some_and(|offset| {
-        layout
-          .paragraphs
-          .first()
-          .is_some_and(|paragraph| paragraph.contains_byte(offset.byte))
+        layout.paragraphs.first().is_some_and(|paragraph| {
+          if !paragraph.contains_byte(offset.byte) {
+            return false;
+          }
+
+          // Treat chunk ownership as end-exclusive when deciding which
+          // VirtualParagraphChunkElement paints the caret. At a boundary byte,
+          // the trailing chunk should win; otherwise both adjacent chunks can
+          // claim the same caret position when `contains_byte` is inclusive.
+          offset
+            .byte
+            .checked_add(1)
+            .is_some_and(|next_byte| paragraph.contains_byte(next_byte))
+        })
       });
       paint_layout(
         layout.as_ref(),
