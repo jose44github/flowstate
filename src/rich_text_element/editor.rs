@@ -3939,6 +3939,9 @@ impl RichTextEditor {
 
     for range in ranges {
       for paragraph_ix in range {
+        if !self.paragraph_visible_in_current_mode(paragraph_ix) {
+          continue;
+        }
         self.ensure_next_paragraph_chunk(paragraph_ix, width, window, cx);
       }
     }
@@ -3955,6 +3958,9 @@ impl RichTextEditor {
     let mut accumulated = px(0.0);
 
     for paragraph_ix in 0..paragraph_count {
+      if !self.paragraph_visible_in_current_mode(paragraph_ix) {
+        continue;
+      }
       loop {
         let before = self
           .paragraph_chunk_layout_cache
@@ -4027,6 +4033,9 @@ impl RichTextEditor {
     let budget = Duration::from_millis(8);
     let mut changed = false;
     while let Some(paragraph_ix) = self.chunk_prefetch_queue.pop_front() {
+      if !self.paragraph_visible_in_current_mode(paragraph_ix) {
+        continue;
+      }
       let before = self
         .paragraph_chunk_layout_cache
         .get(paragraph_ix)
@@ -4065,6 +4074,15 @@ impl RichTextEditor {
         editor.run_chunk_prefetch_budget(width, window, cx);
       });
     }
+  }
+
+  fn paragraph_visible_in_current_mode(&self, paragraph_ix: usize) -> bool {
+    !self.invisibility_mode
+      || self
+        .document
+        .paragraphs
+        .get(paragraph_ix)
+        .is_some_and(paragraph_is_visible)
   }
 
   fn schedule_viewport_size_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -6054,7 +6072,7 @@ impl Render for RichTextEditor {
     }
     let hide_until_viewport_measured = self.scroll_handle.bounds().size.width <= px(1.0);
     let item_sizes = self.paragraph_item_sizes(window, cx);
-    let has_startup_layout_width = self.measured_item_width.is_some() || self.document.paragraphs.is_empty();
+    let has_startup_layout_width = self.measured_item_width.is_some() || self.document.paragraphs.is_empty() || item_sizes.is_empty();
     if !hide_until_viewport_measured && self.initial_layout_hidden && has_startup_layout_width {
       // The VirtualList row positions and the paragraph layouts now agree on
       // width, so the first visible frame can use the same geometry that later
