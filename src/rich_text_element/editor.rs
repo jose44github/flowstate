@@ -1657,12 +1657,12 @@ impl RichTextEditor {
     self.after_history_restore(cx);
   }
 
-  pub fn move_left(&mut self, cx: &mut Context<Self>) {
-    self.move_horizontal(HDir::Left, false, cx);
+  pub fn move_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.move_horizontal(HDir::Left, false, window, cx);
   }
 
-  pub fn move_right(&mut self, cx: &mut Context<Self>) {
-    self.move_horizontal(HDir::Right, false, cx);
+  pub fn move_right(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.move_horizontal(HDir::Right, false, window, cx);
   }
 
   pub fn move_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1681,12 +1681,12 @@ impl RichTextEditor {
     self.move_line_edge(false, false, cx);
   }
 
-  pub fn select_left(&mut self, cx: &mut Context<Self>) {
-    self.move_horizontal(HDir::Left, true, cx);
+  pub fn select_left(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.move_horizontal(HDir::Left, true, window, cx);
   }
 
-  pub fn select_right(&mut self, cx: &mut Context<Self>) {
-    self.move_horizontal(HDir::Right, true, cx);
+  pub fn select_right(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.move_horizontal(HDir::Right, true, window, cx);
   }
 
   pub fn select_up(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3260,11 +3260,11 @@ impl RichTextEditor {
   // The signatures all match what `cx.listener(...)` expects:
   //   fn(&mut Self, &Action, &mut Window, &mut Context<Self>).
 
-  fn on_move_left(&mut self, _: &MoveLeft, _: &mut Window, cx: &mut Context<Self>) {
-    self.move_left(cx);
+  fn on_move_left(&mut self, _: &MoveLeft, window: &mut Window, cx: &mut Context<Self>) {
+    self.move_left(window, cx);
   }
-  fn on_move_right(&mut self, _: &MoveRight, _: &mut Window, cx: &mut Context<Self>) {
-    self.move_right(cx);
+  fn on_move_right(&mut self, _: &MoveRight, window: &mut Window, cx: &mut Context<Self>) {
+    self.move_right(window, cx);
   }
   fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
     self.move_up(window, cx);
@@ -3278,11 +3278,11 @@ impl RichTextEditor {
   fn on_move_line_end(&mut self, _: &MoveLineEnd, _: &mut Window, cx: &mut Context<Self>) {
     self.move_line_end(cx);
   }
-  fn on_select_left(&mut self, _: &SelectLeft, _: &mut Window, cx: &mut Context<Self>) {
-    self.select_left(cx);
+  fn on_select_left(&mut self, _: &SelectLeft, window: &mut Window, cx: &mut Context<Self>) {
+    self.select_left(window, cx);
   }
-  fn on_select_right(&mut self, _: &SelectRight, _: &mut Window, cx: &mut Context<Self>) {
-    self.select_right(cx);
+  fn on_select_right(&mut self, _: &SelectRight, window: &mut Window, cx: &mut Context<Self>) {
+    self.select_right(window, cx);
   }
   fn on_select_up(&mut self, _: &SelectUp, window: &mut Window, cx: &mut Context<Self>) {
     self.select_up(window, cx);
@@ -5339,7 +5339,7 @@ impl RichTextEditor {
 
   // -------- Movement primitives ----------------------------------------
 
-  fn move_horizontal(&mut self, dir: HDir, extend: bool, cx: &mut Context<Self>) {
+  fn move_horizontal(&mut self, dir: HDir, extend: bool, window: &mut Window, cx: &mut Context<Self>) {
     if matches!(self.selected_block, Some(BlockSelection::Equation(_))) {
       let source = self.selected_equation_source().unwrap_or_default();
       let caret = self.equation_source_caret.min(source.len());
@@ -5449,6 +5449,9 @@ impl RichTextEditor {
     }
     self.selection = selection;
     self.goal_x = None;
+    let width = self.current_layout_width();
+    let _ = self.ensure_paragraph_chunk_containing_byte(new_head.paragraph, new_head.byte, width, window, cx);
+    let _ = self.paragraph_item_sizes(window, cx);
     self.scroll_head_into_view();
     self.reset_caret_blink(cx);
     cx.notify();
