@@ -144,6 +144,11 @@ pub(super) enum EditOperation {
     before: DocumentSpan,
     after: DocumentSpan,
   },
+  InsertRichFragment {
+    offset: DocumentOffset,
+    inserted_end: DocumentOffset,
+    fragment: RichClipboardFragment,
+  },
   DeleteBlock {
     block_ix: usize,
     block: Block,
@@ -174,6 +179,7 @@ impl EditOperation {
   pub(super) fn undo(&self, document: &mut Document) {
     match self {
       Self::ReplaceParagraphSpan { before, after } => apply_document_span_replacement(document, after, before),
+      Self::InsertRichFragment { offset, inserted_end, .. } => delete_cross_paragraph_range(document, *offset..*inserted_end),
       Self::DeleteBlock { block_ix, block } => {
         let insert_ix = (*block_ix).min(document.blocks.len());
         Arc::make_mut(&mut document.blocks).insert(insert_ix, block.clone());
@@ -205,6 +211,9 @@ impl EditOperation {
   pub(super) fn redo(&self, document: &mut Document) {
     match self {
       Self::ReplaceParagraphSpan { before, after } => apply_document_span_replacement(document, before, after),
+      Self::InsertRichFragment { offset, fragment, .. } => {
+        insert_rich_fragment_at(document, *offset, fragment);
+      },
       Self::DeleteBlock { block_ix, .. } => {
         if !matches!(document.blocks.get(*block_ix), Some(Block::Paragraph(_))) {
           Arc::make_mut(&mut document.blocks).remove(*block_ix);
@@ -535,11 +544,7 @@ impl HeightPrefixIndex {
   }
 
   fn item_top(&self, ix: usize) -> Pixels {
-    self
-      .origins
-      .get(ix)
-      .copied()
-      .unwrap_or(self.total)
+    self.origins.get(ix).copied().unwrap_or(self.total)
   }
 
   fn lower_bound(&self, target: Pixels) -> usize {
@@ -1963,6 +1968,9 @@ impl RichTextEditor {
         if self.insert_rich_fragment_into_selected_table_cell(&fragment, cx) {
           return;
         }
+        if self.insert_rich_fragment_paste_at_caret(&fragment, cx) {
+          return;
+        }
         if fragment.blocks.is_empty() {
           self.apply_document_edit(cx, |editor, cx| editor.insert_rich_fragment(fragment, cx));
         } else {
@@ -1981,6 +1989,9 @@ impl RichTextEditor {
         if self.insert_rich_fragment_into_selected_table_cell(&fragment, cx) {
           return;
         }
+        if self.insert_rich_fragment_paste_at_caret(&fragment, cx) {
+          return;
+        }
         if fragment.blocks.is_empty() {
           self.apply_document_edit(cx, |editor, cx| editor.insert_rich_fragment(fragment, cx));
         } else {
@@ -1997,6 +2008,9 @@ impl RichTextEditor {
         if self.insert_plain_text_into_selected_table_cell(&text, cx) {
           return;
         }
+        if self.insert_plain_text_paste_at_caret(&text, cx) {
+          return;
+        }
         self.apply_document_edit(cx, |editor, cx| editor.insert_plain_text_fragment(&text, cx));
         return;
       }
@@ -2004,8 +2018,80 @@ impl RichTextEditor {
       if self.insert_plain_text_into_selected_table_cell(&text, cx) {
         return;
       }
+      if self.insert_plain_text_paste_at_caret(&text, cx) {
+        return;
+      }
       self.apply_document_edit(cx, |editor, cx| editor.insert_plain_text_fragment(&text, cx));
     }
+  }
+
+  fn insert_plain_text_paste_at_caret(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+    if !self.selection.is_caret() || self.selected_block.is_some() || text.is_empty() || text.contains('\r') || text.contains('\n') {
+      return false;
+    }
+    let paragraph_style = self.document.paragraphs[self.selection.head.paragraph].style;
+    let fragment = RichClipboardFragment {
+      format: "flowstate.rich-text-fragment.v1".to_string(),
+      paragraphs: vec![InputParagraph {
+        style: paragraph_style,
+        runs: vec![InputRun {
+          text: text.to_string(),
+          styles: self.styles_at_caret(),
+        }],
+      }],
+      blocks: Vec::new(),
+      assets: Vec::new(),
+    };
+    self.insert_rich_fragment_paste_at_caret(&fragment, cx)
+  }
+
+  fn insert_rich_fragment_paste_at_caret(&mut self, fragment: &RichClipboardFragment, cx: &mut Context<Self>) -> bool {
+    if !self.selection.is_caret()
+      || self.selected_block.is_some()
+      || !fragment.blocks.is_empty()
+      || !fragment.assets.is_empty()
+      || fragment.paragraphs.len() != 1
+    {
+      return false;
+    }
+    let Some(paragraph_id) = self
+      .identity_map
+      .paragraph_id(self.selection.head.paragraph)
+    else {
+      return false;
+    };
+    let paragraph = &fragment.paragraphs[0];
+    if paragraph.runs.iter().all(|run| run.text.is_empty()) {
+      return true;
+    }
+
+    let before_selection = self.selection.clone();
+    let before_generation = self.edit_generation;
+    let after_generation = self.next_edit_generation;
+    self.next_edit_generation = self.next_edit_generation.wrapping_add(1);
+    let offset = self.selection.head;
+    let inserted_end = insert_rich_fragment_at(&mut self.document, offset, fragment);
+    self.selection = EditorSelection {
+      anchor: inserted_end,
+      head: inserted_end,
+    };
+    self.undo_stack.push(EditRecord {
+      before_selection,
+      before_generation,
+      after_selection: self.selection.clone(),
+      after_generation,
+      operations: vec![EditOperation::InsertRichFragment {
+        offset,
+        inserted_end,
+        fragment: fragment.clone(),
+      }],
+      canonical_operations: canonical_insert_text_operations(paragraph_id, offset.byte, paragraph),
+    });
+    self.redo_stack.clear();
+    self.layout_invalidation_hint = Some(offset.paragraph..offset.paragraph + 1);
+    self.after_text_mutation(cx);
+    self.mark_document_changed_with_reconcile(after_generation, false, cx);
+    true
   }
 
   fn selected_table_cell_fragment(&self) -> Option<RichClipboardFragment> {
@@ -3626,8 +3712,7 @@ impl RichTextEditor {
       before: before_span.clone(),
       after: after_span.clone(),
     }];
-    let identity_shape_changed = before_span.paragraphs.len() != after_span.paragraphs.len()
-      || before_block_count != self.document.blocks.len();
+    let identity_shape_changed = before_span.paragraphs.len() != after_span.paragraphs.len() || before_block_count != self.document.blocks.len();
     let record = EditRecord {
       before_selection,
       before_generation,
@@ -3653,7 +3738,9 @@ impl RichTextEditor {
     self.layout_invalidation_hint = Some(caret.paragraph..caret.paragraph + 1);
     self.insert_paragraph_break(cx);
     self.layout_invalidation_hint = None;
-    self.identity_map.insert_split_paragraph(caret.paragraph, block_ix);
+    self
+      .identity_map
+      .insert_split_paragraph(caret.paragraph, block_ix);
     let after_span = capture_document_span(&self.document, caret.paragraph..caret.paragraph + 2);
 
     if before_span == after_span && before_selection == self.selection {
@@ -3834,7 +3921,9 @@ impl RichTextEditor {
     }
     let viewport_height = self.scroll_handle.bounds().size.height.max(px(0.0));
     let max_scroll_top = (px(self.height_prefix_index.total_height()) - viewport_height).max(px(0.0));
-    let scroll_top = (self.height_prefix_index.item_top(item_ix) + delta).max(px(0.0)).min(max_scroll_top);
+    let scroll_top = (self.height_prefix_index.item_top(item_ix) + delta)
+      .max(px(0.0))
+      .min(max_scroll_top);
     let mut offset = self.scroll_handle.offset();
     let new_y = -scroll_top;
     if offset.y != new_y {
@@ -3854,11 +3943,7 @@ impl RichTextEditor {
     }
     match anchor {
       ScrollAnchorSnapshot::Item { item, .. } => match item {
-        VirtualItem::ParagraphChunk {
-          paragraph_ix,
-          chunk_ix,
-          ..
-        } => self
+        VirtualItem::ParagraphChunk { paragraph_ix, chunk_ix, .. } => self
           .paragraph_chunk_item_ix(*paragraph_ix, *chunk_ix)
           .map(|item_ix| (item_ix, anchor.delta())),
         VirtualItem::ParagraphRemainder { paragraph_ix, .. } => cache
@@ -3889,7 +3974,9 @@ impl RichTextEditor {
             .filter(|(_, chunk)| chunk.end_byte > *start_byte)
           {
             if *delta <= consumed + chunk.height {
-              let chunk_delta = (*delta - consumed).max(px(0.0)).min(chunk.height.max(px(0.0)));
+              let chunk_delta = (*delta - consumed)
+                .max(px(0.0))
+                .min(chunk.height.max(px(0.0)));
               return self
                 .paragraph_chunk_item_ix(*paragraph_ix, chunk_ix)
                 .map(|item_ix| (item_ix, chunk_delta));
@@ -3903,16 +3990,15 @@ impl RichTextEditor {
           {
             return Some((item_ix, (*delta - consumed).max(px(0.0))));
           }
-          return entry
-            .chunks
-            .last()
-            .and_then(|chunk| {
-              let chunk_ix = entry.chunks.len().checked_sub(1)?;
-              let chunk_delta = (*delta - consumed).max(px(0.0)).min(chunk.height.max(px(0.0)));
-              self
-                .paragraph_chunk_item_ix(*paragraph_ix, chunk_ix)
-                .map(|item_ix| (item_ix, chunk_delta))
-            });
+          return entry.chunks.last().and_then(|chunk| {
+            let chunk_ix = entry.chunks.len().checked_sub(1)?;
+            let chunk_delta = (*delta - consumed)
+              .max(px(0.0))
+              .min(chunk.height.max(px(0.0)));
+            self
+              .paragraph_chunk_item_ix(*paragraph_ix, chunk_ix)
+              .map(|item_ix| (item_ix, chunk_delta))
+          });
         }
         cache
           .paragraph_remainder_items
@@ -4010,8 +4096,7 @@ impl RichTextEditor {
     cx: &mut Context<Self>,
   ) -> Rc<Vec<Size<Pixels>>> {
     let (items, block_item_ranges, block_heights, sizes) = self.virtual_item_sizes(width, window, cx);
-    let (paragraph_chunk_item_ranges, paragraph_remainder_items) =
-      item_lookup_for_virtual_items(items.as_ref(), self.document.paragraphs.len());
+    let (paragraph_chunk_item_ranges, paragraph_remainder_items) = item_lookup_for_virtual_items(items.as_ref(), self.document.paragraphs.len());
     self.height_prefix_index.rebuild(sizes.as_ref());
     let item_count = sizes.len();
     self.item_sizes_cache = Some(ItemSizesCache {
@@ -4409,16 +4494,7 @@ impl RichTextEditor {
     let budget = Duration::from_millis(14);
     let mut changed = false;
     for (paragraph_ix, start_byte, target) in remainders {
-      changed |= self.materialize_paragraph_remainder_until(
-        paragraph_ix,
-        width,
-        start_byte,
-        target,
-        started,
-        budget,
-        window,
-        cx,
-      );
+      changed |= self.materialize_paragraph_remainder_until(paragraph_ix, width, start_byte, target, started, budget, window, cx);
       if started.elapsed() >= budget {
         break;
       }
@@ -5290,7 +5366,7 @@ impl RichTextEditor {
         },
         Err(error) => {
           eprintln!("failed to write recovery file: {error}");
-        }
+        },
       }
       let _ = editor.update(cx, |editor, cx| {
         editor.recovery_write_in_progress = false;
@@ -7040,19 +7116,14 @@ fn windows_apply_capslock(text: &str) -> String {
   }
 }
 
-fn item_lookup_for_virtual_items(
-  items: &[VirtualItem],
-  paragraph_count: usize,
-) -> (Vec<Range<usize>>, Vec<Option<usize>>) {
+fn item_lookup_for_virtual_items(items: &[VirtualItem], paragraph_count: usize) -> (Vec<Range<usize>>, Vec<Option<usize>>) {
   let mut paragraph_chunk_item_ranges = vec![0..0; paragraph_count];
   let mut paragraph_remainder_items = vec![None; paragraph_count];
 
   for (item_ix, item) in items.iter().enumerate() {
     match item {
       VirtualItem::ParagraphChunk {
-        paragraph_ix,
-        chunk_ix: _,
-        ..
+        paragraph_ix, chunk_ix: _, ..
       } => {
         if let Some(range) = paragraph_chunk_item_ranges.get_mut(*paragraph_ix) {
           if range.start == range.end {
@@ -8009,6 +8080,23 @@ fn table_plain_text(table: &InputTableBlock) -> String {
     })
     .collect::<Vec<_>>()
     .join("\n")
+}
+
+fn canonical_insert_text_operations(paragraph_id: ParagraphId, start_byte: usize, paragraph: &InputParagraph) -> Vec<CanonicalOperation> {
+  let mut byte = start_byte;
+  let mut operations = Vec::with_capacity(paragraph.runs.len());
+  for run in &paragraph.runs {
+    if !run.text.is_empty() {
+      operations.push(CanonicalOperation::InsertText {
+        paragraph: paragraph_id,
+        byte,
+        text: run.text.clone(),
+        styles: run.styles,
+      });
+    }
+    byte += run.text.len();
+  }
+  operations
 }
 
 pub(super) fn input_paragraph_text(paragraph: &InputParagraph) -> String {

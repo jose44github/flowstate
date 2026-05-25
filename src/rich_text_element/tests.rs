@@ -1,5 +1,5 @@
 use super::*;
-use gpui::px;
+use gpui::{Bounds, black, point, px, size};
 use std::{
   collections::hash_map::DefaultHasher,
   hash::{Hash, Hasher},
@@ -1280,6 +1280,163 @@ fn history_operation_round_trip_for_text_and_paragraph_split() {
   assert_eq!(paragraph_text(&document, 0), "alpha");
   assert_eq!(paragraph_text(&document, 1), "NEW  beta");
   assert_eq!(document.paragraphs[1].runs[0].styles.semantic, RunSemanticStyle::Emphasis);
+}
+
+#[test]
+fn rich_fragment_insert_bulk_preserves_multiline_paste_shape() {
+  let cite = RunStyles::default().with(RunStyle::Cite);
+  let emphasis = RunStyles::default().with(RunStyle::Emphasis);
+  let underline = RunStyles::default().with(RunStyle::Underline);
+  let mut document = document_from_input(
+    DocumentTheme::default(),
+    vec![InputParagraph {
+      style: ParagraphStyle::Normal,
+      runs: vec![plain("hello "), run("world", cite)],
+    }],
+  );
+  let fragment = RichClipboardFragment {
+    format: "flowstate.rich-text-fragment.v1".to_string(),
+    paragraphs: vec![
+      InputParagraph {
+        style: ParagraphStyle::Tag,
+        runs: vec![run("A", emphasis), run("B", emphasis)],
+      },
+      InputParagraph {
+        style: ParagraphStyle::Analytic,
+        runs: vec![run("C", underline)],
+      },
+    ],
+    blocks: Vec::new(),
+    assets: Vec::new(),
+  };
+
+  let caret = insert_rich_fragment_at(
+    &mut document,
+    DocumentOffset {
+      paragraph: 0,
+      byte: "hello ".len(),
+    },
+    &fragment,
+  );
+
+  assert_eq!(caret, DocumentOffset { paragraph: 1, byte: 1 });
+  assert_eq!(document.paragraphs.len(), 2);
+  assert_eq!(paragraph_text(&document, 0), "hello AB");
+  assert_eq!(paragraph_text(&document, 1), "Cworld");
+  assert_eq!(document.paragraphs[0].style, ParagraphStyle::Normal);
+  assert_eq!(document.paragraphs[1].style, ParagraphStyle::Analytic);
+  assert_eq!(document.paragraphs[0].runs.last().unwrap().styles, emphasis);
+  assert_eq!(document.paragraphs[1].runs.first().unwrap().styles, underline);
+  assert_eq!(document.paragraphs[1].runs.last().unwrap().styles, cite);
+  assert!(matches!(&document.blocks[0], Block::Paragraph(paragraph) if paragraph.byte_range == document.paragraphs[0].byte_range));
+  assert!(matches!(&document.blocks[1], Block::Paragraph(paragraph) if paragraph.byte_range == document.paragraphs[1].byte_range));
+}
+
+#[test]
+fn insert_rich_fragment_history_operation_round_trips_without_paragraph_snapshots() {
+  let emphasis = RunStyles::default().with(RunStyle::Emphasis);
+  let mut document = document_from_input(
+    DocumentTheme::default(),
+    vec![InputParagraph {
+      style: ParagraphStyle::Normal,
+      runs: vec![plain("alpha omega")],
+    }],
+  );
+  let fragment = RichClipboardFragment {
+    format: "flowstate.rich-text-fragment.v1".to_string(),
+    paragraphs: vec![InputParagraph {
+      style: ParagraphStyle::Normal,
+      runs: vec![run(" BETA", emphasis)],
+    }],
+    blocks: Vec::new(),
+    assets: Vec::new(),
+  };
+  let offset = DocumentOffset {
+    paragraph: 0,
+    byte: "alpha".len(),
+  };
+  let inserted_end = insert_rich_fragment_at(&mut document, offset, &fragment);
+  let operation = EditOperation::InsertRichFragment {
+    offset,
+    inserted_end,
+    fragment,
+  };
+
+  assert_eq!(paragraph_text(&document, 0), "alpha BETA omega");
+  operation.undo(&mut document);
+  assert_eq!(paragraph_text(&document, 0), "alpha omega");
+  operation.redo(&mut document);
+  assert_eq!(paragraph_text(&document, 0), "alpha BETA omega");
+  assert!(
+    document.paragraphs[0]
+      .runs
+      .iter()
+      .any(|run| run.styles == emphasis)
+  );
+}
+
+#[test]
+fn inline_decorations_merge_across_segment_splits() {
+  let color = black();
+  let merged = merge_inline_decorations(vec![
+    Decoration {
+      bounds: Bounds::new(point(px(0.0), px(12.0)), size(px(10.0), px(1.0))),
+      color,
+    },
+    Decoration {
+      bounds: Bounds::new(point(px(10.25), px(12.0)), size(px(6.0), px(1.0))),
+      color,
+    },
+    Decoration {
+      bounds: Bounds::new(point(px(30.0), px(12.0)), size(px(4.0), px(1.0))),
+      color,
+    },
+  ]);
+
+  assert_eq!(merged.len(), 2);
+  assert_eq!(merged[0].bounds.origin.x, px(0.0));
+  assert_eq!(merged[0].bounds.size.width, px(16.25));
+  assert_eq!(merged[1].bounds.origin.x, px(30.0));
+}
+
+#[test]
+fn inline_decorations_bridge_box_padding_between_emphasis_segments() {
+  let color = black();
+  let left_pad = px(1.28);
+  let right_pad = px(1.35);
+  let first_x = left_pad;
+  let first_width = px(20.0);
+  let second_x = first_x + first_width + right_pad + left_pad;
+  let second_width = px(12.0);
+
+  let merged = build_inline_decorations(
+    vec![
+      DecorationSource {
+        segment_ix: 0,
+        x: first_x,
+        width: first_width,
+        y: px(12.0),
+        thickness: px(1.0),
+        color,
+        boxed: true,
+      },
+      DecorationSource {
+        segment_ix: 1,
+        x: second_x,
+        width: second_width,
+        y: px(12.0),
+        thickness: px(1.0),
+        color,
+        boxed: true,
+      },
+    ],
+    left_pad,
+    right_pad,
+  );
+
+  assert_eq!(merged.len(), 1);
+  assert_eq!(merged[0].bounds.origin.x, first_x);
+  assert!((f32::from(merged[0].bounds.size.width) - f32::from(second_x + second_width - first_x)).abs() < 0.01);
 }
 
 #[test]
