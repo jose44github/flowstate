@@ -266,15 +266,34 @@ impl<T> SelectionState<T> {
   }
 }
 
-fn selection_state_from_values<T: Eq>(values: impl IntoIterator<Item = T>) -> SelectionState<T> {
-  let mut values = values.into_iter();
-  let Some(first) = values.next() else {
-    return SelectionState::None;
-  };
-  if values.any(|value| value != first) {
-    SelectionState::Mixed
-  } else {
-    SelectionState::Uniform(first)
+#[derive(Clone, Debug)]
+struct SelectionStateBuilder<T> {
+  state: SelectionState<T>,
+}
+
+impl<T> Default for SelectionStateBuilder<T> {
+  fn default() -> Self {
+    Self {
+      state: SelectionState::None,
+    }
+  }
+}
+
+impl<T: core::marker::Copy + Eq> SelectionStateBuilder<T> {
+  fn push(&mut self, value: T) {
+    match self.state {
+      SelectionState::None => self.state = SelectionState::Uniform(value),
+      SelectionState::Uniform(current) if current != value => self.state = SelectionState::Mixed,
+      SelectionState::Uniform(_) | SelectionState::Mixed => {},
+    }
+  }
+
+  fn is_mixed(&self) -> bool {
+    self.state.is_mixed()
+  }
+
+  fn finish(self) -> SelectionState<T> {
+    self.state
   }
 }
 
@@ -1365,53 +1384,84 @@ impl RichTextEditor {
 
   pub fn style_state(&self) -> RichTextEditorStyleState {
     if let Some(paragraph) = self.selected_table_cell_paragraph() {
-      let run_styles = if paragraph.paragraph.runs.is_empty() {
-        vec![RunStyles::default()]
-      } else {
-        paragraph
-          .paragraph
-          .runs
-          .iter()
-          .map(|run| run.styles)
-          .collect()
+      let mut semantic = SelectionStateBuilder::default();
+      let mut underline = SelectionStateBuilder::default();
+      let mut strikethrough = SelectionStateBuilder::default();
+      let mut highlight = SelectionStateBuilder::default();
+      let mut push_run_styles = |styles: RunStyles| {
+        semantic.push(styles.semantic);
+        underline.push(styles.direct_underline || styles.semantic == RunSemanticStyle::Underline);
+        strikethrough.push(styles.strikethrough);
+        highlight.push(styles.highlight);
       };
+      if paragraph.paragraph.runs.is_empty() {
+        push_run_styles(RunStyles::default());
+      } else {
+        for run in &paragraph.paragraph.runs {
+          push_run_styles(run.styles);
+        }
+      }
       return RichTextEditorStyleState {
         paragraph_style: SelectionState::Uniform(paragraph.paragraph.style),
-        semantic: selection_state_from_values(run_styles.iter().map(|styles| styles.semantic)),
-        underline: selection_state_from_values(
-          run_styles
-            .iter()
-            .map(|styles| styles.direct_underline || styles.semantic == RunSemanticStyle::Underline),
-        ),
-        strikethrough: selection_state_from_values(run_styles.iter().map(|styles| styles.strikethrough)),
-        highlight: selection_state_from_values(run_styles.iter().map(|styles| styles.highlight)),
+        semantic: semantic.finish(),
+        underline: underline.finish(),
+        strikethrough: strikethrough.finish(),
+        highlight: highlight.finish(),
       };
     }
     let range = self.selection.normalized();
-    let paragraph_style = selection_state_from_values((range.start.paragraph..=range.end.paragraph).filter_map(|paragraph_ix| {
-      self
-        .document
-        .paragraphs
-        .get(paragraph_ix)
-        .map(|paragraph| paragraph.style)
-    }));
+    let mut paragraph_style = SelectionStateBuilder::default();
+    let mut semantic = SelectionStateBuilder::default();
+    let mut underline = SelectionStateBuilder::default();
+    let mut strikethrough = SelectionStateBuilder::default();
+    let mut highlight = SelectionStateBuilder::default();
 
-    let run_styles = if self.selection.is_caret() {
-      vec![self.styles_at_caret()]
+    if self.selection.is_caret() {
+      if let Some(paragraph) = self.document.paragraphs.get(range.start.paragraph) {
+        paragraph_style.push(paragraph.style);
+      }
+      let styles = self.styles_at_caret();
+      semantic.push(styles.semantic);
+      underline.push(styles.direct_underline || styles.semantic == RunSemanticStyle::Underline);
+      strikethrough.push(styles.strikethrough);
+      highlight.push(styles.highlight);
     } else {
-      selection_run_styles(&self.document, range)
-    };
+      for paragraph_ix in range.start.paragraph..=range.end.paragraph {
+        let Some(paragraph) = self.document.paragraphs.get(paragraph_ix) else {
+          continue;
+        };
+        paragraph_style.push(paragraph.style);
+        let start = if paragraph_ix == range.start.paragraph { range.start.byte } else { 0 };
+        let end = if paragraph_ix == range.end.paragraph {
+          range.end.byte
+        } else {
+          paragraph_text_len(paragraph)
+        };
+        let mut offset = 0;
+        for run in &paragraph.runs {
+          let run_start = offset;
+          let run_end = offset + run.len;
+          offset = run_end;
+          if run_start < end && run_end > start {
+            let styles = run.styles;
+            semantic.push(styles.semantic);
+            underline.push(styles.direct_underline || styles.semantic == RunSemanticStyle::Underline);
+            strikethrough.push(styles.strikethrough);
+            highlight.push(styles.highlight);
+          }
+        }
+        if paragraph_style.is_mixed() && semantic.is_mixed() && underline.is_mixed() && strikethrough.is_mixed() && highlight.is_mixed() {
+          break;
+        }
+      }
+    }
 
     RichTextEditorStyleState {
-      paragraph_style,
-      semantic: selection_state_from_values(run_styles.iter().map(|styles| styles.semantic)),
-      underline: selection_state_from_values(
-        run_styles
-          .iter()
-          .map(|styles| styles.direct_underline || styles.semantic == RunSemanticStyle::Underline),
-      ),
-      strikethrough: selection_state_from_values(run_styles.iter().map(|styles| styles.strikethrough)),
-      highlight: selection_state_from_values(run_styles.iter().map(|styles| styles.highlight)),
+      paragraph_style: paragraph_style.finish(),
+      semantic: semantic.finish(),
+      underline: underline.finish(),
+      strikethrough: strikethrough.finish(),
+      highlight: highlight.finish(),
     }
   }
 
@@ -1642,7 +1692,6 @@ impl RichTextEditor {
     }
     self.selection = selection;
     self.goal_x = None;
-    self.scroll_head_into_view();
     self.reset_caret_blink(cx);
     cx.notify();
   }
@@ -4454,9 +4503,9 @@ impl RichTextEditor {
     if paragraph_count == 0 {
       return 0..0;
     }
-    let selection = self.selection.normalized();
-    let start = selection.start.paragraph.saturating_sub(1);
-    let end = (selection.end.paragraph + 2)
+    let active_paragraph = self.selection.head.paragraph.min(paragraph_count - 1);
+    let start = active_paragraph.saturating_sub(1);
+    let end = (active_paragraph + 2)
       .min(paragraph_count)
       .max(start + 1);
     start..end
