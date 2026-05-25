@@ -2143,19 +2143,66 @@ pub(super) fn rects_for_line(document: &Document, line: &LaidOutLine) -> Vec<Run
           (text_bottom - text_top + document.theme.box_padding_top + document.theme.box_padding_bottom).max(px(1.0)),
         ),
       );
-      push_box_rules(
-        &mut borders,
-        box_bounds,
-        document.theme.emphasis_border_paint_width,
-        document.theme.default_text_color,
-      );
+      push_merged_box(&mut borders, box_bounds);
     }
   }
+  let border_color = document.theme.default_text_color;
+  let border_thickness = document.theme.emphasis_border_paint_width;
+  let borders = borders
+    .into_iter()
+    .flat_map(|bounds| box_rules(bounds, border_thickness, border_color))
+    .collect::<Vec<_>>();
   // Word paints fills before border rules. Keeping all run borders after all
   // run highlights prevents a following highlighted run from hiding the right
   // edge of the previous boxed run.
   backgrounds.extend(borders);
   backgrounds
+}
+
+fn push_merged_box(boxes: &mut Vec<Bounds<Pixels>>, bounds: Bounds<Pixels>) {
+  const EPSILON: f32 = 0.5;
+  if let Some(last) = boxes.last_mut() {
+    let same_band = (f32::from(last.origin.y) - f32::from(bounds.origin.y)).abs() <= EPSILON
+      && (f32::from(last.size.height) - f32::from(bounds.size.height)).abs() <= EPSILON;
+    let touching = f32::from(bounds.origin.x) <= f32::from(last.origin.x + last.size.width) + EPSILON;
+    if same_band && touching {
+      let right = (last.origin.x + last.size.width).max(bounds.origin.x + bounds.size.width);
+      last.size.width = right - last.origin.x;
+      return;
+    }
+  }
+  boxes.push(bounds);
+}
+
+fn box_rules(bounds: Bounds<Pixels>, thickness: Pixels, color: Hsla) -> [RunRect; 4] {
+  [
+    RunRect {
+      bounds: Bounds::new(bounds.origin, size(bounds.size.width, thickness)),
+      color,
+      snap: RuleSnap::Horizontal,
+    },
+    RunRect {
+      bounds: Bounds::new(
+        point(bounds.origin.x, bounds.origin.y + bounds.size.height - thickness),
+        size(bounds.size.width, thickness),
+      ),
+      color,
+      snap: RuleSnap::Horizontal,
+    },
+    RunRect {
+      bounds: Bounds::new(bounds.origin, size(thickness, bounds.size.height)),
+      color,
+      snap: RuleSnap::Vertical,
+    },
+    RunRect {
+      bounds: Bounds::new(
+        point(bounds.origin.x + bounds.size.width - thickness, bounds.origin.y),
+        size(thickness, bounds.size.height),
+      ),
+      color,
+      snap: RuleSnap::Vertical,
+    },
+  ]
 }
 
 pub(super) fn push_box_rules(rects: &mut Vec<RunRect>, bounds: Bounds<Pixels>, thickness: Pixels, color: Hsla) {
