@@ -13,12 +13,6 @@ impl RichTextEditor {
       self.schedule_typing_prefetch_resume(cx);
       return;
     }
-    if self.recently_scrolled() {
-      self.resume_chunk_prefetch_after_scroll = true;
-      self.chunk_prefetch_queue.clear();
-      self.schedule_scroll_prefetch_resume(cx);
-      return;
-    }
     if self.is_interacting() {
       self.chunk_prefetch_queue.clear();
       return;
@@ -83,18 +77,16 @@ impl RichTextEditor {
       self.schedule_typing_prefetch_resume(cx);
       return;
     }
-    if self.recently_scrolled() {
-      self.resume_chunk_prefetch_after_scroll = true;
-      self.chunk_prefetch_queue.clear();
-      self.schedule_scroll_prefetch_resume(cx);
-      return;
-    }
     if self.is_interacting() {
       self.chunk_prefetch_queue.clear();
       return;
     }
     let start = Instant::now();
-    let budget = Duration::from_millis(6);
+    let budget = if self.recently_scrolled() {
+      Duration::from_millis(2)
+    } else {
+      Duration::from_millis(6)
+    };
     let scroll_anchor = self.capture_scroll_anchor();
     let mut changed = false;
     while let Some(paragraph_ix) = self.chunk_prefetch_queue.pop_front() {
@@ -186,7 +178,6 @@ impl RichTextEditor {
 
   fn is_interacting(&self) -> bool {
     self.recently_typed()
-      || self.recently_scrolled()
       || self.selecting
       || self.pending_text_drag.is_some()
       || self.active_text_drag.is_some()
