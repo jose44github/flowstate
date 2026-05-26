@@ -4,3 +4,5 @@
 /perf_fixtures
 flamegraph.svg
 perf.data
+/perf.data.old
+/VIRTUALIZED_VIEWPORT_PLAN.md

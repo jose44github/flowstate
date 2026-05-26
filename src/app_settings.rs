@@ -1,4 +1,4 @@
-use std::{env, fs, io, path::PathBuf};
+use std::{fs, io, path::PathBuf};
 
 use gpui::{Hsla, px};
 use gpui_component::PixelsExt;
@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ribbon::RibbonMode;
 use crate::rich_text_element::{DocumentTheme, ThemeUnderline};
+use dirs::config_dir;
 
 #[derive(Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -441,26 +442,7 @@ impl From<ThemeUnderlineSetting> for ThemeUnderline {
 }
 
 fn settings_path() -> PathBuf {
-  if cfg!(target_os = "windows") {
-    if let Some(appdata) = env::var_os("APPDATA") {
-      return PathBuf::from(appdata)
-        .join("Flowstate")
-        .join("settings.json");
-    }
-  }
-
-  if let Some(config_home) = env::var_os("XDG_CONFIG_HOME") {
-    return PathBuf::from(config_home)
-      .join("odrenrir")
-      .join("settings.json");
-  }
-
-  if let Some(home) = env::var_os("HOME") {
-    return PathBuf::from(home)
-      .join(".config")
-      .join("odrenrir")
-      .join("settings.json");
-  }
-
-  PathBuf::from("odrenrir-settings.json")
+  config_dir()
+    .unwrap_or("./".into())
+    .join::<PathBuf>("flowstate/settings.json".into())
 }
