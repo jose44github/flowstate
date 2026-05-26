@@ -21,6 +21,11 @@ use gpui_component::{VirtualListScrollHandle, v_virtual_list};
 
 use super::*;
 
+const SCROLL_FOREGROUND_OVERSCAN_PX: f32 = 384.0;
+const SCROLL_FOREGROUND_MATERIALIZE_BUDGET_MS: u64 = 8;
+const SCROLL_FOREGROUND_MAX_CHUNK_LINES: usize = 96;
+const SCROLLBAR_DRAG_MAX_FPS: usize = 60;
+
 actions!(
   rich_text_editor,
   [
@@ -4507,14 +4512,15 @@ impl RichTextEditor {
     cx: &mut Context<Self>,
   ) -> bool {
     let scroll_anchor = scroll_anchor.or_else(|| self.capture_scroll_anchor());
-    let Some(visible_range) = self.visible_item_range_for_current_scroll(px(768.0)) else {
+    let overscan = px(SCROLL_FOREGROUND_OVERSCAN_PX);
+    let Some(visible_range) = self.visible_item_range_for_current_scroll(overscan) else {
       return false;
     };
     let Some(cache) = self.item_sizes_cache.as_ref() else {
       return false;
     };
     let viewport = self.scroll_handle.bounds();
-    let scroll_bottom = (-self.scroll_handle.offset().y).max(px(0.0)) + viewport.size.height.max(px(700.0)) + px(768.0);
+    let scroll_bottom = (-self.scroll_handle.offset().y).max(px(0.0)) + viewport.size.height.max(px(700.0)) + overscan;
     let mut remainders = Vec::new();
     for item_ix in visible_range {
       if let Some(VirtualItem::ParagraphRemainder { paragraph_ix, .. }) = cache.items.get(item_ix) {
@@ -4530,7 +4536,7 @@ impl RichTextEditor {
     }
 
     let started = Instant::now();
-    let budget = Duration::from_millis(14);
+    let budget = Duration::from_millis(SCROLL_FOREGROUND_MATERIALIZE_BUDGET_MS);
     let mut changed = false;
     for (paragraph_ix, start_byte, target) in remainders {
       changed |= self.materialize_paragraph_remainder_until(paragraph_ix, width, start_byte, target, started, budget, window, cx);
@@ -4627,7 +4633,7 @@ impl RichTextEditor {
   fn catch_up_chunk_target_lines(&self, remaining: Pixels) -> usize {
     let line_height = (self.document.theme.body_font_size * self.document.theme.line_spacing * 1.35).max(px(12.0));
     let approximate_lines = f32::from(remaining / line_height).ceil() as usize;
-    approximate_lines.clamp(DEFAULT_PARAGRAPH_CHUNK_TARGET_LINES, 768)
+    approximate_lines.clamp(DEFAULT_PARAGRAPH_CHUNK_TARGET_LINES, SCROLL_FOREGROUND_MAX_CHUNK_LINES)
   }
 
   fn paragraph_chunk_containing_byte(&self, paragraph_ix: usize, byte: usize, width: Pixels) -> Option<(usize, Rc<LayoutState>)> {
@@ -4730,17 +4736,24 @@ impl RichTextEditor {
   }
 
   fn ensure_exact_interaction_chunks(&mut self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) {
-    let mut ranges = vec![self.active_height_range(), self.predicted_visible_height_range(width)];
-    if !self.visible_layout_range.is_empty() {
-      let visible_paragraph_range = self.paragraph_range_for_item_range(self.visible_layout_range.clone());
-      ranges.push(expand_paragraph_range(visible_paragraph_range, self.document.paragraphs.len(), 2));
+    let paragraph_count = self.document.paragraphs.len();
+    if paragraph_count == 0 {
+      return;
     }
 
+    let mut ranges = vec![self.predicted_visible_height_range(width), self.active_height_range()];
+    if !self.visible_layout_range.is_empty() {
+      let visible_paragraph_range = self.paragraph_range_for_item_range(self.visible_layout_range.clone());
+      ranges.push(expand_paragraph_range(visible_paragraph_range, paragraph_count, 2));
+    }
+
+    let mut queued = vec![false; paragraph_count];
     for range in ranges {
       for paragraph_ix in range {
-        if !self.paragraph_visible_in_current_mode(paragraph_ix) {
+        if paragraph_ix >= paragraph_count || queued[paragraph_ix] || !self.paragraph_visible_in_current_mode(paragraph_ix) {
           continue;
         }
+        queued[paragraph_ix] = true;
         self.ensure_next_paragraph_chunk(paragraph_ix, width, window, cx);
       }
     }
@@ -4791,9 +4804,6 @@ impl RichTextEditor {
   }
 
   fn schedule_chunk_prefetch(&mut self, width: Pixels, window: &mut Window, cx: &mut Context<Self>) {
-    if self.pending_chunk_prefetch {
-      return;
-    }
     if self.is_interacting() {
       self.chunk_prefetch_queue.clear();
       return;
@@ -4808,8 +4818,8 @@ impl RichTextEditor {
     let active = self.active_height_range();
     let predicted = self.predicted_visible_height_range(width);
     for range in [
-      expand_paragraph_range(active, paragraph_count, 2),
       expand_paragraph_range(predicted.clone(), paragraph_count, 4),
+      expand_paragraph_range(active, paragraph_count, 2),
     ] {
       for paragraph_ix in range {
         if !queued[paragraph_ix] && self.paragraph_visible_in_current_mode(paragraph_ix) {
@@ -4822,6 +4832,9 @@ impl RichTextEditor {
       return;
     }
     self.chunk_prefetch_queue = queue;
+    if self.pending_chunk_prefetch {
+      return;
+    }
     self.pending_chunk_prefetch = true;
     cx.on_next_frame(window, move |editor, window, cx| {
       editor.pending_chunk_prefetch = false;
@@ -7161,7 +7174,7 @@ impl Render for RichTextEditor {
           .left_0()
           .right_0()
           .bottom_0()
-          .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always)),
+          .child(Scrollbar::vertical(&self.scroll_handle).scrollbar_show(ScrollbarShow::Always).max_fps(SCROLLBAR_DRAG_MAX_FPS)),
       )
   }
 }

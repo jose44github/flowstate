@@ -1217,6 +1217,14 @@ fn clamp_to_char_boundary(text: &str, mut byte: usize) -> usize {
   byte
 }
 
+fn ceil_char_boundary(text: &str, mut byte: usize) -> usize {
+  byte = byte.min(text.len());
+  while byte < text.len() && !text.is_char_boundary(byte) {
+    byte += 1;
+  }
+  byte
+}
+
 fn push_chunk_box_rules(
   rects: &mut Vec<RunRect>,
   bounds: Bounds<Pixels>,
@@ -2020,8 +2028,19 @@ pub(super) fn measure_line_width(
   window: &mut Window,
 ) -> Pixels {
   let mut width = px(0.0);
-  let rendered_text = &paragraph_text[source_range.start..source_range.start + rendered_len];
-  for fragment in fragments_for_range(paragraph, &source_range, rendered_len) {
+  let rendered_start = clamp_to_char_boundary(paragraph_text, source_range.start);
+  let rendered_end = clamp_to_char_boundary(
+    paragraph_text,
+    source_range
+      .start
+      .saturating_add(rendered_len)
+      .min(source_range.end)
+      .min(paragraph_text.len()),
+  )
+  .max(rendered_start);
+  let rendered_range = rendered_start..rendered_end;
+  let rendered_text = &paragraph_text[rendered_range.clone()];
+  for fragment in fragments_for_range(paragraph, &rendered_range, rendered_text) {
     let text = &rendered_text[fragment.line_range.clone()];
     if text.is_empty() {
       continue;
@@ -2049,7 +2068,7 @@ pub(super) fn shape_line(
   window: &mut Window,
   cx: &mut App,
 ) -> LaidOutLine {
-  let fragments = fragments_for_range(paragraph, &source_range, line_text.len());
+  let fragments = fragments_for_range(paragraph, &source_range, line_text);
   let mut x = px(0.0);
   let mut segments = Vec::with_capacity(fragments.len().max(1));
   let mut ascent = px(0.0);
@@ -2211,15 +2230,14 @@ fn font_metrics_for_format(format: &EffectiveRunFormat, cx: &mut App) -> (Pixels
 
 #[derive(Clone)]
 pub(super) struct VisualFragment {
-  styles: RunStyles,
-  line_range: Range<usize>,
-  source_start: usize,
+  pub(super) styles: RunStyles,
+  pub(super) line_range: Range<usize>,
+  pub(super) source_start: usize,
 }
 
-pub(super) fn fragments_for_range(paragraph: &Paragraph, range: &Range<usize>, rendered_len: usize) -> Vec<VisualFragment> {
+pub(super) fn fragments_for_range(paragraph: &Paragraph, range: &Range<usize>, rendered_text: &str) -> Vec<VisualFragment> {
   let mut byte_offset = 0;
-  let mut line_offset = 0;
-  let mut remaining = rendered_len;
+  let rendered_len = rendered_text.len();
   let mut fragments = Vec::with_capacity(paragraph.runs.len());
   for run in &paragraph.runs {
     let run_start = byte_offset;
@@ -2227,17 +2245,19 @@ pub(super) fn fragments_for_range(paragraph: &Paragraph, range: &Range<usize>, r
     byte_offset = run_end;
     let start = run_start.max(range.start);
     let end = run_end.min(range.end);
-    if start >= end || remaining == 0 {
+    if start >= end || rendered_len == 0 {
       continue;
     }
-    let len = (end - start).min(remaining);
+    let line_start = ceil_char_boundary(rendered_text, start.saturating_sub(range.start).min(rendered_len));
+    let line_end = ceil_char_boundary(rendered_text, end.saturating_sub(range.start).min(rendered_len));
+    if line_start >= line_end {
+      continue;
+    }
     fragments.push(VisualFragment {
       styles: run.styles,
-      line_range: line_offset..line_offset + len,
-      source_start: start,
+      line_range: line_start..line_end,
+      source_start: range.start + line_start,
     });
-    remaining -= len;
-    line_offset += len;
   }
   fragments
 }
