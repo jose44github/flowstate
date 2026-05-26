@@ -15,11 +15,7 @@ impl RichTextEditor {
       return false;
     };
     let viewport = self.scroll_handle.bounds();
-    let scroll_bottom = if DISABLE_SCROLL_LIMITING_FUNCTIONS {
-      px(f32::MAX)
-    } else {
-      (-self.scroll_handle.offset().y).max(px(0.0)) + viewport.size.height.max(px(700.0)) + overscan
-    };
+    let scroll_bottom = (-self.scroll_handle.offset().y).max(px(0.0)) + viewport.size.height.max(px(700.0)) + overscan;
     let mut remainders = Vec::new();
     for item_ix in visible_range {
       if let Some(VirtualItem::ParagraphRemainder { paragraph_ix, .. }) = cache.items.get(item_ix) {
@@ -55,9 +51,6 @@ impl RichTextEditor {
     let cache = self.item_sizes_cache.as_ref()?;
     if cache.item_count == 0 || self.height_prefix_index.len() != cache.item_count {
       return None;
-    }
-    if DISABLE_SCROLL_LIMITING_FUNCTIONS {
-      return Some(0..cache.item_count);
     }
     let viewport = self.scroll_handle.bounds();
     let viewport_height = viewport.size.height.max(px(700.0));
@@ -135,11 +128,7 @@ impl RichTextEditor {
   fn catch_up_chunk_target_lines(&self, remaining: Pixels) -> usize {
     let line_height = (self.document.theme.body_font_size * self.document.theme.line_spacing * 1.35).max(px(12.0));
     let approximate_lines = f32::from(remaining / line_height).ceil() as usize;
-    if DISABLE_SCROLL_LIMITING_FUNCTIONS {
-      approximate_lines.max(DEFAULT_PARAGRAPH_CHUNK_TARGET_LINES)
-    } else {
-      approximate_lines.clamp(DEFAULT_PARAGRAPH_CHUNK_TARGET_LINES, SCROLL_FOREGROUND_MAX_CHUNK_LINES)
-    }
+    approximate_lines.clamp(DEFAULT_PARAGRAPH_CHUNK_TARGET_LINES, SCROLL_FOREGROUND_MAX_CHUNK_LINES)
   }
 
 }
