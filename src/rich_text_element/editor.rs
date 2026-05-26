@@ -5242,6 +5242,11 @@ impl RichTextEditor {
       self.schedule_typing_prefetch_resume(cx);
       return;
     }
+    if self.recently_typed() {
+      self.chunk_prefetch_queue.clear();
+      self.schedule_typing_prefetch_resume(cx);
+      return;
+    }
     if self.is_interacting() {
       self.chunk_prefetch_queue.clear();
       return;
