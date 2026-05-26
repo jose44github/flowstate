@@ -633,13 +633,6 @@ fn check_document_fidelity(document: &Document) -> FidelityReport {
   for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
     let expected_range = paragraph_byte_range(document, paragraph_ix);
     report.check(
-      paragraph.byte_range == expected_range,
-      format!(
-        "paragraph {paragraph_ix} byte_range {:?} must match offset index {:?}",
-        paragraph.byte_range, expected_range
-      ),
-    );
-    report.check(
       full_text.is_char_boundary(expected_range.start) && full_text.is_char_boundary(expected_range.end),
       format!("paragraph {paragraph_ix} byte range must be on UTF-8 boundaries"),
     );
@@ -1391,9 +1384,9 @@ fn fingerprint_document(document: &Document) -> u64 {
     chunk.hash(&mut hasher);
   }
   document.paragraphs.len().hash(&mut hasher);
-  for paragraph in document.paragraphs.iter() {
+  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
     paragraph.style.hash(&mut hasher);
-    paragraph.byte_range.hash(&mut hasher);
+    paragraph_byte_range(document, paragraph_ix).hash(&mut hasher);
     paragraph.runs.hash(&mut hasher);
   }
   document.blocks.len().hash(&mut hasher);
@@ -1458,7 +1451,6 @@ fn hash_optional_paragraph(paragraph: Option<&Paragraph>, hasher: &mut impl Hash
 
 fn hash_paragraph(paragraph: &Paragraph, hasher: &mut impl Hasher) {
   paragraph.style.hash(hasher);
-  paragraph.byte_range.hash(hasher);
   paragraph.runs.hash(hasher);
   paragraph.version.hash(hasher);
 }

@@ -379,7 +379,7 @@ pub(super) fn paragraph_width(paragraphs: &[Paragraph], paragraph_ix: usize) -> 
   Some(paragraph_runs_len(paragraph) + newline_len)
 }
 
-pub(super) fn paragraph_byte_range(document: &Document, paragraph_ix: usize) -> Range<usize> {
+pub(crate) fn paragraph_byte_range(document: &Document, paragraph_ix: usize) -> Range<usize> {
   let start = document.offset_index.paragraph_start(paragraph_ix);
   start..start + paragraph_text_len(&document.paragraphs[paragraph_ix])
 }
@@ -404,31 +404,13 @@ pub(super) fn update_paragraph_offsets_after_len_change(document: &mut Document,
   if paragraph_ix >= document.paragraphs.len() {
     return;
   }
-  let old_width = document
-    .offset_index
-    .widths
-    .get(paragraph_ix)
-    .copied()
-    .unwrap_or(0);
   let start = document.offset_index.paragraph_start(paragraph_ix);
   document
     .offset_index
     .update_paragraph_width(paragraph_ix, &document.paragraphs);
-  let new_width = document
-    .offset_index
-    .widths
-    .get(paragraph_ix)
-    .copied()
-    .unwrap_or(old_width);
-  let delta = new_width as isize - old_width as isize;
   {
     let paragraphs = paragraphs_mut(document);
     paragraphs[paragraph_ix].byte_range = start..start + paragraph_runs_len(&paragraphs[paragraph_ix]);
-    if delta != 0 {
-      for paragraph in paragraphs.iter_mut().skip(paragraph_ix + 1) {
-        paragraph.byte_range = paragraph.byte_range.start.saturating_add_signed(delta)..paragraph.byte_range.end.saturating_add_signed(delta);
-      }
-    }
   }
   update_paragraph_block(document, paragraph_ix);
 }
