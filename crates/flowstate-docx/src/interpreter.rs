@@ -56,6 +56,7 @@ pub const RECOGNITION_RULES: &[RecognitionRule] = &[
   RecognitionRule::RunDirectUnderline,
   RecognitionRule::RunStrikethrough,
   RecognitionRule::RunHighlightToSpoken,
+  RecognitionRule::RunShadingToSpoken,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,6 +73,7 @@ pub enum RecognitionRule {
   RunDirectUnderline,
   RunStrikethrough,
   RunHighlightToSpoken,
+  RunShadingToSpoken,
 }
 
 #[derive(Clone, Debug)]

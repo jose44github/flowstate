@@ -9,6 +9,7 @@ use gpui::{
   actions, div, prelude::*, px, relative, rgb,
 };
 use gpui_component::button::{Button, ButtonVariants as _};
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable as _, StyledExt as _, Theme, ThemeRegistry, h_flex, v_flex};
 
 use crate::app_settings::load_app_settings;
@@ -86,7 +87,7 @@ fn flow_prompt_renderer(
   let renderer = cx.new(|cx| FlowPromptRenderer {
     level,
     message: message.to_string(),
-    detail: detail.map(ToString::to_string),
+    detail: detail.map(wrap_prompt_detail),
     actions: actions.to_vec(),
     focus: cx.focus_handle(),
   });
@@ -155,6 +156,8 @@ impl Render for FlowPromptRenderer {
           .tab_group()
           .w(px(440.0))
           .max_w(px(560.0))
+          .max_w_full()
+          .max_h(px(420.0))
           .bg(cx.theme().background)
           .border_1()
           .border_color(cx.theme().border)
@@ -162,6 +165,7 @@ impl Render for FlowPromptRenderer {
           .shadow_lg()
           .p_5()
           .gap_4()
+          .overflow_hidden()
           .on_action(cx.listener(Self::on_accept))
           .on_action(cx.listener(Self::on_cancel))
           .child(
@@ -181,19 +185,27 @@ impl Render for FlowPromptRenderer {
               )
               .child(
                 v_flex()
+                  .min_w(px(0.0))
+                  .flex_1()
                   .gap_1()
                   .child(
                     div()
+                      .min_w(px(0.0))
                       .text_lg()
                       .font_semibold()
                       .line_height(relative(1.2))
+                      .whitespace_normal()
                       .text_color(cx.theme().foreground)
                       .child(self.message.clone()),
                   )
                   .children(self.detail.clone().map(|detail| {
                     div()
+                      .min_w(px(0.0))
+                      .max_h(px(260.0))
+                      .overflow_y_scrollbar()
                       .text_sm()
                       .line_height(relative(1.45))
+                      .whitespace_normal()
                       .text_color(cx.theme().muted_foreground)
                       .child(detail)
                   })),
@@ -220,6 +232,33 @@ impl Render for FlowPromptRenderer {
           ),
       )
   }
+}
+
+fn wrap_prompt_detail(detail: &str) -> String {
+  const MAX_RUN: usize = 72;
+  let mut wrapped = String::with_capacity(detail.len() + detail.len() / MAX_RUN);
+  let mut run_len = 0usize;
+
+  for ch in detail.chars() {
+    if ch == '\n' {
+      wrapped.push(ch);
+      run_len = 0;
+      continue;
+    }
+    if ch.is_whitespace() {
+      wrapped.push(ch);
+      run_len = 0;
+      continue;
+    }
+    if run_len >= MAX_RUN {
+      wrapped.push('\n');
+      run_len = 0;
+    }
+    wrapped.push(ch);
+    run_len += 1;
+  }
+
+  wrapped
 }
 
 impl EventEmitter<PromptResponse> for FlowPromptRenderer {}
