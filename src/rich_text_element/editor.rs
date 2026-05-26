@@ -7968,6 +7968,9 @@ fn char_index_for_byte(text: &str, byte: usize) -> usize {
     .count()
 }
 
+static EQUATION_SVG_CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
+static EQUATION_PNG_CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
+
 struct EquationRenderer;
 
 impl EquationRenderer {
@@ -7977,10 +7980,7 @@ impl EquationRenderer {
       return;
     }
 
-    static SVG_CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
-    static PNG_CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
-
-    if let Some(cache) = SVG_CACHE.get()
+    if let Some(cache) = EQUATION_SVG_CACHE.get()
       && let Ok(mut cache) = cache.lock()
     {
       for key in &keys {
@@ -7988,7 +7988,7 @@ impl EquationRenderer {
       }
     }
 
-    if let Some(cache) = PNG_CACHE.get()
+    if let Some(cache) = EQUATION_PNG_CACHE.get()
       && let Ok(mut cache) = cache.lock()
     {
       for key in &keys {
@@ -7998,10 +7998,9 @@ impl EquationRenderer {
   }
 
   fn svg_bytes(equation: &EquationBlock) -> Result<Arc<Vec<u8>>, String> {
-    static SVG_CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
     let display = matches!(equation.display, EquationDisplay::Display);
     let key = (equation.source.to_string(), display);
-    let cache = SVG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = EQUATION_SVG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().ok().and_then(|cache| cache.get(&key).cloned()) {
       return cached;
     }
@@ -8019,10 +8018,9 @@ impl EquationRenderer {
   }
 
   fn png_bytes(equation: &EquationBlock) -> Result<Arc<Vec<u8>>, String> {
-    static PNG_CACHE: OnceLock<Mutex<HashMap<(String, bool), Result<Arc<Vec<u8>>, String>>>> = OnceLock::new();
     let display = matches!(equation.display, EquationDisplay::Display);
     let key = (equation.source.to_string(), display);
-    let cache = PNG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let cache = EQUATION_PNG_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(cached) = cache.lock().ok().and_then(|cache| cache.get(&key).cloned()) {
       return cached;
     }
