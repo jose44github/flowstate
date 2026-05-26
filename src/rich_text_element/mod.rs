@@ -42,6 +42,7 @@ use document::{
   ParagraphOffsetIndex, RichClipboardFragment, SOFT_LINE_BREAK, SOFT_LINE_BREAK_STR, block_ix_for_paragraph, document_offset_for_position,
   document_position_for_offset, paragraph_blocks_from_paragraphs, paragraphs_mut, replace_paragraph_blocks, update_paragraph_block,
 };
+pub(crate) use edit_ops::paragraph_byte_range;
 use edit_ops::*;
 use editor::SelectionGranularity;
 use element::*;

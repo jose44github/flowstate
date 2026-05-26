@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::app_settings::{load_document_theme, load_smart_word_selection, save_document_theme, save_smart_word_selection, save_theme_name};
 use crate::docx_conversion::convert_docx_to_document;
 use crate::rich_text_element::{
-  Document, DocumentTheme, ParagraphStyle, RichTextEditor, Save, ThemeUnderline, demo_document, load_or_create_document,
+  Document, DocumentTheme, ParagraphStyle, RichTextEditor, Save, ThemeUnderline, demo_document, load_or_create_document, paragraph_byte_range,
 };
 use crate::workspace::document_panel::DocumentPanel;
 use crate::workspace::file_management::{UNTITLED_DOCUMENT_NAME, default_save_directory, new_blank_document, normalize_db8_path};
@@ -538,22 +538,22 @@ impl Workspace {
     let Some(editor) = &self.active_editor else {
       return;
     };
-    let generation = editor.read(cx).edit_generation();
+    let document = editor.read(cx).document().clone();
+    let signature = outline_signature(&document);
     if self
       .outline_cache
       .as_ref()
-      .is_some_and(|cache| cache.document_id == active_id && cache.generation == generation && cache.visible_revision == self.outline_revision)
+      .is_some_and(|cache| cache.document_id == active_id && cache.signature == signature && cache.visible_revision == self.outline_revision)
     {
       return;
     }
 
-    let document = editor.read(cx).document().clone();
     let rebuild_structure = self
       .outline_cache
       .as_ref()
-      .is_none_or(|cache| cache.document_id != active_id || cache.generation != generation);
+      .is_none_or(|cache| cache.document_id != active_id || cache.signature != signature);
     if rebuild_structure {
-      self.outline_cache = Some(OutlineCache::new(active_id, generation, outline_nodes(&document)));
+      self.outline_cache = Some(OutlineCache::new(active_id, signature));
     }
     let Some(cache) = self.outline_cache.as_mut() else {
       return;
@@ -1703,7 +1703,7 @@ pub fn open_workspace_window(document_path: Option<PathBuf>, cx: &mut App) {
 #[derive(Clone)]
 struct OutlineCache {
   document_id: Uuid,
-  generation: u64,
+  signature: OutlineSignature,
   visible_revision: u64,
   nodes: Rc<Vec<OutlineNode>>,
   visible_paragraphs: Vec<usize>,
@@ -1711,10 +1711,11 @@ struct OutlineCache {
 }
 
 impl OutlineCache {
-  fn new(document_id: Uuid, generation: u64, nodes: Vec<OutlineNode>) -> Self {
+  fn new(document_id: Uuid, signature: OutlineSignature) -> Self {
+    let nodes = outline_nodes_from_entries(&signature.entries);
     Self {
       document_id,
-      generation,
+      signature,
       visible_revision: u64::MAX,
       nodes: Rc::new(nodes),
       visible_paragraphs: Vec::new(),
@@ -1732,6 +1733,19 @@ impl OutlineCache {
       .collect();
     self.visible_revision = revision;
   }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct OutlineSignature {
+  paragraph_count: usize,
+  entries: Vec<OutlineEntry>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct OutlineEntry {
+  paragraph_ix: usize,
+  level: usize,
+  text: String,
 }
 
 #[derive(Clone)]
@@ -1772,24 +1786,46 @@ fn outline_node_to_tree_item(node: &OutlineNode, collapsed_items: &HashSet<usize
     .disabled(true)
 }
 
+#[cfg(test)]
 fn outline_nodes(document: &Document) -> Vec<OutlineNode> {
+  let signature = outline_signature(document);
+  outline_nodes_from_entries(&signature.entries)
+}
+
+fn outline_nodes_from_entries(entries: &[OutlineEntry]) -> Vec<OutlineNode> {
   let mut roots = Vec::<OutlineNode>::new();
-  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
-    let Some(level) = outline_level(paragraph.style) else {
-      continue;
-    };
+  for entry in entries {
     insert_outline_node(
       &mut roots,
-      level,
+      entry.level,
       OutlineNode {
-        paragraph_ix,
-        level,
-        text: outline_paragraph_label(document, paragraph_ix),
+        paragraph_ix: entry.paragraph_ix,
+        level: entry.level,
+        text: entry.text.clone(),
         children: Vec::new(),
       },
     );
   }
   roots
+}
+
+fn outline_signature(document: &Document) -> OutlineSignature {
+  let mut entries = Vec::new();
+  for (paragraph_ix, paragraph) in document.paragraphs.iter().enumerate() {
+    let Some(level) = outline_level(paragraph.style) else {
+      continue;
+    };
+    entries.push(OutlineEntry {
+      paragraph_ix,
+      level,
+      text: outline_paragraph_label(document, paragraph_ix),
+    });
+  }
+
+  OutlineSignature {
+    paragraph_count: document.paragraphs.len(),
+    entries,
+  }
 }
 
 fn collect_visible_outline_paragraphs(nodes: &[OutlineNode], collapsed_items: &HashSet<usize>, output: &mut Vec<usize>) {
@@ -1836,18 +1872,14 @@ fn outline_paragraph_ix(id: &str) -> Option<usize> {
 }
 
 fn outline_paragraph_label(document: &Document, paragraph_ix: usize) -> String {
-  let paragraph = &document.paragraphs[paragraph_ix];
+  let paragraph_range = paragraph_byte_range(document, paragraph_ix);
   const MAX_BYTES: usize = 80;
   const TRUNCATED_BYTES: usize = MAX_BYTES - 3;
   let mut label = String::new();
   let mut pending_space = false;
   let mut truncated = false;
 
-  'chunks: for chunk in document
-    .text
-    .byte_slice(paragraph.byte_range.clone())
-    .chunks()
-  {
+  'chunks: for chunk in document.text.byte_slice(paragraph_range).chunks() {
     for ch in chunk.chars() {
       if ch.is_whitespace() {
         pending_space = !label.is_empty();
@@ -2752,5 +2784,45 @@ mod tests {
     assert_eq!(visible, vec![0, 4]);
     assert_eq!(active_visible_outline_paragraph_from_visible(&visible, 3), Some(0));
     assert_eq!(active_visible_outline_paragraph_from_visible(&visible, 4), Some(4));
+  }
+
+  #[test]
+  fn outline_signature_ignores_non_outline_text_edits() {
+    let before = document_from_paragraphs(
+      DocumentTheme::default(),
+      vec![paragraph(ParagraphStyle::Pocket, "Root"), paragraph(ParagraphStyle::Normal, "Body")],
+    );
+    let after = document_from_paragraphs(
+      DocumentTheme::default(),
+      vec![
+        paragraph(ParagraphStyle::Pocket, "Root"),
+        paragraph(ParagraphStyle::Normal, "Body with more plain text"),
+      ],
+    );
+
+    assert!(outline_signature(&before) == outline_signature(&after));
+  }
+
+  #[test]
+  fn outline_signature_tracks_outline_labels_and_paragraph_count() {
+    let before = document_from_paragraphs(
+      DocumentTheme::default(),
+      vec![paragraph(ParagraphStyle::Pocket, "Root"), paragraph(ParagraphStyle::Normal, "Body")],
+    );
+    let renamed = document_from_paragraphs(
+      DocumentTheme::default(),
+      vec![paragraph(ParagraphStyle::Pocket, "Renamed"), paragraph(ParagraphStyle::Normal, "Body")],
+    );
+    let appended = document_from_paragraphs(
+      DocumentTheme::default(),
+      vec![
+        paragraph(ParagraphStyle::Pocket, "Root"),
+        paragraph(ParagraphStyle::Normal, "Body"),
+        paragraph(ParagraphStyle::Normal, "More body"),
+      ],
+    );
+
+    assert!(outline_signature(&before) != outline_signature(&renamed));
+    assert!(outline_signature(&before) != outline_signature(&appended));
   }
 }

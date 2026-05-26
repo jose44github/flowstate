@@ -201,7 +201,7 @@ fn mouse_selection_can_disable_smart_word_snapping() {
 }
 
 #[test]
-fn single_paragraph_edits_refresh_following_cached_byte_ranges() {
+fn single_paragraph_edits_keep_following_derived_byte_ranges_current() {
   let mut document = document_from_input(
     DocumentTheme::default(),
     vec![
@@ -218,8 +218,9 @@ fn single_paragraph_edits_refresh_following_cached_byte_ranges() {
 
   insert_text_at(&mut document, 0, "first".len(), " extended", RunStyles::default());
 
-  assert_eq!(document_text_slice(&document, document.paragraphs[1].byte_range.clone()), "second");
-  assert!(document.paragraphs[1].byte_range.end <= document.text.byte_len());
+  let range = paragraph_byte_range(&document, 1);
+  assert_eq!(document_text_slice(&document, range.clone()), "second");
+  assert!(range.end <= document.text.byte_len());
 }
 
 #[test]
