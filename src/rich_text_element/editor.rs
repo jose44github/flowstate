@@ -4351,6 +4351,9 @@ impl RichTextEditor {
     if let Some(sizes) = self.try_patch_item_sizes_cache(width, scroll_anchor.clone(), window, cx) {
       return sizes;
     }
+    if let Some(sizes) = self.try_patch_item_sizes_cache(width, scroll_anchor.clone(), window, cx) {
+      return sizes;
+    }
     self.rebuild_item_sizes_cache(width, scroll_anchor, window, cx)
   }
 
