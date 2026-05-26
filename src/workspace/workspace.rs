@@ -173,6 +173,9 @@ impl Workspace {
       self.outline_cache = None;
       self.outline_caret_paragraph = None;
       self.collapsed_outline_items.clear();
+      self
+        .outline_tree
+        .update(cx, |tree, cx| tree.set_items(Vec::<TreeItem>::new(), cx));
     }
     cx.notify();
   }
