@@ -4,19 +4,22 @@ version = "0.1.0"
 edition = "2024"
 default-run = "flowstate"
 
+[workspace]
+members = [".", "crates/flowstate-document", "crates/flowstate-docx"]
+resolver = "3"
+
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.5", features = ["derive"] }
 fff-search = "0.8.2-nightly.ffb39a8"
+flowstate-document = { path = "crates/flowstate-document" }
+flowstate-docx = { path = "crates/flowstate-docx" }
 gpui = "0.2.2"
 gpui-component = "0.5.1"
 gpui-component-assets = "0.5.1"
 crop = "0.4.3"
 imagesize = "0.13"
 mathjax_svg = "3.2.0"
-rdocx = "0.1.2"
-rdocx-opc = "0.1.2"
-rdocx-oxml = "0.1.2"
 resvg = "0.45.1"
 rustc-hash = "2"
 unicode-segmentation = "1"

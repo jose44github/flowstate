@@ -2146,15 +2146,14 @@ dependencies = [
  "dir",
  "dirs 6.0.0",
  "fff-search",
+ "flowstate-document",
+ "flowstate-docx",
  "gpui",
  "gpui-component",
  "gpui-component-assets",
  "gpui-symbols",
  "imagesize",
  "mathjax_svg",
- "rdocx",
- "rdocx-opc",
- "rdocx-oxml",
  "resvg",
  "rustc-hash 2.1.2",
  "serde",
@@ -2162,6 +2161,27 @@ dependencies = [
  "tempfile",
  "unicode-segmentation",
  "uuid",
+]
+
+[[package]]
+name = "flowstate-document"
+version = "0.1.0"
+dependencies = [
+ "crop",
+ "gpui",
+ "serde",
+ "tempfile",
+ "uuid",
+]
+
+[[package]]
+name = "flowstate-docx"
+version = "0.1.0"
+dependencies = [
+ "flowstate-document",
+ "rdocx",
+ "rdocx-opc",
+ "rdocx-oxml",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+include!("core.rs");
+include!("editor_render.rs");
+include!("legacy.rs");
+include!("modern_types.rs");
+include!("modern_impl.rs");
+include!("metrics.rs");
+include!("modern_layout.rs");
+include!("menus.rs");
+include!("commands.rs");
+include!("command_dispatch.rs");
+include!("helpers.rs");

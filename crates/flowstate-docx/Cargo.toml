@@ -1,0 +1,10 @@
+[package]
+name = "flowstate-docx"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flowstate-document = { path = "../flowstate-document" }
+rdocx = "0.1.2"
+rdocx-opc = "0.1.2"
+rdocx-oxml = "0.1.2"

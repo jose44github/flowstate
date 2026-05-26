@@ -1,65 +1,30 @@
-// Submodules. Public items are re-exported below to preserve the old
-// `rich_text_element` API, while internal imports keep sibling modules able to
-// share implementation details without exposing them outside this module tree.
+// Submodules. Document model, edit helpers, persistence, demo builders, and
+// collaboration IDs live in `flowstate-document`; this module keeps the old
+// `rich_text_element` facade while editor/UI internals stay in the app crate.
 mod benchmarks;
-mod collaboration;
-mod demo;
-mod document;
-mod edit_ops;
 mod editor;
 mod element;
 mod invisibility;
 mod layout;
 mod paint;
-mod persistence;
 mod selection;
 mod tools;
 mod word_boundary;
 
 pub use benchmarks::{BenchmarkOptions, BenchmarkRunner};
-pub use collaboration::{BlockId, CanonicalOperation, CollaborationEdit, ParagraphId, TableCellId};
-pub use demo::{blank_document, demo_document, document_from_paragraphs};
-pub use document::{
-  AssetId, AssetRecord, AssetStore, Block, BlockAlignment, Document, DocumentOffset, DocumentParagraphInput, DocumentPosition, DocumentRunInput,
-  DocumentTheme, EquationBlock, EquationDisplay, EquationSyntax, HighlightStyle, ImageBlock, ImageSizing, ObjectAffinity, Paragraph,
-  ParagraphStyle, RunSemanticStyle, RunStyle, RunStyles, TableBlock, TableCell, TableCellBlock, TableCellParagraph, TableColumnWidth, TableRow,
-  TableStyle, TextRun, ThemeUnderline,
-};
 pub use editor::*;
 pub use element::RichTextDocumentElement;
-// `read_db8` is part of the public persistence API even though only tests
-// consume it inside this crate today; allow the unused-import lint so the
-// re-export stays in place.
-#[allow(unused_imports)]
-pub use persistence::{load_or_create_document, read_db8, write_db8};
+pub use flowstate_document::*;
 pub use tools::ArmedInlineTool;
 
 // Internal imports used by sibling modules via `use super::*;`.
-use collaboration::DocumentIdentityMap;
-use document::{
-  InputAsset, InputBlock, InputBlockAlignment, InputEquationBlock, InputEquationDisplay, InputEquationSyntax, InputImageBlock, InputImageSizing,
-  InputParagraph, InputRun, InputTableBlock, InputTableCell, InputTableCellBlock, InputTableColumnWidth, InputTableRow, InputTableStyle,
-  ParagraphOffsetIndex, RichClipboardFragment, SOFT_LINE_BREAK, SOFT_LINE_BREAK_STR, block_ix_for_paragraph, document_offset_for_position,
-  document_position_for_offset, paragraph_blocks_from_paragraphs, paragraphs_mut, replace_paragraph_blocks, update_paragraph_block,
-};
-pub(crate) use edit_ops::paragraph_byte_range;
-use edit_ops::*;
 use editor::SelectionGranularity;
 use element::*;
 use invisibility::*;
 use layout::*;
 use paint::*;
-use persistence::recovery_path_for_document;
 use selection::*;
 use word_boundary::*;
-
-// Private re-imports for the test module. Tests live in `mod tests;` (a child
-// of this module) and use `use super::*;`, so the names need to be in this
-// module's namespace. Outside `#[cfg(test)]` they would be unused.
-#[cfg(test)]
-use demo::{document_from_input, plain, run};
-#[cfg(test)]
-use editor::{EditOperation, adjust_drop_after_source_delete};
 
 use std::time::Instant;
 
@@ -78,6 +43,9 @@ pub(crate) fn log_timing(label: &str, start: Instant, detail: impl AsRef<str>) {
     eprintln!("[timing] {label}: {:?} {}", start.elapsed(), detail.as_ref());
   }
 }
+
+#[cfg(test)]
+use editor::{EditOperation, adjust_drop_after_source_delete};
 
 #[cfg(test)]
 mod tests;

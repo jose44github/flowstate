@@ -1,0 +1,11 @@
+[package]
+name = "flowstate-document"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+crop = "0.4.3"
+gpui = "0.2.2"
+serde = { version = "1.0", features = ["derive"] }
+tempfile = "3"
+uuid = { version = "1.23.1", features = ["serde", "v4"] }

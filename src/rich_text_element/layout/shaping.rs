@@ -1,0 +1,245 @@
+pub(super) fn measure_line_width(
+  document: &Document,
+  paragraph: &Paragraph,
+  p_format: &EffectiveParagraphFormat,
+  paragraph_text: &str,
+  source_range: Range<usize>,
+  rendered_len: usize,
+  shape_cache: &mut FragmentShapeCache,
+  window: &mut Window,
+) -> Pixels {
+  let mut width = px(0.0);
+  let rendered_start = clamp_to_char_boundary(paragraph_text, source_range.start);
+  let rendered_end = clamp_to_char_boundary(
+    paragraph_text,
+    source_range
+      .start
+      .saturating_add(rendered_len)
+      .min(source_range.end)
+      .min(paragraph_text.len()),
+  )
+  .max(rendered_start);
+  let rendered_range = rendered_start..rendered_end;
+  let rendered_text = &paragraph_text[rendered_range.clone()];
+  let measure_key = LineMeasureCacheKey {
+    start: rendered_range.start,
+    end: rendered_range.end,
+  };
+  if let Some(width) = shape_cache.line_widths.get(&measure_key) {
+    return *width;
+  }
+  for fragment in fragments_for_range(paragraph, &rendered_range, rendered_text) {
+    let text = &rendered_text[fragment.line_range.clone()];
+    if text.is_empty() {
+      continue;
+    }
+    let format = run_format(document, p_format.clone(), fragment.styles);
+    let run_start = clamp_to_char_boundary(paragraph_text, fragment.run_range.start.min(paragraph_text.len()));
+    let run_end = clamp_to_char_boundary(paragraph_text, fragment.run_range.end.min(paragraph_text.len())).max(run_start);
+    let run_text = &paragraph_text[run_start..run_end];
+    let shaped = shape_fragment_cached(window, run_text, format.clone(), run_start, fragment.styles, shape_cache);
+    let fragment_start = fragment
+      .source_start
+      .saturating_sub(run_start)
+      .min(run_text.len());
+    let fragment_end = fragment_start
+      .saturating_add(text.len())
+      .min(run_text.len());
+    let fragment_width = (shaped.x_for_index(fragment_end) - shaped.x_for_index(fragment_start)).max(px(0.0));
+    if format.border_width > px(0.0) {
+      width += document.theme.box_padding_left;
+    }
+    width += fragment_width;
+    if format.border_width > px(0.0) {
+      width += document.theme.box_padding_right;
+    }
+  }
+  shape_cache.line_widths.insert(measure_key, width);
+  width
+}
+
+pub(super) fn shape_line(
+  document: &Document,
+  paragraph: &Paragraph,
+  p_format: EffectiveParagraphFormat,
+  line_text: &str,
+  source_range: Range<usize>,
+  shape_cache: &mut FragmentShapeCache,
+  window: &mut Window,
+  cx: &mut App,
+) -> LaidOutLine {
+  let fragments = fragments_for_range(paragraph, &source_range, line_text);
+  let mut x = px(0.0);
+  let mut segments = Vec::with_capacity(fragments.len().max(1));
+  let mut ascent = px(0.0);
+  let mut descent = px(0.0);
+
+  for fragment in fragments {
+    let text = &line_text[fragment.line_range.clone()];
+    if text.is_empty() {
+      continue;
+    }
+    let format = run_format(document, p_format.clone(), fragment.styles);
+    let shaped = shape_fragment_cached(window, text, format.clone(), fragment.source_start, fragment.styles, shape_cache);
+    let width = shaped.width;
+    let box_margin_left = if format.border_width > px(0.0) {
+      document.theme.box_padding_left
+    } else {
+      px(0.0)
+    };
+    let box_margin_right = if format.border_width > px(0.0) {
+      document.theme.box_padding_right
+    } else {
+      px(0.0)
+    };
+    let segment_ascent = shaped.ascent;
+    let segment_descent = shaped.descent;
+    ascent = ascent.max(segment_ascent);
+    descent = descent.max(segment_descent);
+    x += box_margin_left;
+    segments.push(LaidOutSegment {
+      shaped,
+      x,
+      width,
+      format: format.clone(),
+      ascent: segment_ascent,
+      descent: segment_descent,
+      font_size: format.font_size,
+      start_byte: fragment.source_start,
+    });
+    x += width + box_margin_right;
+  }
+
+  if segments.is_empty() {
+    let format = run_format(document, p_format.clone(), RunStyles::default());
+    let shaped = shape_fragment(window, "", format.clone());
+    #[cfg(target_os = "linux")]
+    let (segment_ascent, segment_descent) = {
+      let (font_ascent, font_descent) = font_metrics_for_format(&format, cx);
+      (shaped.ascent.max(font_ascent), shaped.descent.max(font_descent))
+    };
+    #[cfg(not(target_os = "linux"))]
+    let (segment_ascent, segment_descent) = (shaped.ascent, shaped.descent);
+    segments.push(LaidOutSegment {
+      shaped,
+      format: format.clone(),
+      x: px(0.0),
+      width: px(0.0),
+      ascent: segment_ascent,
+      descent: segment_descent,
+      font_size: format.font_size,
+      start_byte: source_range.start,
+    });
+  }
+
+  ascent = segments
+    .iter()
+    .map(|segment| segment.ascent)
+    .fold(px(0.0), Pixels::max);
+  descent = segments
+    .iter()
+    .map(|segment| segment.descent)
+    .fold(px(0.0), Pixels::max);
+
+  let max_font_size = segments
+    .iter()
+    .map(|segment| segment.font_size)
+    .fold(p_format.font_size, Pixels::max);
+  let line_gap = max_font_size * document.theme.line_gap_fraction;
+  let line_height = (ascent + descent + line_gap) * p_format.line_spacing;
+  let mut line = LaidOutLine {
+    origin: point(px(0.0), px(0.0)),
+    line_height,
+    ascent,
+    descent,
+    width: x,
+    start_byte: source_range.start,
+    end_byte: source_range.end,
+    segments,
+    rects: Vec::new(),
+    underlines: Vec::new(),
+    strikethroughs: Vec::new(),
+  };
+  line.rects = rects_for_line(document, &line);
+  line.underlines = underlines_for_line(document, &line, cx);
+  line.strikethroughs = strikethroughs_for_line(document, &line);
+  line
+}
+
+#[derive(Default)]
+pub(super) struct FragmentShapeCache {
+  shapes: FxHashMap<FragmentShapeCacheKey, ShapedLine>,
+  line_widths: FxHashMap<LineMeasureCacheKey, Pixels>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct FragmentShapeCacheKey {
+  source_start: usize,
+  len: usize,
+  styles: RunStyles,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct LineMeasureCacheKey {
+  start: usize,
+  end: usize,
+}
+
+pub(super) fn shape_fragment_cached(
+  window: &mut Window,
+  text: &str,
+  format: EffectiveRunFormat,
+  source_start: usize,
+  styles: RunStyles,
+  cache: &mut FragmentShapeCache,
+) -> ShapedLine {
+  let key = FragmentShapeCacheKey {
+    source_start,
+    len: text.len(),
+    styles,
+  };
+  if let Some(shaped) = cache.shapes.get(&key) {
+    return shaped.clone();
+  }
+  let shaped = shape_fragment(window, text, format);
+  cache.shapes.insert(key, shaped.clone());
+  shaped
+}
+
+pub(super) fn shape_fragment(window: &mut Window, text: &str, format: EffectiveRunFormat) -> ShapedLine {
+  let mut run_font = font(format.font_family);
+  run_font.weight = if format.bold { FontWeight::BOLD } else { FontWeight::NORMAL };
+  run_font.style = if format.italic { FontStyle::Italic } else { FontStyle::Normal };
+  let run = GpuiTextRun {
+    len: text.len(),
+    font: run_font,
+    color: format.color,
+    background_color: None,
+    underline: None,
+    strikethrough: None,
+  };
+  window
+    .text_system()
+    .shape_line(SharedString::new(text), format.font_size, &[run], None)
+}
+
+#[cfg(target_os = "linux")]
+fn font_metrics_for_format(format: &EffectiveRunFormat, cx: &mut App) -> (Pixels, Pixels) {
+  let mut run_font = font(format.font_family.clone());
+  run_font.weight = if format.bold { FontWeight::BOLD } else { FontWeight::NORMAL };
+  run_font.style = if format.italic { FontStyle::Italic } else { FontStyle::Normal };
+  let font_id = cx.text_system().resolve_font(&run_font);
+  (
+    cx.text_system().ascent(font_id, format.font_size),
+    cx.text_system().descent(font_id, format.font_size),
+  )
+}
+
+#[derive(Clone)]
+pub(super) struct VisualFragment {
+  pub(super) styles: RunStyles,
+  pub(super) line_range: Range<usize>,
+  pub(super) run_range: Range<usize>,
+  pub(super) source_start: usize,
+}
+
