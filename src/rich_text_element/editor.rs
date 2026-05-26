@@ -1623,7 +1623,7 @@ impl RichTextEditor {
     }
     self.invisibility_mode = enabled;
     self.invalidate_document_layout_caches();
-    self.scroll_head_into_view();
+    self.pending_scroll_head_after_layout = true;
     cx.notify();
   }
 

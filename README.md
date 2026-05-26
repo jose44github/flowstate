@@ -6,4 +6,4 @@ To build Flowstate, you need to have [Cargo](https://doc.rust-lang.org/cargo/) i
 Run `cargo run --release` to build and run.
 
 # License
-Flowstate is licensed under the GNU General Public License v3.0.
+Flowstate is licensed under the GNU Affero General Public License v3.0.
