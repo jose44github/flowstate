@@ -3903,6 +3903,8 @@ impl RichTextEditor {
     self.after_text_mutation(cx);
     self.suppress_mutation_notify = self.suppress_mutation_notify.saturating_sub(1);
     self.mark_document_changed_with_reconcile(after_generation, false, cx);
+    self.mark_document_changed_with_reconcile(after_generation, false, cx);
+    self.after_text_mutation(cx);
     true
   }
 
