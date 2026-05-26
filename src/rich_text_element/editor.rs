@@ -18,6 +18,7 @@ use gpui::{
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::{VirtualListScrollHandle, v_virtual_list};
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::*;
 
@@ -145,6 +146,12 @@ struct EditRecord {
 
 #[derive(Clone, Debug)]
 pub(super) enum EditOperation {
+  InsertText {
+    paragraph: usize,
+    byte: usize,
+    text: String,
+    styles: RunStyles,
+  },
   ReplaceParagraphSpan {
     before: DocumentSpan,
     after: DocumentSpan,
@@ -183,6 +190,9 @@ pub(super) enum EditOperation {
 impl EditOperation {
   pub(super) fn undo(&self, document: &mut Document) {
     match self {
+      Self::InsertText { paragraph, byte, text, .. } => {
+        delete_range_in_paragraph(document, *paragraph, *byte..*byte + text.len());
+      },
       Self::ReplaceParagraphSpan { before, after } => apply_document_span_replacement(document, after, before),
       Self::InsertRichFragment { offset, inserted_end, .. } => delete_cross_paragraph_range(document, *offset..*inserted_end),
       Self::DeleteBlock { block_ix, block } => {
@@ -215,6 +225,14 @@ impl EditOperation {
 
   pub(super) fn redo(&self, document: &mut Document) {
     match self {
+      Self::InsertText {
+        paragraph,
+        byte,
+        text,
+        styles,
+      } => {
+        insert_text_at(document, *paragraph, *byte, text, *styles);
+      },
       Self::ReplaceParagraphSpan { before, after } => apply_document_span_replacement(document, before, after),
       Self::InsertRichFragment { offset, fragment, .. } => {
         insert_rich_fragment_at(document, *offset, fragment);
@@ -321,6 +339,10 @@ fn point_distance_squared(a: Point<Pixels>, b: Point<Pixels>) -> f32 {
   let dx = ax - bx;
   let dy = ay - by;
   dx * dx + dy * dy
+}
+
+fn is_single_grapheme_text_insert(text: &str) -> bool {
+  !text.is_empty() && !text.contains('\n') && !text.contains(SOFT_LINE_BREAK) && text.graphemes(true).take(2).count() == 1
 }
 
 pub(super) fn adjust_drop_after_source_delete(drop: DocumentOffset, source: Range<DocumentOffset>) -> DocumentOffset {
@@ -1952,6 +1974,9 @@ impl RichTextEditor {
   }
 
   pub fn insert_text_command(&mut self, text: &str, cx: &mut Context<Self>) {
+    if self.insert_single_grapheme_fast_path(text, cx) {
+      return;
+    }
     self.apply_document_edit(cx, |editor, cx| editor.insert_text(text, cx));
   }
 
@@ -3766,6 +3791,68 @@ impl RichTextEditor {
 
   pub(super) fn apply_document_edit(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Self, &mut Context<Self>)) {
     self.apply_document_edit_with_capture_range(cx, None, edit);
+  }
+
+  fn insert_single_grapheme_fast_path(&mut self, text: &str, cx: &mut Context<Self>) -> bool {
+    if !is_single_grapheme_text_insert(text) || !self.selection.is_caret() || self.selected_block.is_some() {
+      return false;
+    }
+    let caret = self.selection.head;
+    let Some(paragraph) = self.document.paragraphs.get(caret.paragraph) else {
+      return false;
+    };
+    if caret.byte > paragraph_text_len(paragraph) {
+      return false;
+    }
+    let Some(paragraph_id) = self.identity_map.paragraph_id(caret.paragraph) else {
+      return false;
+    };
+
+    let before_selection = self.selection.clone();
+    let before_generation = self.edit_generation;
+    let after_generation = self.next_edit_generation;
+    self.next_edit_generation = self.next_edit_generation.wrapping_add(1);
+    let styles = if let Some(styles) = self.pending_styles {
+      styles
+    } else {
+      let (run_ix, _) = run_containing(paragraph, caret.byte);
+      paragraph
+        .runs
+        .get(run_ix)
+        .map(|run| run.styles)
+        .unwrap_or_default()
+    };
+
+    insert_text_at(&mut self.document, caret.paragraph, caret.byte, text, styles);
+    let after = DocumentOffset {
+      paragraph: caret.paragraph,
+      byte: caret.byte + text.len(),
+    };
+    self.selection = EditorSelection { anchor: after, head: after };
+
+    self.undo_stack.push(EditRecord {
+      before_selection,
+      before_generation,
+      after_selection: self.selection.clone(),
+      after_generation,
+      operations: vec![EditOperation::InsertText {
+        paragraph: caret.paragraph,
+        byte: caret.byte,
+        text: text.to_string(),
+        styles,
+      }],
+      canonical_operations: vec![CanonicalOperation::InsertText {
+        paragraph: paragraph_id,
+        byte: caret.byte,
+        text: text.to_string(),
+        styles,
+      }],
+    });
+    self.redo_stack.clear();
+    self.layout_invalidation_hint = Some(caret.paragraph..caret.paragraph + 1);
+    self.mark_document_changed_with_reconcile(after_generation, false, cx);
+    self.after_text_mutation(cx);
+    true
   }
 
   fn apply_document_edit_with_capture_range(
