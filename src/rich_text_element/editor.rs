@@ -27,6 +27,9 @@ const SCROLL_FOREGROUND_MATERIALIZE_BUDGET_MS: u64 = 8;
 const SCROLL_FOREGROUND_MAX_CHUNK_LINES: usize = 96;
 const SCROLLBAR_DRAG_MAX_FPS: usize = 60;
 const TYPING_PREFETCH_SUPPRESSION_WINDOW: Duration = Duration::from_millis(150);
+// Diagnostic switch: keep cheap height/item-size caches, but do not retain
+// expensive shaped paragraph LayoutState caches for offscreen rows.
+const RETAIN_OFFSCREEN_PARAGRAPH_LAYOUT_CACHE: bool = true;
 
 actions!(
   rich_text_editor,
@@ -5916,7 +5919,42 @@ impl RichTextEditor {
     self.visible_layout_generation = self.visible_layout_generation.wrapping_add(1);
     self.visible_layout_range = range.clone();
     self.visible_chunk_anchors.clear();
+    self.evict_offscreen_paragraph_layouts_for_visible_items(range);
     self.visible_layout_generation
+  }
+
+  fn evict_offscreen_paragraph_layouts_for_visible_items(&mut self, item_range: Range<usize>) {
+    if RETAIN_OFFSCREEN_PARAGRAPH_LAYOUT_CACHE {
+      return;
+    }
+    let paragraph_count = self.document.paragraphs.len();
+    if paragraph_count == 0 || self.paragraph_chunk_layout_cache.is_empty() {
+      return;
+    }
+
+    let visible = self.paragraph_range_for_item_range(item_range);
+    if visible.is_empty() {
+      return;
+    }
+    let active = self.active_height_range();
+    let keep_start = visible.start.min(active.start).saturating_sub(2);
+    let keep_end = visible
+      .end
+      .max(active.end)
+      .saturating_add(2)
+      .min(paragraph_count);
+
+    self
+      .paragraph_chunk_layout_cache
+      .resize(paragraph_count, None);
+    for (paragraph_ix, entry) in self.paragraph_chunk_layout_cache.iter_mut().enumerate() {
+      if paragraph_ix < keep_start || paragraph_ix >= keep_end {
+        *entry = None;
+      }
+    }
+    self
+      .chunk_prefetch_queue
+      .retain(|paragraph_ix| *paragraph_ix >= keep_start && *paragraph_ix < keep_end);
   }
 
   pub(super) fn store_visible_paragraph_chunk_layout(
