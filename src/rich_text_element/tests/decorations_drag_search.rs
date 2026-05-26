@@ -24,43 +24,35 @@ fn inline_decorations_merge_across_segment_splits() {
 }
 
 #[test]
-fn inline_decorations_bridge_box_padding_between_emphasis_segments() {
-  let color = black();
-  let left_pad = px(1.28);
-  let right_pad = px(1.35);
-  let first_x = left_pad;
-  let first_width = px(20.0);
-  let second_x = first_x + first_width + right_pad + left_pad;
-  let second_width = px(12.0);
-
-  let merged = build_inline_decorations(
-    vec![
-      DecorationSource {
-        segment_ix: 0,
-        x: first_x,
-        width: first_width,
-        y: px(12.0),
-        thickness: px(1.0),
-        color,
-        boxed: true,
-      },
-      DecorationSource {
-        segment_ix: 1,
-        x: second_x,
-        width: second_width,
-        y: px(12.0),
-        thickness: px(1.0),
-        color,
-        boxed: true,
-      },
-    ],
-    left_pad,
-    right_pad,
+fn boxed_fragment_padding_is_only_applied_to_outer_emphasis_edges() {
+  let emphasized = RunStyles::default().with(RunStyle::Emphasis);
+  let highlighted_emphasis = emphasized.with(RunStyle::HighlightSpoken);
+  let document = document_from_input(
+    DocumentTheme::default(),
+    vec![InputParagraph {
+      style: ParagraphStyle::Normal,
+      runs: vec![run("left", emphasized), run("middle", highlighted_emphasis), run("right", emphasized)],
+    }],
   );
+  let paragraph = &document.paragraphs[0];
+  let text = paragraph_text(&document, 0);
+  let p_format = paragraph_format(&document, paragraph.style);
+  let fragments = formatted_fragments_for_range(&document, &p_format, paragraph, &(0..text.len()), &text);
+  let left_pad = document.theme.box_padding_left;
+  let right_pad = document.theme.box_padding_right;
 
-  assert_eq!(merged.len(), 1);
-  assert_eq!(merged[0].bounds.origin.x, first_x);
-  assert!((f32::from(merged[0].bounds.size.width) - f32::from(second_x + second_width - first_x)).abs() < 0.01);
+  assert_eq!(fragments.len(), 3);
+  assert_eq!(boxed_fragment_padding(&fragments, 0, left_pad, right_pad), (left_pad, px(0.0)));
+  assert_eq!(boxed_fragment_padding(&fragments, 1, left_pad, right_pad), (px(0.0), px(0.0)));
+  assert_eq!(boxed_fragment_padding(&fragments, 2, left_pad, right_pad), (px(0.0), right_pad));
+
+  let old_internal_gap = left_pad + right_pad;
+  assert!(f32::from(old_internal_gap) > 0.0);
+  assert_eq!(
+    boxed_fragment_padding(&fragments, 0, left_pad, right_pad).1
+      + boxed_fragment_padding(&fragments, 1, left_pad, right_pad).0,
+    px(0.0)
+  );
 }
 
 #[test]

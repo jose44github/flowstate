@@ -28,17 +28,18 @@ pub(super) fn measure_line_width(
   if let Some(width) = shape_cache.line_widths.get(&measure_key) {
     return *width;
   }
-  for fragment in fragments_for_range(paragraph, &rendered_range, rendered_text) {
-    let text = &rendered_text[fragment.line_range.clone()];
+  let fragments = formatted_fragments_for_range(document, p_format, paragraph, &rendered_range, rendered_text);
+  for (fragment_ix, fragment) in fragments.iter().enumerate() {
+    let text = &rendered_text[fragment.fragment.line_range.clone()];
     if text.is_empty() {
       continue;
     }
-    let format = run_format(document, p_format.clone(), fragment.styles);
-    let run_start = clamp_to_char_boundary(paragraph_text, fragment.run_range.start.min(paragraph_text.len()));
-    let run_end = clamp_to_char_boundary(paragraph_text, fragment.run_range.end.min(paragraph_text.len())).max(run_start);
+    let run_start = clamp_to_char_boundary(paragraph_text, fragment.fragment.run_range.start.min(paragraph_text.len()));
+    let run_end = clamp_to_char_boundary(paragraph_text, fragment.fragment.run_range.end.min(paragraph_text.len())).max(run_start);
     let run_text = &paragraph_text[run_start..run_end];
-    let shaped = shape_fragment_cached(window, run_text, format.clone(), run_start, fragment.styles, shape_cache);
+    let shaped = shape_fragment_cached(window, run_text, fragment.format.clone(), run_start, fragment.fragment.styles, shape_cache);
     let fragment_start = fragment
+      .fragment
       .source_start
       .saturating_sub(run_start)
       .min(run_text.len());
@@ -46,13 +47,10 @@ pub(super) fn measure_line_width(
       .saturating_add(text.len())
       .min(run_text.len());
     let fragment_width = (shaped.x_for_index(fragment_end) - shaped.x_for_index(fragment_start)).max(px(0.0));
-    if format.border_width > px(0.0) {
-      width += document.theme.box_padding_left;
-    }
+    let (box_pad_left, box_pad_right) = boxed_fragment_padding(&fragments, fragment_ix, document.theme.box_padding_left, document.theme.box_padding_right);
+    width += box_pad_left;
     width += fragment_width;
-    if format.border_width > px(0.0) {
-      width += document.theme.box_padding_right;
-    }
+    width += box_pad_right;
   }
   shape_cache.line_widths.insert(measure_key, width);
   width
@@ -68,46 +66,39 @@ pub(super) fn shape_line(
   window: &mut Window,
   cx: &mut App,
 ) -> LaidOutLine {
-  let fragments = fragments_for_range(paragraph, &source_range, line_text);
+  let fragments = formatted_fragments_for_range(document, &p_format, paragraph, &source_range, line_text);
   let mut x = px(0.0);
   let mut segments = Vec::with_capacity(fragments.len().max(1));
   let mut ascent = px(0.0);
   let mut descent = px(0.0);
 
-  for fragment in fragments {
-    let text = &line_text[fragment.line_range.clone()];
+  for (fragment_ix, fragment) in fragments.iter().enumerate() {
+    let text = &line_text[fragment.fragment.line_range.clone()];
     if text.is_empty() {
       continue;
     }
-    let format = run_format(document, p_format.clone(), fragment.styles);
-    let shaped = shape_fragment_cached(window, text, format.clone(), fragment.source_start, fragment.styles, shape_cache);
+    let format = fragment.format.clone();
+    let shaped = shape_fragment_cached(window, text, format.clone(), fragment.fragment.source_start, fragment.fragment.styles, shape_cache);
     let width = shaped.width;
-    let box_margin_left = if format.border_width > px(0.0) {
-      document.theme.box_padding_left
-    } else {
-      px(0.0)
-    };
-    let box_margin_right = if format.border_width > px(0.0) {
-      document.theme.box_padding_right
-    } else {
-      px(0.0)
-    };
+    let (box_pad_left, box_pad_right) = boxed_fragment_padding(&fragments, fragment_ix, document.theme.box_padding_left, document.theme.box_padding_right);
     let segment_ascent = shaped.ascent;
     let segment_descent = shaped.descent;
     ascent = ascent.max(segment_ascent);
     descent = descent.max(segment_descent);
-    x += box_margin_left;
+    x += box_pad_left;
     segments.push(LaidOutSegment {
       shaped,
       x,
       width,
+      box_pad_left,
+      box_pad_right,
       format: format.clone(),
       ascent: segment_ascent,
       descent: segment_descent,
       font_size: format.font_size,
-      start_byte: fragment.source_start,
+      start_byte: fragment.fragment.source_start,
     });
-    x += width + box_margin_right;
+    x += width + box_pad_right;
   }
 
   if segments.is_empty() {
@@ -125,6 +116,8 @@ pub(super) fn shape_line(
       format: format.clone(),
       x: px(0.0),
       width: px(0.0),
+      box_pad_left: px(0.0),
+      box_pad_right: px(0.0),
       ascent: segment_ascent,
       descent: segment_descent,
       font_size: format.font_size,
@@ -221,6 +214,59 @@ pub(super) fn shape_fragment(window: &mut Window, text: &str, format: EffectiveR
   window
     .text_system()
     .shape_line(SharedString::new(text), format.font_size, &[run], None)
+}
+
+#[derive(Clone)]
+pub(super) struct FormattedFragment {
+  pub(super) fragment: VisualFragment,
+  pub(super) format: EffectiveRunFormat,
+}
+
+pub(super) fn formatted_fragments_for_range(
+  document: &Document,
+  p_format: &EffectiveParagraphFormat,
+  paragraph: &Paragraph,
+  range: &Range<usize>,
+  rendered_text: &str,
+) -> Vec<FormattedFragment> {
+  fragments_for_range(paragraph, range, rendered_text)
+    .into_iter()
+    .map(|fragment| FormattedFragment {
+      format: run_format(document, p_format.clone(), fragment.styles),
+      fragment,
+    })
+    .collect()
+}
+
+pub(super) fn boxed_fragment_padding(
+  fragments: &[FormattedFragment],
+  fragment_ix: usize,
+  box_padding_left: Pixels,
+  box_padding_right: Pixels,
+) -> (Pixels, Pixels) {
+  let Some(fragment) = fragments.get(fragment_ix) else {
+    return (px(0.0), px(0.0));
+  };
+  if fragment.format.border_width <= px(0.0) {
+    return (px(0.0), px(0.0));
+  }
+
+  let has_previous_boxed_fragment = fragment_ix > 0 && fragments[fragment_ix - 1].format.border_width > px(0.0);
+  let has_next_boxed_fragment = fragments
+    .get(fragment_ix + 1)
+    .is_some_and(|next| next.format.border_width > px(0.0));
+  (
+    if has_previous_boxed_fragment {
+      px(0.0)
+    } else {
+      box_padding_left
+    },
+    if has_next_boxed_fragment {
+      px(0.0)
+    } else {
+      box_padding_right
+    },
+  )
 }
 
 #[cfg(target_os = "linux")]

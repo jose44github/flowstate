@@ -1,8 +1,13 @@
-use std::{collections::HashMap, io, path::Path};
+use std::{
+  collections::{HashMap, HashSet},
+  io,
+  path::Path,
+};
 
 use rdocx::Document as RDocxDocument;
 use rdocx_opc::OpcPackage;
 use rdocx_oxml::document::CT_Document;
+use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 
 use super::cleaner::{CleanedDocx, DocxCleanReport, clean_docx_path};
 use flowstate_document::{
@@ -93,29 +98,45 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
   let docx = RDocxDocument::from_bytes(&cleaned.bytes).map_err(rdocx_error)?;
   let direct_properties = direct_run_properties_by_paragraph(&cleaned.bytes)?;
   let style_resolver = StyleResolver::new(&docx);
-  let mut paragraphs = Vec::new();
+  let docx_paragraphs = docx.paragraphs();
+  let mut paragraphs = Vec::with_capacity(docx_paragraphs.len());
+  let mut paragraph_property_cache: HashMap<Option<String>, CT_PPr> = HashMap::new();
+  let mut run_property_cache: HashMap<(Option<String>, Option<String>), CT_RPr> = HashMap::new();
   let mut runs_imported = 0usize;
   let mut unknown_paragraph_styles = Vec::new();
   let mut unknown_run_styles = Vec::new();
+  let mut unknown_paragraph_style_seen = HashSet::new();
+  let mut unknown_run_style_seen = HashSet::new();
   let mut current_section_has_underline = false;
   let mut after_heading_seeking_text = false;
 
-  for (paragraph_ix, paragraph) in docx.paragraphs().into_iter().enumerate() {
+  for (paragraph_ix, paragraph) in docx_paragraphs.into_iter().enumerate() {
     let style_id = paragraph.style_id();
-    let paragraph_properties = docx.resolve_paragraph_properties(style_id);
+    let paragraph_style_key = style_id.map(str::to_string);
+    let paragraph_properties = paragraph_property_cache
+      .entry(paragraph_style_key.clone())
+      .or_insert_with(|| docx.resolve_paragraph_properties(style_id));
+    let paragraph_properties: &CT_PPr = paragraph_properties;
     let run_facts = paragraph
       .runs()
       .enumerate()
       .map(|(run_ix, run)| {
+        let text = run.text();
         let run_style_id = run.style_id().map(str::to_string);
-        let effective = docx.resolve_run_properties(style_id, run.style_id());
+        let run_style_id_ref = run_style_id.as_deref();
+        let effective = run_property_cache
+          .entry((paragraph_style_key.clone(), run_style_id.clone()))
+          .or_insert_with(|| docx.resolve_run_properties(style_id, run_style_id_ref));
+        let effective: &CT_RPr = effective;
         let direct = direct_properties
           .get(paragraph_ix)
           .and_then(|paragraph| paragraph.get(run_ix))
           .cloned()
           .unwrap_or_default();
+        let run_size = run.size();
+        let source_size_pt = run_size.or(direct.size_pt);
         RunFact {
-          text: run.text(),
+          text,
           style_id: run_style_id,
           bold: run.is_bold() || direct.bold || effective.bold == Some(true) || effective.bold_cs == Some(true),
           bold_off: direct.bold_off || (effective.bold == Some(false) && effective.bold_cs != Some(true)),
@@ -123,22 +144,19 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
           strikethrough: direct.strikethrough || effective.strike == Some(true) || effective.dstrike == Some(true),
           highlight: direct.highlight || effective.highlight.is_some() || effective.shading.is_some(),
           border: false,
-          source_size_pt: run.size().or(direct.size_pt),
-          size_pt: run
-            .size()
-            .or(direct.size_pt)
-            .or_else(|| effective.sz.map(|size| size.to_pt())),
+          source_size_pt,
+          size_pt: source_size_pt.or_else(|| effective.sz.map(|size| size.to_pt())),
           color: run.color().is_some() || direct.color || effective.color.is_some() || effective.color_theme.is_some(),
         }
       })
       .collect::<Vec<_>>();
 
-    let style = recognize_paragraph_style(style_id, &paragraph_properties, &run_facts, &style_resolver);
+    let style = recognize_paragraph_style(style_id, paragraph_properties, &run_facts, &style_resolver);
     if style == ParagraphStyle::Normal
       && let Some(style_id) = style_id
       && !style_resolver.is_known_paragraph_style(style_id)
     {
-      push_unique(&mut unknown_paragraph_styles, style_id);
+      push_unique_with_seen(&mut unknown_paragraph_styles, &mut unknown_paragraph_style_seen, style_id);
     }
 
     let is_heading = matches!(
@@ -185,7 +203,7 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
       if let Some(style_id) = run.style_id.as_deref()
         && recognize_run_semantic(style_id, &style_resolver).is_none()
       {
-        push_unique(&mut unknown_run_styles, style_id);
+        push_unique_with_seen(&mut unknown_run_styles, &mut unknown_run_style_seen, style_id);
       }
 
       let styles = RunStyles {
@@ -300,20 +318,36 @@ fn direct_run_properties_by_paragraph(bytes: &[u8]) -> io::Result<Vec<Vec<Direct
 
 struct StyleResolver {
   names_by_id: HashMap<String, String>,
+  known_paragraph_style_ids: HashSet<String>,
+  run_semantics_by_id: HashMap<String, Option<RunSemanticStyle>>,
 }
 
 impl StyleResolver {
   fn new(docx: &RDocxDocument) -> Self {
-    let names_by_id = docx
-      .styles()
-      .into_iter()
-      .filter_map(|style| {
-        style
-          .name()
-          .map(|name| (style.style_id().to_string(), name.to_string()))
-      })
-      .collect();
-    Self { names_by_id }
+    let mut names_by_id = HashMap::new();
+    let mut known_paragraph_style_ids = HashSet::new();
+    let mut run_semantics_by_id = HashMap::new();
+
+    for style in docx.styles() {
+      let style_id = style.style_id();
+      let canonical_source = style.name().unwrap_or(style_id);
+      if matches!(
+        canonical_paragraph_style_name(canonical_source),
+        Some("Heading1" | "Heading2" | "Heading3" | "Heading4" | "Analytic" | "Undertag" | "Normal")
+      ) {
+        known_paragraph_style_ids.insert(style_id.to_string());
+      }
+      run_semantics_by_id.insert(style_id.to_string(), run_semantic_from_canonical_name(canonical_source));
+      if let Some(name) = style.name() {
+        names_by_id.insert(style_id.to_string(), name.to_string());
+      }
+    }
+
+    Self {
+      names_by_id,
+      known_paragraph_style_ids,
+      run_semantics_by_id,
+    }
   }
 
   fn name(&self, style_id: &str) -> Option<&str> {
@@ -327,10 +361,18 @@ impl StyleResolver {
   }
 
   fn is_known_paragraph_style(&self, style_id: &str) -> bool {
-    matches!(
-      canonical_paragraph_style_name(self.canonical_name(Some(style_id))),
-      Some("Heading1" | "Heading2" | "Heading3" | "Heading4" | "Analytic" | "Undertag" | "Normal")
-    )
+    self.known_paragraph_style_ids.contains(style_id)
+      || matches!(
+        canonical_paragraph_style_name(self.canonical_name(Some(style_id))),
+        Some("Heading1" | "Heading2" | "Heading3" | "Heading4" | "Analytic" | "Undertag" | "Normal")
+      )
+  }
+
+  fn run_semantic(&self, style_id: &str) -> Option<RunSemanticStyle> {
+    if let Some(semantic) = self.run_semantics_by_id.get(style_id) {
+      return *semantic;
+    }
+    run_semantic_from_canonical_name(self.canonical_name(Some(style_id)))
   }
 }
 
@@ -379,7 +421,11 @@ impl ParagraphProperties for rdocx_oxml::properties::CT_PPr {
 }
 
 fn recognize_run_semantic(style_id: &str, styles: &StyleResolver) -> Option<RunSemanticStyle> {
-  match canonical_run_style_name(styles.canonical_name(Some(style_id))) {
+  styles.run_semantic(style_id)
+}
+
+fn run_semantic_from_canonical_name(name: &str) -> Option<RunSemanticStyle> {
+  match canonical_run_style_name(name) {
     Some("Style13ptBold") => Some(RunSemanticStyle::Cite),
     Some("Emphasis") => Some(RunSemanticStyle::Emphasis),
     Some("StyleUnderline") => Some(RunSemanticStyle::Underline),
@@ -575,9 +621,11 @@ fn underline_is_on<T: std::fmt::Debug>(underline: &Option<T>) -> bool {
     .is_some_and(|value| format!("{value:?}") != "None")
 }
 
-fn push_unique(values: &mut Vec<String>, value: &str) {
-  if !values.iter().any(|existing| existing == value) {
-    values.push(value.to_string());
+fn push_unique_with_seen(values: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
+  if !seen.contains(value) {
+    let value = value.to_string();
+    seen.insert(value.clone());
+    values.push(value);
   }
 }
 

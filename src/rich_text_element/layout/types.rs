@@ -222,6 +222,8 @@ pub(super) struct LaidOutSegment {
   pub(super) format: EffectiveRunFormat,
   pub(super) x: Pixels,
   pub(super) width: Pixels,
+  pub(super) box_pad_left: Pixels,
+  pub(super) box_pad_right: Pixels,
   pub(super) ascent: Pixels,
   pub(super) descent: Pixels,
   pub(super) font_size: Pixels,

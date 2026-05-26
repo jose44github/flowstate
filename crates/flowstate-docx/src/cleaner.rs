@@ -35,12 +35,16 @@ pub struct DocxCleanStats {
 }
 
 pub fn clean_docx_path(path: impl AsRef<Path>) -> std::io::Result<CleanedDocx> {
-  clean_docx_bytes(&fs::read(path)?)
+  clean_docx_vec(fs::read(path)?)
 }
 
 pub fn clean_docx_bytes(bytes: &[u8]) -> std::io::Result<CleanedDocx> {
+  clean_docx_vec(bytes.to_vec())
+}
+
+fn clean_docx_vec(bytes: Vec<u8>) -> std::io::Result<CleanedDocx> {
   Ok(CleanedDocx {
-    bytes: bytes.to_vec(),
+    bytes,
     report: DocxCleanReport {
       stats: DocxCleanStats::default(),
       actions: CLEANING_RULES,
