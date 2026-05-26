@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::app_settings::{load_document_theme, load_smart_word_selection, save_document_theme, save_smart_word_selection, save_theme_name};
 use crate::docx_conversion::convert_docx_to_document;
 use crate::rich_text_element::{
-  Document, DocumentTheme, ParagraphStyle, RichTextEditor, Save, ThemeUnderline, demo_document, load_or_create_document,
+  Document, DocumentTheme, ParagraphStyle, RichTextEditor, Save, ThemeUnderline, demo_document, load_or_create_document, paragraph_byte_range,
 };
 use crate::workspace::document_panel::DocumentPanel;
 use crate::workspace::file_management::{UNTITLED_DOCUMENT_NAME, default_save_directory, new_blank_document, normalize_db8_path};
@@ -1836,18 +1836,14 @@ fn outline_paragraph_ix(id: &str) -> Option<usize> {
 }
 
 fn outline_paragraph_label(document: &Document, paragraph_ix: usize) -> String {
-  let paragraph = &document.paragraphs[paragraph_ix];
+  let paragraph_range = paragraph_byte_range(document, paragraph_ix);
   const MAX_BYTES: usize = 80;
   const TRUNCATED_BYTES: usize = MAX_BYTES - 3;
   let mut label = String::new();
   let mut pending_space = false;
   let mut truncated = false;
 
-  'chunks: for chunk in document
-    .text
-    .byte_slice(paragraph.byte_range.clone())
-    .chunks()
-  {
+  'chunks: for chunk in document.text.byte_slice(paragraph_range).chunks() {
     for ch in chunk.chars() {
       if ch.is_whitespace() {
         pending_space = !label.is_empty();
