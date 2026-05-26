@@ -25,6 +25,7 @@ const SCROLL_FOREGROUND_OVERSCAN_PX: f32 = 384.0;
 const SCROLL_FOREGROUND_MATERIALIZE_BUDGET_MS: u64 = 8;
 const SCROLL_FOREGROUND_MAX_CHUNK_LINES: usize = 96;
 const SCROLLBAR_DRAG_MAX_FPS: usize = 60;
+const TYPING_PREFETCH_SUPPRESSION_WINDOW: Duration = Duration::from_millis(150);
 
 actions!(
   rich_text_editor,
@@ -625,6 +626,8 @@ pub struct RichTextEditor {
   autoscroll_active: bool,
   pub(super) caret_visible: bool,
   caret_blink_active: bool,
+  last_text_input_at: Option<Instant>,
+  pending_typing_prefetch_resume: bool,
   paragraph_chunk_layout_cache: Vec<Option<ParagraphChunkLayoutCacheEntry>>,
   pending_chunk_prefetch: bool,
   chunk_prefetch_queue: VecDeque<usize>,
@@ -710,6 +713,8 @@ impl RichTextEditor {
       autoscroll_active: false,
       caret_visible: true,
       caret_blink_active: false,
+      last_text_input_at: None,
+      pending_typing_prefetch_resume: false,
       paragraph_chunk_layout_cache: vec![None; paragraph_count],
       pending_chunk_prefetch: false,
       chunk_prefetch_queue: VecDeque::new(),
@@ -787,6 +792,8 @@ impl RichTextEditor {
     self.autoscroll_active = false;
     self.caret_visible = false;
     self.caret_blink_active = false;
+    self.last_text_input_at = None;
+    self.pending_typing_prefetch_resume = false;
     self.paragraph_chunk_layout_cache = Vec::new();
     self.pending_chunk_prefetch = false;
     self.chunk_prefetch_queue = VecDeque::new();
@@ -4913,6 +4920,11 @@ impl RichTextEditor {
       self.chunk_prefetch_queue.clear();
       return;
     }
+    if self.recently_typed() {
+      self.chunk_prefetch_queue.clear();
+      self.schedule_typing_prefetch_resume(cx);
+      return;
+    }
     if self.is_interacting() {
       self.chunk_prefetch_queue.clear();
       return;
@@ -4962,7 +4974,16 @@ impl RichTextEditor {
       self.chunk_prefetch_queue.clear();
       return;
     }
-    if self.current_layout_width() != width || self.is_interacting() {
+    if self.current_layout_width() != width {
+      self.chunk_prefetch_queue.clear();
+      return;
+    }
+    if self.recently_typed() {
+      self.chunk_prefetch_queue.clear();
+      self.schedule_typing_prefetch_resume(cx);
+      return;
+    }
+    if self.is_interacting() {
       self.chunk_prefetch_queue.clear();
       return;
     }
@@ -5040,12 +5061,52 @@ impl RichTextEditor {
   }
 
   fn is_interacting(&self) -> bool {
-    self.selecting
+    self.recently_typed()
+      || self.selecting
       || self.pending_text_drag.is_some()
       || self.active_text_drag.is_some()
       || self.image_resize_drag.is_some()
       || self.table_column_resize_drag.is_some()
       || self.autoscroll_active
+  }
+
+  fn mark_text_input_interaction(&mut self) {
+    self.last_text_input_at = Some(Instant::now());
+  }
+
+  fn recently_typed(&self) -> bool {
+    self
+      .last_text_input_at
+      .is_some_and(|last_input| last_input.elapsed() < TYPING_PREFETCH_SUPPRESSION_WINDOW)
+  }
+
+  fn typing_prefetch_resume_delay(&self) -> Duration {
+    self
+      .last_text_input_at
+      .and_then(|last_input| TYPING_PREFETCH_SUPPRESSION_WINDOW.checked_sub(last_input.elapsed()))
+      .unwrap_or(Duration::ZERO)
+  }
+
+  fn schedule_typing_prefetch_resume(&mut self, cx: &mut Context<Self>) {
+    if self.disposed || self.pending_typing_prefetch_resume {
+      return;
+    }
+    self.pending_typing_prefetch_resume = true;
+    let delay = self.typing_prefetch_resume_delay();
+    let _ = cx.spawn(async move |editor, cx| {
+      Timer::after(delay).await;
+      let _ = editor.update(cx, |editor, cx| {
+        editor.pending_typing_prefetch_resume = false;
+        if editor.disposed {
+          return;
+        }
+        if editor.recently_typed() {
+          editor.schedule_typing_prefetch_resume(cx);
+        } else {
+          cx.notify();
+        }
+      });
+    });
   }
 
   fn paragraph_visible_in_current_mode(&self, paragraph_ix: usize) -> bool {
@@ -5692,6 +5753,7 @@ impl RichTextEditor {
   }
 
   pub(super) fn after_text_mutation(&mut self, cx: &mut Context<Self>) {
+    self.mark_text_input_interaction();
     self.pending_styles = None;
     self.goal_x = None;
     if let Some(range) = self.layout_invalidation_hint.take() {
