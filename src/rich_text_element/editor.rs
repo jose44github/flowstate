@@ -3903,8 +3903,6 @@ impl RichTextEditor {
     self.after_text_mutation(cx);
     self.suppress_mutation_notify = self.suppress_mutation_notify.saturating_sub(1);
     self.mark_document_changed_with_reconcile(after_generation, false, cx);
-    self.mark_document_changed_with_reconcile(after_generation, false, cx);
-    self.after_text_mutation(cx);
     true
   }
 
@@ -4348,9 +4346,6 @@ impl RichTextEditor {
     {
       let sizes = cache.sizes.clone();
       self.maybe_resume_chunk_prefetch_after_typing(width, window, cx);
-      return sizes;
-    }
-    if let Some(sizes) = self.try_patch_item_sizes_cache(width, scroll_anchor.clone(), window, cx) {
       return sizes;
     }
     if let Some(sizes) = self.try_patch_item_sizes_cache(width, scroll_anchor.clone(), window, cx) {
@@ -5240,11 +5235,6 @@ impl RichTextEditor {
     }
     if self.recently_typed() {
       self.resume_chunk_prefetch_after_typing = true;
-      self.chunk_prefetch_queue.clear();
-      self.schedule_typing_prefetch_resume(cx);
-      return;
-    }
-    if self.recently_typed() {
       self.chunk_prefetch_queue.clear();
       self.schedule_typing_prefetch_resume(cx);
       return;
