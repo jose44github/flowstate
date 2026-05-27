@@ -98,6 +98,7 @@ pub fn convert_docx_bytes_to_document(bytes: &[u8]) -> io::Result<(Document, Doc
 
 pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Document, DocxConversionReport)> {
   let docx = RDocxDocument::from_bytes(&cleaned.bytes).map_err(rdocx_error)?;
+  let direct_paragraph_properties = direct_paragraph_properties(&cleaned.bytes)?;
   let direct_properties = direct_run_properties_by_paragraph(&cleaned.bytes)?;
   let style_resolver = StyleResolver::new(&docx);
   let docx_paragraphs = docx.paragraphs();
@@ -115,10 +116,13 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
   for (paragraph_ix, paragraph) in docx_paragraphs.into_iter().enumerate() {
     let style_id = paragraph.style_id();
     let paragraph_style_key = style_id.map(str::to_string);
-    let paragraph_properties = paragraph_property_cache
+    let resolved_paragraph_properties = paragraph_property_cache
       .entry(paragraph_style_key.clone())
       .or_insert_with(|| docx.resolve_paragraph_properties(style_id));
-    let paragraph_properties: &CT_PPr = paragraph_properties;
+    let paragraph_properties = EffectiveParagraphProperties {
+      direct_outline_lvl: direct_paragraph_properties.get(paragraph_ix).and_then(|properties| properties.outline_lvl),
+      resolved: resolved_paragraph_properties,
+    };
     let run_facts = paragraph
       .runs()
       .enumerate()
@@ -136,7 +140,7 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
           .cloned()
           .unwrap_or_default();
         let run_size = run.size();
-        let source_size_pt = run_size.or(direct.size_pt);
+        let source_size_pt = direct.size_pt.or(run_size);
         RunFact {
           text,
           style_id: run_style_id,
@@ -153,7 +157,7 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
       })
       .collect::<Vec<_>>();
 
-    let style = recognize_paragraph_style(style_id, paragraph_properties, &run_facts, &style_resolver);
+    let style = recognize_paragraph_style(style_id, &paragraph_properties, &run_facts, &style_resolver);
     if style == ParagraphStyle::Normal
       && let Some(style_id) = style_id
       && !style_resolver.is_known_paragraph_style(style_id)
@@ -165,8 +169,8 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
       style,
       ParagraphStyle::Pocket | ParagraphStyle::Hat | ParagraphStyle::Block | ParagraphStyle::Tag | ParagraphStyle::Analytic
     );
-    let structural_underline_is_direct = matches!(style, ParagraphStyle::Tag | ParagraphStyle::Analytic | ParagraphStyle::Undertag);
-    let suppress_semantic_underline = matches!(
+    let structural_run_formatting_allowed = matches!(style, ParagraphStyle::Tag | ParagraphStyle::Analytic | ParagraphStyle::Undertag);
+    let suppress_semantic_styles = matches!(
       style,
       ParagraphStyle::Pocket
         | ParagraphStyle::Hat
@@ -208,21 +212,17 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
         push_unique_with_seen(&mut unknown_run_styles, &mut unknown_run_style_seen, style_id);
       }
 
-      let styles = RunStyles {
-        semantic: recognize_run_semantic_for_context(
-          run,
-          run_ix,
-          bold_paragraph_overrides.as_deref(),
-          suppress_semantic_underline,
-          style,
-          can_process_citations,
-          current_section_has_underline,
-          &style_resolver,
-        ),
-        direct_underline: structural_underline_is_direct && run.underline,
-        strikethrough: run.strikethrough,
-        highlight: if run.highlight { Some(HighlightStyle::Spoken) } else { None },
-      };
+      let styles = recognize_run_styles_for_context(
+        run,
+        run_ix,
+        bold_paragraph_overrides.as_deref(),
+        suppress_semantic_styles,
+        structural_run_formatting_allowed,
+        style,
+        can_process_citations,
+        current_section_has_underline,
+        &style_resolver,
+      );
 
       runs.push(DocumentRunInput { text, styles });
       runs_imported += 1;
@@ -254,7 +254,6 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
   };
   Ok((document, report))
 }
-
 #[derive(Clone, Debug)]
 struct RunFact {
   text: String,
@@ -271,6 +270,11 @@ struct RunFact {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+struct DirectParagraphProperties {
+  outline_lvl: Option<u32>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 struct DirectRunProperties {
   bold: bool,
   bold_off: bool,
@@ -281,6 +285,36 @@ struct DirectRunProperties {
   color: bool,
 }
 
+struct EffectiveParagraphProperties<'a> {
+  direct_outline_lvl: Option<u32>,
+  resolved: &'a CT_PPr,
+}
+
+impl ParagraphProperties for EffectiveParagraphProperties<'_> {
+  fn outline_lvl(&self) -> Option<u32> {
+    self.direct_outline_lvl.or(self.resolved.outline_lvl)
+  }
+}
+
+fn direct_paragraph_properties(bytes: &[u8]) -> io::Result<Vec<DirectParagraphProperties>> {
+  let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).map_err(rdocx_opc_error)?;
+  let doc_part_name = package
+    .main_document_part()
+    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "DOCX package has no main document part"))?;
+  let doc_xml = package
+    .get_part(&doc_part_name)
+    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "DOCX package has no main document XML"))?;
+  let document = CT_Document::from_xml(doc_xml).map_err(rdocx_oxml_error)?;
+  Ok(
+    document
+      .body
+      .paragraphs()
+      .map(|paragraph| DirectParagraphProperties {
+        outline_lvl: paragraph.properties.as_ref().and_then(|properties| properties.outline_lvl),
+      })
+      .collect(),
+  )
+}
 fn direct_run_properties_by_paragraph(bytes: &[u8]) -> io::Result<Vec<Vec<DirectRunProperties>>> {
   let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).map_err(rdocx_opc_error)?;
   let doc_part_name = package
@@ -384,6 +418,21 @@ fn recognize_paragraph_style(
   runs: &[RunFact],
   styles: &StyleResolver,
 ) -> ParagraphStyle {
+  match canonical_paragraph_style_name(styles.canonical_name(style_id)) {
+    Some("Heading1") => return ParagraphStyle::Pocket,
+    Some("Heading2") => return ParagraphStyle::Hat,
+    Some("Heading3") => return ParagraphStyle::Block,
+    Some("Heading4") => return ParagraphStyle::Tag,
+    Some("Analytic") => return ParagraphStyle::Analytic,
+    Some("Undertag") => return ParagraphStyle::Undertag,
+    Some("Normal") | None => {}
+    _ => {}
+  }
+
+  if let Some(style) = paragraph_style_from_character_heading_runs(runs, styles) {
+    return style;
+  }
+
   if paragraph_properties.outline_lvl() == Some(0) && runs.iter().any(|run| run.bold && run.size_pt == Some(26.0)) {
     return ParagraphStyle::Pocket;
   }
@@ -401,15 +450,7 @@ fn recognize_paragraph_style(
     return ParagraphStyle::Tag;
   }
 
-  match canonical_paragraph_style_name(styles.canonical_name(style_id)) {
-    Some("Heading1") => ParagraphStyle::Pocket,
-    Some("Heading2") => ParagraphStyle::Hat,
-    Some("Heading3") => ParagraphStyle::Block,
-    Some("Heading4") => ParagraphStyle::Tag,
-    Some("Analytic") => ParagraphStyle::Analytic,
-    Some("Undertag") => ParagraphStyle::Undertag,
-    _ => ParagraphStyle::Normal,
-  }
+  ParagraphStyle::Normal
 }
 
 trait ParagraphProperties {
@@ -435,16 +476,52 @@ fn run_semantic_from_canonical_name(name: &str) -> Option<RunSemanticStyle> {
   }
 }
 
+fn recognize_run_styles_for_context(
+  run: &RunFact,
+  run_ix: usize,
+  bold_paragraph_overrides: Option<&[bool]>,
+  suppress_semantic_styles: bool,
+  structural_run_formatting_allowed: bool,
+  paragraph_style: ParagraphStyle,
+  can_process_citations: bool,
+  current_section_has_underline: bool,
+  styles: &StyleResolver,
+) -> RunStyles {
+  RunStyles {
+    semantic: recognize_run_semantic_for_context(
+      run,
+      run_ix,
+      bold_paragraph_overrides,
+      suppress_semantic_styles,
+      paragraph_style,
+      can_process_citations,
+      current_section_has_underline,
+      styles,
+    ),
+    direct_underline: structural_run_formatting_allowed && run.underline,
+    strikethrough: !suppress_semantic_styles && run.strikethrough,
+    highlight: if structural_run_formatting_allowed && run.highlight {
+      Some(HighlightStyle::Spoken)
+    } else {
+      None
+    },
+  }
+}
+
 fn recognize_run_semantic_for_context(
   run: &RunFact,
   run_ix: usize,
   bold_paragraph_overrides: Option<&[bool]>,
-  suppress_semantic_underline: bool,
+  suppress_semantic_styles: bool,
   paragraph_style: ParagraphStyle,
   can_process_citations: bool,
   current_section_has_underline: bool,
   styles: &StyleResolver,
 ) -> RunSemanticStyle {
+  if suppress_semantic_styles {
+    return RunSemanticStyle::default();
+  }
+
   if run.border {
     return RunSemanticStyle::Emphasis;
   }
@@ -453,12 +530,6 @@ fn recognize_run_semantic_for_context(
     .style_id
     .as_deref()
     .and_then(|style_id| recognize_run_semantic(style_id, styles));
-
-  if suppress_semantic_underline {
-    return explicit
-      .filter(|semantic| *semantic != RunSemanticStyle::Underline)
-      .unwrap_or_default();
-  }
 
   if run.bold_off && explicit == Some(RunSemanticStyle::Cite) {
     return RunSemanticStyle::default();
@@ -598,6 +669,35 @@ fn canonical_paragraph_style_name(name: &str) -> Option<&'static str> {
   }
 }
 
+fn paragraph_style_from_character_heading_runs(runs: &[RunFact], styles: &StyleResolver) -> Option<ParagraphStyle> {
+  let mut inferred = None;
+  let mut saw_text = false;
+  for run in runs.iter().filter(|run| !run.text.trim().is_empty()) {
+    saw_text = true;
+    let Some(style_id) = run.style_id.as_deref() else {
+      continue;
+    };
+    let Some(style) = paragraph_style_from_character_heading_name(styles.canonical_name(Some(style_id))) else {
+      return None;
+    };
+    if inferred.is_some_and(|existing| existing != style) {
+      return None;
+    }
+    inferred = Some(style);
+  }
+  saw_text.then_some(inferred).flatten()
+}
+
+fn paragraph_style_from_character_heading_name(name: &str) -> Option<ParagraphStyle> {
+  match normalized_style_token(name).as_str() {
+    "heading1char" | "pocketchar" => Some(ParagraphStyle::Pocket),
+    "heading2char" | "hatchar" => Some(ParagraphStyle::Hat),
+    "heading3char" | "blockchar" => Some(ParagraphStyle::Block),
+    "heading4char" | "tagchar" => Some(ParagraphStyle::Tag),
+    _ => None,
+  }
+}
+
 fn canonical_run_style_name(name: &str) -> Option<&'static str> {
   match normalized_style_token(name).as_str() {
     "style13ptbold" | "cite" | "oldcite" => Some("Style13ptBold"),
@@ -606,6 +706,189 @@ fn canonical_run_style_name(name: &str) -> Option<&'static str> {
     "heading1char" | "pocketchar" => Some("Style13ptBold"),
     "heading2char" | "hatchar" | "heading3char" | "blockchar" | "heading4char" | "tagchar" => Some("Emphasis"),
     _ => None,
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[derive(Default)]
+  struct TestParagraphProperties {
+    outline_lvl: Option<u32>,
+  }
+
+  impl ParagraphProperties for TestParagraphProperties {
+    fn outline_lvl(&self) -> Option<u32> {
+      self.outline_lvl
+    }
+  }
+
+  fn style_resolver() -> StyleResolver {
+    StyleResolver {
+      names_by_id: HashMap::from([
+        ("Heading3Char".to_string(), "Heading 3 Char".to_string()),
+        ("BlockChar".to_string(), "Block Char".to_string()),
+        ("Emphasis".to_string(), "Emphasis".to_string()),
+        ("Heading3".to_string(), "Heading 3".to_string()),
+      ]),
+      known_paragraph_style_ids: HashSet::from(["Heading3".to_string()]),
+      run_semantics_by_id: HashMap::from([
+        ("Heading3Char".to_string(), Some(RunSemanticStyle::Emphasis)),
+        ("BlockChar".to_string(), Some(RunSemanticStyle::Emphasis)),
+        ("Emphasis".to_string(), Some(RunSemanticStyle::Emphasis)),
+      ]),
+    }
+  }
+
+  fn run(style_id: Option<&str>, text: &str) -> RunFact {
+    RunFact {
+      text: text.to_string(),
+      style_id: style_id.map(str::to_string),
+      bold: false,
+      bold_off: false,
+      underline: false,
+      strikethrough: false,
+      highlight: false,
+      border: false,
+      source_size_pt: None,
+      size_pt: None,
+      color: false,
+    }
+  }
+
+  #[test]
+  fn block_character_style_reconstructs_block_paragraph() {
+    let styles = style_resolver();
+    let runs = [run(Some("Heading3Char"), "Plan text")];
+
+    assert_eq!(
+      recognize_paragraph_style(None, &TestParagraphProperties::default(), &runs, &styles),
+      ParagraphStyle::Block
+    );
+  }
+
+  #[test]
+  fn direct_outline_level_and_formatting_reconstruct_block_paragraph() {
+    let styles = style_resolver();
+    let mut target_run = run(None, "2NC---AT: US Draw-In");
+    target_run.bold = true;
+    target_run.underline = true;
+    target_run.size_pt = Some(16.0);
+    let runs = [target_run];
+    let paragraph_properties = TestParagraphProperties { outline_lvl: Some(2) };
+
+    assert_eq!(
+      recognize_paragraph_style(None, &paragraph_properties, &runs, &styles),
+      ParagraphStyle::Block
+    );
+
+    let run_styles = recognize_run_styles_for_context(
+      &runs[0],
+      0,
+      None,
+      true,
+      false,
+      ParagraphStyle::Block,
+      false,
+      false,
+      &styles,
+    );
+    assert_eq!(run_styles.semantic, RunSemanticStyle::Plain);
+    assert!(!run_styles.direct_underline);
+    assert_eq!(run_styles.highlight, None);
+  }
+
+  #[test]
+  fn character_heading_used_as_structure_does_not_become_emphasis() {
+    let styles = style_resolver();
+    let run = run(Some("Heading3Char"), "Plan text");
+
+    assert_eq!(
+      recognize_run_semantic_for_context(
+        &run,
+        0,
+        None,
+        true,
+        ParagraphStyle::Block,
+        false,
+        false,
+        &styles,
+      ),
+      RunSemanticStyle::Plain
+    );
+  }
+
+  #[test]
+  fn ordinary_emphasis_is_rejected_in_heading_paragraphs() {
+    let styles = style_resolver();
+    let run = run(Some("Emphasis"), "important");
+
+    assert_eq!(
+      recognize_run_semantic_for_context(
+        &run,
+        0,
+        None,
+        true,
+        ParagraphStyle::Block,
+        false,
+        false,
+        &styles,
+      ),
+      RunSemanticStyle::Plain
+    );
+  }
+
+  #[test]
+  fn block_paragraph_rejects_direct_run_formatting() {
+    let styles = style_resolver();
+    let mut run = run(Some("Emphasis"), "important");
+    run.underline = true;
+    run.strikethrough = true;
+    run.highlight = true;
+
+    let run_styles = recognize_run_styles_for_context(
+      &run,
+      0,
+      None,
+      true,
+      false,
+      ParagraphStyle::Block,
+      false,
+      false,
+      &styles,
+    );
+
+    assert_eq!(run_styles.semantic, RunSemanticStyle::Plain);
+    assert!(!run_styles.direct_underline);
+    assert!(!run_styles.strikethrough);
+    assert_eq!(run_styles.highlight, None);
+  }
+
+  #[test]
+  fn tag_paragraph_only_preserves_direct_underline_and_highlight() {
+    let styles = style_resolver();
+    let mut run = run(Some("Emphasis"), "important");
+    run.underline = true;
+    run.strikethrough = true;
+    run.highlight = true;
+
+    let run_styles = recognize_run_styles_for_context(
+      &run,
+      0,
+      None,
+      true,
+      true,
+      ParagraphStyle::Tag,
+      false,
+      false,
+      &styles,
+    );
+
+    assert_eq!(run_styles.semantic, RunSemanticStyle::Plain);
+    assert!(run_styles.direct_underline);
+    assert!(!run_styles.strikethrough);
+    assert_eq!(run_styles.highlight, Some(HighlightStyle::Spoken));
   }
 }
 

@@ -6,6 +6,8 @@ You SHOULD consider if there is a pre-existing crate to handle something. If the
 
 You SHOULD write readable and elegant code. You NEVER hack. You SHOULD keep the codebase aggressively modularized and crated when it is logical. If you find yourself pushing an individual file over 1,000 LOC, you SHOULD consider modularizing.
 
+If you notice clear bugs while investigating something else, even if the bugs are unrelated to your main task, you SHOULD correct them. If the bug is unclear, you SHOULD run 'ask' inquiring whether the behavior is intended.
+
 You NEVER invent APIs. If a first attempt fails, you SHOULD verify against examples or documentation, then retry.
 
 You AVOID 'cargo check,' 'cargo build,' 'cargo run,' and 'cargo fmt' with ONE EXCEPTION. If you are a sub-agent, you NEVER fall under this exception. You SHOULD run 'cargo check' only when you are a top-level agent that has finished all edits you intend, and are about to return the prompt to the human. If an error or significant warning appears, you SHOULD fix it then cargo check again, until success, then finish up.
