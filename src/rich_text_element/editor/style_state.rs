@@ -205,12 +205,17 @@ impl RichTextEditor {
     self.set_invisibility_mode(!self.invisibility_mode, cx);
   }
 
-  pub fn prepare_for_container_resize(&mut self, expected_width: Option<Pixels>, cx: &mut Context<Self>) {
+  pub fn prepare_for_container_resize(&mut self, expected_width: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
     // The editor's virtual list positions rows from cached item heights. Side
     // panel collapse changes the document width before row children report the
     // new measured width, so the old cache can otherwise paint for one frame.
+    let scroll_anchor = self.capture_scroll_anchor();
     self.measured_item_width = expected_width;
     self.invalidate_document_layout_caches();
+    if let Some(width) = expected_width {
+      self.ensure_exact_interaction_chunks(width, window, cx);
+      let _ = self.rebuild_item_sizes_cache(width, scroll_anchor, window, cx);
+    }
     cx.notify();
   }
 

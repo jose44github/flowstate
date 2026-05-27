@@ -232,6 +232,10 @@ impl TreeState {
         self.scroll_handle.scroll_to_item(ix, strategy);
     }
 
+    pub fn item_index_by_id(&self, id: &str) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.item.id.as_ref() == id)
+    }
+
     /// Get the currently selected entry, if any.
     pub fn selected_entry(&self) -> Option<&TreeEntry> {
         self.selected_ix.and_then(|ix| self.entries.get(ix))

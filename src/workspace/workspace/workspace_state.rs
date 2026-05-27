@@ -4,23 +4,23 @@ impl Workspace {
     cx.notify();
   }
 
-  pub fn toggle_outline(&mut self, cx: &mut Context<Self>) {
-    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_outline_toggle(cx), cx);
+  pub fn toggle_outline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_outline_toggle(cx), window, cx);
     self.outline_collapsed = !self.outline_collapsed;
     cx.notify();
   }
 
-  pub fn toggle_toolkit(&mut self, cx: &mut Context<Self>) {
-    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_toolkit_toggle(cx), cx);
+  pub fn toggle_toolkit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_toolkit_toggle(cx), window, cx);
     self.toolkit_collapsed = !self.toolkit_collapsed;
     cx.notify();
   }
 
-  fn prepare_active_editor_for_container_resize(&mut self, expected_width: Option<Pixels>, cx: &mut Context<Self>) {
+  fn prepare_active_editor_for_container_resize(&mut self, expected_width: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
     let Some(editor) = self.active_editor.clone() else {
       return;
     };
-    editor.update(cx, |editor, cx| editor.prepare_for_container_resize(expected_width, cx));
+    editor.update(cx, |editor, cx| editor.prepare_for_container_resize(expected_width, window, cx));
   }
 
   fn current_document_panel_width(&self, cx: &mut Context<Self>) -> Option<Pixels> {
@@ -110,6 +110,7 @@ impl Workspace {
     }
     self.outline_revision = self.outline_revision.wrapping_add(1);
     self.outline_cache = None;
+    self.outline_scrolled_paragraph = None;
     self.refresh_outline_tree(cx);
     cx.notify();
   }
@@ -201,21 +202,39 @@ impl Workspace {
   }
 
   fn active_outline_paragraph(&self, cx: &App) -> Option<usize> {
-    let editor = self.active_editor.as_ref()?;
-    let editor = editor.read(cx);
-    let caret_paragraph = editor.caret_paragraph();
+    let viewport_paragraph = self.active_editor_viewport_paragraph(cx)?;
     let cache = self.outline_cache.as_ref()?;
-    active_visible_outline_paragraph_from_visible(&cache.visible_paragraphs, caret_paragraph)
+    active_visible_outline_paragraph_from_visible(&cache.visible_paragraphs, viewport_paragraph)
   }
 
-  fn refresh_outline_caret(&mut self, cx: &mut Context<Self>) {
-    let caret_paragraph = self
+  fn active_editor_viewport_paragraph(&self, cx: &App) -> Option<usize> {
+    self
       .active_editor
       .as_ref()
-      .map(|editor| editor.read(cx).caret_paragraph());
-    if self.outline_caret_paragraph != caret_paragraph {
-      self.outline_caret_paragraph = caret_paragraph;
+      .and_then(|editor| editor.read(cx).viewport_anchor_paragraph())
+  }
+
+  fn refresh_outline_viewport(&mut self, cx: &mut Context<Self>) {
+    let viewport_paragraph = self.active_editor_viewport_paragraph(cx);
+    if self.outline_viewport_paragraph != viewport_paragraph {
+      self.outline_viewport_paragraph = viewport_paragraph;
       cx.notify();
     }
+  }
+
+  fn scroll_outline_item_into_view(&mut self, paragraph_ix: Option<usize>, cx: &mut Context<Self>) {
+    let Some(paragraph_ix) = paragraph_ix else {
+      return;
+    };
+    if self.outline_scrolled_paragraph == Some(paragraph_ix) {
+      return;
+    }
+    let id = outline_item_id(paragraph_ix);
+    self.outline_tree.update(cx, |tree, _| {
+      if let Some(ix) = tree.item_index_by_id(&id) {
+        tree.scroll_to_item(ix, gpui::ScrollStrategy::Center);
+      }
+    });
+    self.outline_scrolled_paragraph = Some(paragraph_ix);
   }
 }

@@ -62,7 +62,7 @@ impl Workspace {
           .grow(false)
           .child(if self.outline_collapsed {
             self
-              .render_collapsed_side_panel("Show outline", IconName::PanelLeftOpen, |workspace, cx| workspace.toggle_outline(cx), cx)
+              .render_collapsed_side_panel("Show outline", IconName::PanelLeftOpen, |workspace, window, cx| workspace.toggle_outline(window, cx), cx)
               .into_any_element()
           } else {
             self.render_left_nav(nav_width, cx).into_any_element()
@@ -103,7 +103,7 @@ impl Workspace {
     &self,
     tooltip: &'static str,
     icon: IconName,
-    toggle: fn(&mut Workspace, &mut Context<Workspace>),
+    toggle: fn(&mut Workspace, &mut Window, &mut Context<Workspace>),
     cx: &mut Context<Self>,
   ) -> impl IntoElement {
     v_flex()
@@ -120,8 +120,8 @@ impl Workspace {
           .xsmall()
           .ghost()
           .tooltip(tooltip)
-          .on_click(cx.listener(move |workspace, _, _, cx| {
-            toggle(workspace, cx);
+          .on_click(cx.listener(move |workspace, _, window, cx| {
+            toggle(workspace, window, cx);
           })),
       )
   }

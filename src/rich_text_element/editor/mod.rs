@@ -552,6 +552,20 @@ impl ScrollAnchorSnapshot {
       Self::Item { delta, .. } | Self::ParagraphRemainder { delta, .. } => *delta,
     }
   }
+
+  fn paragraph_ix(&self) -> Option<usize> {
+    match self {
+      Self::Item {
+        item: VirtualItem::ParagraphChunk { paragraph_ix, .. } | VirtualItem::ParagraphRemainder { paragraph_ix, .. },
+        ..
+      }
+      | Self::ParagraphRemainder { paragraph_ix, .. } => Some(*paragraph_ix),
+      Self::Item {
+        item: VirtualItem::HiddenBlock { .. } | VirtualItem::StructuralBlock { .. },
+        ..
+      } => None,
+    }
+  }
 }
 
 impl HeightPrefixIndex {

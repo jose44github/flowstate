@@ -16,7 +16,8 @@ impl Workspace {
       outline_cache: None,
       collapsed_outline_items: HashSet::new(),
       outline_revision: 0,
-      outline_caret_paragraph: None,
+      outline_viewport_paragraph: None,
+      outline_scrolled_paragraph: None,
       editor_subscriptions: Vec::new(),
       styles_settings_open: false,
       file_search_overlay: None,
@@ -62,10 +63,10 @@ impl Workspace {
     let id = panel.read(cx).id();
     self.editor_subscriptions.push((
       id,
-      cx.observe(&editor, |workspace, editor, cx| {
-        let caret_paragraph = Some(editor.read(cx).caret_paragraph());
-        if workspace.outline_caret_paragraph != caret_paragraph {
-          workspace.outline_caret_paragraph = caret_paragraph;
+      cx.observe(&editor, |workspace, _, cx| {
+        let viewport_paragraph = workspace.active_editor_viewport_paragraph(cx);
+        if workspace.outline_viewport_paragraph != viewport_paragraph {
+          workspace.outline_viewport_paragraph = viewport_paragraph;
           cx.notify();
         }
       }),
@@ -103,14 +104,16 @@ impl Workspace {
         .last()
         .map(|panel| panel.read(cx).editor());
       self.outline_cache = None;
-      self.outline_caret_paragraph = self
+      self.outline_viewport_paragraph = self
         .active_editor
         .as_ref()
-        .map(|editor| editor.read(cx).caret_paragraph());
+        .and_then(|editor| editor.read(cx).viewport_anchor_paragraph());
+      self.outline_scrolled_paragraph = None;
     }
     if self.active_document_id.is_none() {
       self.outline_cache = None;
-      self.outline_caret_paragraph = None;
+      self.outline_viewport_paragraph = None;
+      self.outline_scrolled_paragraph = None;
       self.collapsed_outline_items.clear();
       self
         .outline_tree

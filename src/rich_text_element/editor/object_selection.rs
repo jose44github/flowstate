@@ -509,6 +509,25 @@ impl RichTextEditor {
     self.selection.head.paragraph
   }
 
+  pub fn viewport_anchor_paragraph(&self) -> Option<usize> {
+    if self.scroll_handle.bounds().size.height <= px(1.0) {
+      return None;
+    }
+    if let Some(paragraph_ix) = self.capture_visible_chunk_scroll_anchor().and_then(|anchor| anchor.paragraph_ix()) {
+      return Some(paragraph_ix);
+    }
+    let cache = self.item_sizes_cache.as_ref()?;
+    if self.height_prefix_index.len() != cache.item_count || cache.item_count == 0 {
+      return None;
+    }
+    let content_y = (-self.scroll_handle.offset().y).max(px(0.0));
+    let item_ix = self.height_prefix_index.lower_bound(content_y);
+    match cache.items.get(item_ix)? {
+      VirtualItem::ParagraphChunk { paragraph_ix, .. } | VirtualItem::ParagraphRemainder { paragraph_ix, .. } => Some(*paragraph_ix),
+      VirtualItem::HiddenBlock { block_ix } | VirtualItem::StructuralBlock { block_ix } => self.paragraph_ix_for_block(*block_ix),
+    }
+  }
+
   pub(super) fn drag_source_selection(&self) -> Option<EditorSelection> {
     self.active_text_drag.as_ref().map(|drag| EditorSelection {
       anchor: drag.source_range.start,

@@ -1,9 +1,10 @@
 impl Workspace {
   fn render_left_nav(&mut self, nav_width: Pixels, cx: &mut Context<Self>) -> impl IntoElement {
     self.refresh_outline_tree(cx);
-    self.refresh_outline_caret(cx);
+    self.refresh_outline_viewport(cx);
     let workspace = cx.entity().downgrade();
     let active_outline_paragraph = self.active_outline_paragraph(cx);
+    self.scroll_outline_item_into_view(active_outline_paragraph, cx);
     v_flex()
       .size_full()
       .h_full()
@@ -32,8 +33,8 @@ impl Workspace {
               .xsmall()
               .ghost()
               .tooltip("Collapse outline")
-              .on_click(cx.listener(|workspace, _, _, cx| {
-                workspace.toggle_outline(cx);
+              .on_click(cx.listener(|workspace, _, window, cx| {
+                workspace.toggle_outline(window, cx);
               })),
           ),
       )
