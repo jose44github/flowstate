@@ -170,6 +170,7 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
       ParagraphStyle::Pocket | ParagraphStyle::Hat | ParagraphStyle::Block | ParagraphStyle::Tag | ParagraphStyle::Analytic
     );
     let structural_run_formatting_allowed = matches!(style, ParagraphStyle::Tag | ParagraphStyle::Analytic | ParagraphStyle::Undertag);
+    let direct_highlight_allowed = !matches!(style, ParagraphStyle::Pocket | ParagraphStyle::Hat | ParagraphStyle::Block);
     let suppress_semantic_styles = matches!(
       style,
       ParagraphStyle::Pocket
@@ -218,6 +219,7 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
         bold_paragraph_overrides.as_deref(),
         suppress_semantic_styles,
         structural_run_formatting_allowed,
+        direct_highlight_allowed,
         style,
         can_process_citations,
         current_section_has_underline,
@@ -482,6 +484,7 @@ fn recognize_run_styles_for_context(
   bold_paragraph_overrides: Option<&[bool]>,
   suppress_semantic_styles: bool,
   structural_run_formatting_allowed: bool,
+  direct_highlight_allowed: bool,
   paragraph_style: ParagraphStyle,
   can_process_citations: bool,
   current_section_has_underline: bool,
@@ -500,7 +503,7 @@ fn recognize_run_styles_for_context(
     ),
     direct_underline: structural_run_formatting_allowed && run.underline,
     strikethrough: !suppress_semantic_styles && run.strikethrough,
-    highlight: if structural_run_formatting_allowed && run.highlight {
+    highlight: if direct_highlight_allowed && run.highlight {
       Some(HighlightStyle::Spoken)
     } else {
       None
@@ -789,6 +792,7 @@ mod tests {
       None,
       true,
       false,
+      false,
       ParagraphStyle::Block,
       false,
       false,
@@ -853,6 +857,7 @@ mod tests {
       None,
       true,
       false,
+      false,
       ParagraphStyle::Block,
       false,
       false,
@@ -879,6 +884,7 @@ mod tests {
       None,
       true,
       true,
+      true,
       ParagraphStyle::Tag,
       false,
       false,
@@ -888,6 +894,28 @@ mod tests {
     assert_eq!(run_styles.semantic, RunSemanticStyle::Plain);
     assert!(run_styles.direct_underline);
     assert!(!run_styles.strikethrough);
+    assert_eq!(run_styles.highlight, Some(HighlightStyle::Spoken));
+  }
+
+  #[test]
+  fn normal_paragraph_preserves_direct_highlight() {
+    let styles = style_resolver();
+    let mut run = run(None, "spoken text");
+    run.highlight = true;
+
+    let run_styles = recognize_run_styles_for_context(
+      &run,
+      0,
+      None,
+      false,
+      false,
+      true,
+      ParagraphStyle::Normal,
+      false,
+      false,
+      &styles,
+    );
+
     assert_eq!(run_styles.highlight, Some(HighlightStyle::Spoken));
   }
 }

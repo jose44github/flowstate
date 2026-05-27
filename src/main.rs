@@ -4,6 +4,9 @@ use clap::Parser;
 
 use flowstate::{run_standalone, write_demo_document};
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Command line arguments for the standalone rich text processor.
 ///
 /// `clap`'s derive API turns this struct into a parser: it generates
