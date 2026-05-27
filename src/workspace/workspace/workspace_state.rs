@@ -4,23 +4,23 @@ impl Workspace {
     cx.notify();
   }
 
-  pub fn toggle_outline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_outline_toggle(cx), window, cx);
+  pub fn toggle_outline(&mut self, cx: &mut Context<Self>) {
+    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_outline_toggle(cx), cx);
     self.outline_collapsed = !self.outline_collapsed;
     cx.notify();
   }
 
-  pub fn toggle_toolkit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_toolkit_toggle(cx), window, cx);
+  pub fn toggle_toolkit(&mut self, cx: &mut Context<Self>) {
+    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_toolkit_toggle(cx), cx);
     self.toolkit_collapsed = !self.toolkit_collapsed;
     cx.notify();
   }
 
-  fn prepare_active_editor_for_container_resize(&mut self, expected_width: Option<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+  fn prepare_active_editor_for_container_resize(&mut self, expected_width: Option<Pixels>, cx: &mut Context<Self>) {
     let Some(editor) = self.active_editor.clone() else {
       return;
     };
-    editor.update(cx, |editor, cx| editor.prepare_for_container_resize(expected_width, window, cx));
+    editor.update(cx, |editor, cx| editor.prepare_for_container_resize(expected_width, cx));
   }
 
   fn current_document_panel_width(&self, cx: &mut Context<Self>) -> Option<Pixels> {

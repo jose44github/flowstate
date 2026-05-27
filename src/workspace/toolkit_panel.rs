@@ -28,7 +28,7 @@ impl Workspace {
           .grow(false)
           .child(if self.toolkit_collapsed {
             self
-              .render_collapsed_side_panel("Show toolkit", IconName::PanelRightOpen, |workspace, window, cx| workspace.toggle_toolkit(window, cx), cx)
+              .render_collapsed_side_panel("Show toolkit", IconName::PanelRightOpen, |workspace, cx| workspace.toggle_toolkit(cx), cx)
               .into_any_element()
           } else {
             self.render_toolkit(cx).into_any_element()
@@ -59,8 +59,8 @@ impl Workspace {
               .xsmall()
               .ghost()
               .tooltip("Collapse toolkit")
-              .on_click(cx.listener(|workspace, _, window, cx| {
-                workspace.toggle_toolkit(window, cx);
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.toggle_toolkit(cx);
               })),
           )
           .child(

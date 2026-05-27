@@ -33,8 +33,8 @@ impl Workspace {
               .xsmall()
               .ghost()
               .tooltip("Collapse outline")
-              .on_click(cx.listener(|workspace, _, window, cx| {
-                workspace.toggle_outline(window, cx);
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.toggle_outline(cx);
               })),
           ),
       )
