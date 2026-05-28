@@ -222,53 +222,85 @@ impl RichTextEditor {
     self.set_invisibility_mode(!self.invisibility_mode, cx);
   }
 
-  pub fn save(&mut self, cx: &mut Context<Self>) -> io::Result<()> {
+  pub fn save(&mut self, cx: &mut Context<Self>) -> Task<io::Result<()>> {
     if self.disposed {
-      return Err(io::Error::new(io::ErrorKind::NotFound, "editor is closed"));
+      return cx
+        .background_executor()
+        .spawn(async { Err(io::Error::new(io::ErrorKind::NotFound, "editor is closed")) });
     }
     let Some(path) = self.document_path.clone() else {
-      return Err(io::Error::new(io::ErrorKind::InvalidInput, "choose a save location before saving"));
+      return cx
+        .background_executor()
+        .spawn(async { Err(io::Error::new(io::ErrorKind::InvalidInput, "choose a save location before saving")) });
     };
     self.save_to_path(path, cx)
   }
 
-  pub fn save_as(&mut self, path: PathBuf, cx: &mut Context<Self>) -> io::Result<()> {
+  pub fn save_as(&mut self, path: PathBuf, cx: &mut Context<Self>) -> Task<io::Result<()>> {
     if self.disposed {
-      return Err(io::Error::new(io::ErrorKind::NotFound, "editor is closed"));
+      return cx
+        .background_executor()
+        .spawn(async { Err(io::Error::new(io::ErrorKind::NotFound, "editor is closed")) });
     }
     self.document_path = Some(path.clone());
     self.recovery_path = Some(recovery_path_for_document(&path));
     self.save_to_path(path, cx)
   }
 
-  fn save_to_path(&mut self, path: PathBuf, cx: &mut Context<Self>) -> io::Result<()> {
+  fn save_to_path(&mut self, path: PathBuf, cx: &mut Context<Self>) -> Task<io::Result<()>> {
     if self.disposed {
-      return Err(io::Error::new(io::ErrorKind::NotFound, "editor is closed"));
+      return cx
+        .background_executor()
+        .spawn(async { Err(io::Error::new(io::ErrorKind::NotFound, "editor is closed")) });
     }
+    let generation = self.edit_generation;
+    let document = self.document.clone();
+    let recovery_path = self.recovery_path.clone();
     self.save_status = SaveStatus::Saving;
     cx.notify();
-    let result = write_db8(&path, &self.document);
-    match result {
-      Ok(()) => {
-        self.saved_generation = self.edit_generation;
-        self.save_status = SaveStatus::Saved;
-        if let Some(path) = &self.recovery_path {
-          let _ = fs::remove_file(path);
-        }
-        cx.notify();
-        Ok(())
-      },
-      Err(error) => {
-        self.save_status = SaveStatus::SaveFailed(error.to_string());
-        cx.notify();
-        Err(error)
-      },
-    }
+    cx.spawn(async move |editor, cx| {
+      let write_result = cx
+        .background_executor()
+        .spawn(async move {
+          let document = detach_document_for_background_write(&document);
+          let result = write_db8(&path, &document);
+          if result.is_ok()
+            && let Some(recovery_path) = recovery_path
+          {
+            let _ = fs::remove_file(recovery_path);
+          }
+          result
+        })
+        .await;
+      match write_result {
+        Ok(()) => {
+          let _ = editor.update(cx, |editor, cx| {
+            editor.saved_generation = editor.saved_generation.max(generation);
+            editor.refresh_save_status();
+            cx.notify();
+          });
+          Ok(())
+        },
+        Err(error) => {
+          let message = error.to_string();
+          let _ = editor.update(cx, |editor, cx| {
+            if generation >= editor.saved_generation {
+              editor.save_status = SaveStatus::SaveFailed(message);
+            }
+            cx.notify();
+          });
+          Err(error)
+        },
+      }
+    })
   }
 
-  pub fn discard_recovery_file(&mut self) {
-    if let Some(path) = &self.recovery_path {
-      let _ = fs::remove_file(path);
+  pub fn discard_recovery_file(&mut self, cx: &mut Context<Self>) {
+    if let Some(path) = self.recovery_path.clone() {
+      cx.background_executor().spawn(async move {
+        let _ = fs::remove_file(path);
+      })
+      .detach();
     }
   }
 
