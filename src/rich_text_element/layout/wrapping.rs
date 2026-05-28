@@ -174,8 +174,8 @@ fn wrap_text_segment_limited(
   };
 
   while start < segment.end {
-    let break_cursor = first_break_after(&break_ends, start);
-    let break_limit = first_break_after(&break_ends, segment.end);
+    let break_cursor = first_break_after(break_ends, start);
+    let break_limit = first_break_after(break_ends, segment.end);
     let last_break = if break_cursor < break_limit {
       if let Some(over_ix) = first_break_over_width(
         document,
@@ -183,7 +183,7 @@ fn wrap_text_segment_limited(
         &p_format,
         text,
         start,
-        &break_ends,
+        break_ends,
         break_cursor..break_limit,
         max_width,
         shape_cache,

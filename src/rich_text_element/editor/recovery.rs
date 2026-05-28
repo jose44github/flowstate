@@ -44,9 +44,15 @@ impl RichTextEditor {
     self
       .paragraph_chunk_layout_cache
       .resize(paragraph_count, None);
+    self
+      .paragraph_shaping_cache
+      .resize_with(paragraph_count, || None);
     for (paragraph_ix, entry) in self.paragraph_chunk_layout_cache.iter_mut().enumerate() {
       if paragraph_ix < keep_start || paragraph_ix >= keep_end {
         *entry = None;
+        if let Some(shape_cache) = self.paragraph_shaping_cache.get_mut(paragraph_ix) {
+          *shape_cache = None;
+        }
       }
     }
     self

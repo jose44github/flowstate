@@ -96,6 +96,7 @@ impl RichTextEditor {
     }
     self.document.blocks = Arc::new(output);
     self.selected_block = None;
+    self.clear_layout_work_caches();
     self.item_sizes_cache = None;
     self.paragraph_height_cache_revision = self.paragraph_height_cache_revision.wrapping_add(1);
   }
@@ -118,6 +119,7 @@ impl RichTextEditor {
     Arc::make_mut(&mut self.document.blocks).splice(insert_ix..insert_ix, blocks);
     self.append_missing_paragraph_blocks();
     self.selected_block = None;
+    self.clear_layout_work_caches();
     self.item_sizes_cache = None;
     self.paragraph_height_cache_revision = self.paragraph_height_cache_revision.wrapping_add(1);
   }

@@ -29,6 +29,13 @@ impl RichTextEditor {
     if remainders.is_empty() {
       return false;
     }
+    let missing_prep = remainders
+      .iter()
+      .filter_map(|(paragraph_ix, _, _)| self.valid_paragraph_prep(*paragraph_ix).is_none().then_some(*paragraph_ix))
+      .collect::<Vec<_>>();
+    if !missing_prep.is_empty() {
+      self.request_layout_prep(width, missing_prep, cx);
+    }
 
     let started = Instant::now();
     let budget = Duration::from_millis(SCROLL_FOREGROUND_MATERIALIZE_BUDGET_MS);
@@ -36,6 +43,7 @@ impl RichTextEditor {
     for (paragraph_ix, start_byte, target) in remainders {
       changed |= self.materialize_paragraph_remainder_until(paragraph_ix, width, start_byte, target, started, budget, window, cx);
       if !DISABLE_SCROLL_LIMITING_FUNCTIONS && started.elapsed() >= budget {
+        self.layout_runtime_metrics.scroll_budget_overruns = self.layout_runtime_metrics.scroll_budget_overruns.saturating_add(1);
         break;
       }
     }
@@ -80,24 +88,20 @@ impl RichTextEditor {
       if !DISABLE_SCROLL_LIMITING_FUNCTIONS && started.elapsed() >= budget {
         break;
       }
-      let (exact_after_start, complete) = self.paragraph_exact_height_after_byte(paragraph_ix, start_byte);
+      let (exact_after_start, complete) = self.paragraph_exact_height_after_byte(paragraph_ix, start_byte, width);
       if complete || exact_after_start >= target {
         break;
       }
       let target_lines = self.catch_up_chunk_target_lines(target - exact_after_start);
       let before = self
-        .paragraph_chunk_layout_cache
-        .get(paragraph_ix)
-        .and_then(|entry| entry.as_ref())
+        .valid_chunk_cache_entry(paragraph_ix, width)
         .map(|entry| entry.chunks.len())
         .unwrap_or(0);
       if !self.ensure_next_paragraph_chunk_with_target_lines(paragraph_ix, width, target_lines, window, cx) {
         break;
       }
       let after = self
-        .paragraph_chunk_layout_cache
-        .get(paragraph_ix)
-        .and_then(|entry| entry.as_ref())
+        .valid_chunk_cache_entry(paragraph_ix, width)
         .map(|entry| entry.chunks.len())
         .unwrap_or(before);
       if after == before {
@@ -108,11 +112,9 @@ impl RichTextEditor {
     changed
   }
 
-  fn paragraph_exact_height_after_byte(&self, paragraph_ix: usize, start_byte: usize) -> (Pixels, bool) {
+  fn paragraph_exact_height_after_byte(&self, paragraph_ix: usize, start_byte: usize, width: Pixels) -> (Pixels, bool) {
     let Some(entry) = self
-      .paragraph_chunk_layout_cache
-      .get(paragraph_ix)
-      .and_then(|entry| entry.as_ref())
+      .valid_chunk_cache_entry(paragraph_ix, width)
     else {
       return (px(0.0), false);
     };

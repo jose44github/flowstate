@@ -1,13 +1,8 @@
 impl RichTextEditor {
   fn paragraph_chunk_containing_byte(&self, paragraph_ix: usize, byte: usize, width: Pixels) -> Option<(usize, Rc<LayoutState>)> {
-    let paragraph = self.document.paragraphs.get(paragraph_ix)?;
-    let paragraph_len = paragraph_text_len(paragraph);
-    let key = paragraph_cache_key(&self.document, paragraph);
+    let paragraph_len = self.document.paragraphs.get(paragraph_ix).map(paragraph_text_len)?;
     self
-      .paragraph_chunk_layout_cache
-      .get(paragraph_ix)
-      .and_then(|entry| entry.as_ref())
-      .filter(|entry| entry.key == key && entry.width == width && entry.invisibility_mode == self.invisibility_mode)
+      .valid_chunk_cache_entry(paragraph_ix, width)
       .and_then(|entry| {
         entry
           .chunks
@@ -31,18 +26,14 @@ impl RichTextEditor {
         return Some(chunk_ix);
       }
       let before_len = self
-        .paragraph_chunk_layout_cache
-        .get(paragraph_ix)
-        .and_then(|entry| entry.as_ref())
+        .valid_chunk_cache_entry(paragraph_ix, width)
         .map(|entry| entry.chunks.len())
         .unwrap_or(0);
       if !self.ensure_next_paragraph_chunk(paragraph_ix, width, window, cx) {
         return None;
       }
       let after = self
-        .paragraph_chunk_layout_cache
-        .get(paragraph_ix)
-        .and_then(|entry| entry.as_ref())?;
+        .valid_chunk_cache_entry(paragraph_ix, width)?;
       if after.complete && after.chunks.len() == before_len {
         return self
           .paragraph_chunk_containing_byte(paragraph_ix, byte, width)
@@ -58,9 +49,7 @@ impl RichTextEditor {
     match dir {
       VDir::Down => {
         let needs_next_chunk = self
-          .paragraph_chunk_layout_cache
-          .get(head.paragraph)
-          .and_then(|entry| entry.as_ref())
+          .valid_chunk_cache_entry(head.paragraph, width)
           .is_some_and(|entry| chunk_ix + 1 >= entry.chunks.len() && !entry.complete);
         if needs_next_chunk {
           self.ensure_next_paragraph_chunk(head.paragraph, width, window, cx);
@@ -77,19 +66,27 @@ impl RichTextEditor {
   }
 
   fn paragraph_remainder_estimate(&self, paragraph_ix: usize, width: Pixels) -> Pixels {
-    let estimated_total = estimate_paragraph_item_height_with_visibility(&self.document, paragraph_ix, width, self.invisibility_mode);
+    let estimated_total = self
+      .valid_paragraph_prep(paragraph_ix)
+      .as_deref()
+      .map(|prep| estimate_paragraph_prep_item_height(&self.document, prep, width))
+      .unwrap_or_else(|| estimate_paragraph_item_height_with_visibility(&self.document, paragraph_ix, width, self.invisibility_mode));
     let exact_height = self
-      .paragraph_chunk_layout_cache
-      .get(paragraph_ix)
-      .and_then(|entry| entry.as_ref())
+      .valid_chunk_cache_entry(paragraph_ix, width)
       .map(|entry| entry.exact_height)
       .unwrap_or(px(0.0));
     let remaining = (estimated_total - exact_height).max(self.document.theme.body_font_size * self.document.theme.line_spacing);
     let text_len = self
-      .document
-      .paragraphs
-      .get(paragraph_ix)
-      .map(paragraph_text_len)
+      .valid_paragraph_prep(paragraph_ix)
+      .as_deref()
+      .map(|prep| prep.source_len)
+      .or_else(|| {
+        self
+          .document
+          .paragraphs
+          .get(paragraph_ix)
+          .map(paragraph_text_len)
+      })
       .unwrap_or(0);
     if text_len > 16 * 1024 || estimated_total > self.scroll_handle.bounds().size.height.max(px(700.0)) * 1.5 {
       remaining.max(self.scroll_handle.bounds().size.height.max(px(700.0)) + px(1024.0))
@@ -111,14 +108,29 @@ impl RichTextEditor {
     }
 
     let mut queued = vec![false; paragraph_count];
+    let active = self.active_height_range();
+    let visible = if self.visible_layout_range.is_empty() {
+      0..0
+    } else {
+      self.paragraph_range_for_item_range(self.visible_layout_range.clone())
+    };
+    let mut prep_queue = Vec::new();
     for range in ranges {
       for paragraph_ix in range {
         if paragraph_ix >= paragraph_count || queued[paragraph_ix] || !self.paragraph_visible_in_current_mode(paragraph_ix) {
           continue;
         }
         queued[paragraph_ix] = true;
+        let urgent = active.contains(&paragraph_ix) || visible.contains(&paragraph_ix);
+        if !urgent && self.valid_paragraph_prep(paragraph_ix).is_none() {
+          prep_queue.push(paragraph_ix);
+          continue;
+        }
         self.ensure_next_paragraph_chunk(paragraph_ix, width, window, cx);
       }
+    }
+    if !prep_queue.is_empty() {
+      self.request_layout_prep(width, prep_queue, cx);
     }
   }
 
@@ -138,18 +150,14 @@ impl RichTextEditor {
       }
       loop {
         let before = self
-          .paragraph_chunk_layout_cache
-          .get(paragraph_ix)
-          .and_then(|entry| entry.as_ref())
+          .valid_chunk_cache_entry(paragraph_ix, width)
           .map(|entry| entry.chunks.len())
           .unwrap_or(0);
         if !self.ensure_next_paragraph_chunk(paragraph_ix, width, window, cx) {
           break;
         }
         let Some(entry) = self
-          .paragraph_chunk_layout_cache
-          .get(paragraph_ix)
-          .and_then(|entry| entry.as_ref())
+          .valid_chunk_cache_entry(paragraph_ix, width)
         else {
           break;
         };

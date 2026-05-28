@@ -5,6 +5,7 @@ include!("table_layout.rs");
 include!("paragraph_layout.rs");
 include!("estimates.rs");
 include!("wrapping.rs");
+include!("prep.rs");
 include!("shaping.rs");
 include!("fragments.rs");
 include!("decorations.rs");

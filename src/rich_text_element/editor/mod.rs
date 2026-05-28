@@ -14,7 +14,7 @@ use crop::Rope;
 use gpui::{
   App, Bounds, ClipboardEntry, ClipboardItem, Context, CursorStyle, Entity, ExternalPaths, FocusHandle, Focusable, Image, ImageFormat,
   InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathPromptOptions, Pixels, Point,
-  Render, SharedString, Size, Subscription, Timer, Window, actions, div, img, point, prelude::*, px, relative, rgb, size,
+  Render, SharedString, Size, Subscription, Task, Timer, Window, actions, div, img, point, prelude::*, px, relative, rgb, size,
 };
 use gpui_component::scroll::{Scrollbar, ScrollbarHandle, ScrollbarShow};
 use gpui_component::{VirtualListScrollHandle, v_virtual_list};
@@ -401,8 +401,9 @@ struct ParagraphChunkLayoutCacheEntry {
   key: ParagraphCacheKey,
   width: Pixels,
   invisibility_mode: bool,
-  paragraph_text: Option<Rc<str>>,
-  wrap_break_ends: Option<Rc<Vec<usize>>>,
+  edit_generation: u64,
+  layout_generation: u64,
+  prep: Arc<ParagraphPrep>,
   chunks: Vec<ParagraphChunkLayout>,
   complete: bool,
   exact_height: Pixels,
@@ -416,6 +417,66 @@ struct ParagraphChunkLayout {
   layout: Rc<LayoutState>,
 }
 
+#[derive(Clone, Default)]
+struct ParagraphPrepSlot {
+  normal: Option<Arc<ParagraphPrep>>,
+  invisible: Option<Arc<ParagraphPrep>>,
+}
+
+impl ParagraphPrepSlot {
+  fn get(&self, invisibility_mode: bool) -> Option<&Arc<ParagraphPrep>> {
+    if invisibility_mode {
+      self.invisible.as_ref()
+    } else {
+      self.normal.as_ref()
+    }
+  }
+
+  fn set(&mut self, prep: Arc<ParagraphPrep>) {
+    if prep.key.invisibility_mode {
+      self.invisible = Some(prep);
+    } else {
+      self.normal = Some(prep);
+    }
+  }
+
+  fn clear(&mut self) {
+    self.normal = None;
+    self.invisible = None;
+  }
+}
+
+struct ParagraphShapingCacheEntry {
+  key: ParagraphLayoutWorkKey,
+  fragment_shapes: FragmentShapeCache,
+}
+
+#[derive(Clone)]
+struct LayoutPrepRequest {
+  width: Pixels,
+  edit_generation: u64,
+  invisibility_mode: bool,
+  paragraphs: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LayoutPrepMetrics {
+  requested: usize,
+  completed: usize,
+  installed: usize,
+  stale: usize,
+  batches: usize,
+  text_bytes: usize,
+}
+
+#[derive(Clone, Copy, Default)]
+struct LayoutRuntimeMetrics {
+  ui_chunk_builds: usize,
+  ui_chunk_build_time: Duration,
+  prefetch_budget_overruns: usize,
+  scroll_budget_overruns: usize,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ItemSizeBenchmarkResult {
   pub(crate) elapsed: Duration,
@@ -423,6 +484,16 @@ pub(crate) struct ItemSizeBenchmarkResult {
   pub(crate) item_count: usize,
   pub(crate) exact_height_count: usize,
   pub(crate) total_height: f32,
+  pub(crate) prep_requested: usize,
+  pub(crate) prep_completed: usize,
+  pub(crate) prep_installed: usize,
+  pub(crate) prep_stale: usize,
+  pub(crate) prep_batches: usize,
+  pub(crate) prep_text_bytes: usize,
+  pub(crate) ui_chunk_builds: usize,
+  pub(crate) ui_chunk_build_time: Duration,
+  pub(crate) prefetch_budget_overruns: usize,
+  pub(crate) scroll_budget_overruns: usize,
 }
 
 #[derive(Clone)]
@@ -691,6 +762,13 @@ pub struct RichTextEditor {
   pending_typing_prefetch_resume: bool,
   resume_chunk_prefetch_after_typing: bool,
   paragraph_chunk_layout_cache: Vec<Option<ParagraphChunkLayoutCacheEntry>>,
+  paragraph_prep_cache: Vec<ParagraphPrepSlot>,
+  paragraph_shaping_cache: Vec<Option<ParagraphShapingCacheEntry>>,
+  pending_layout_prep_task: Option<Task<()>>,
+  pending_layout_prep_request: Option<LayoutPrepRequest>,
+  layout_generation: u64,
+  layout_prep_metrics: LayoutPrepMetrics,
+  layout_runtime_metrics: LayoutRuntimeMetrics,
   pending_chunk_prefetch: bool,
   chunk_prefetch_queue: VecDeque<usize>,
   paragraph_height_cache: Vec<Option<ParagraphHeightCacheEntry>>,
@@ -732,6 +810,7 @@ include!("action_handlers.rs");
 include!("edit_pipeline.rs");
 include!("scroll_anchor.rs");
 include!("item_sizes.rs");
+include!("layout_prep.rs");
 include!("chunk_layout.rs");
 include!("chunk_materialization.rs");
 include!("chunk_navigation.rs");
