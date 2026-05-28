@@ -15,7 +15,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[derive(Parser)]
 #[command(name = "Flowstate", about = "A rich-text editor for debate documents.")]
 struct Cli {
-  /// Optional path to the `.db8` document to open.
+  /// Optional path to the `.db8`, `.docx`, or `.fl0` document to open.
   #[arg(value_name = "PATH")]
   path: Option<PathBuf>,
 

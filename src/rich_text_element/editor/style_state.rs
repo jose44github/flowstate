@@ -205,15 +205,6 @@ impl RichTextEditor {
     self.set_invisibility_mode(!self.invisibility_mode, cx);
   }
 
-  pub fn prepare_for_container_resize(&mut self, expected_width: Option<Pixels>, cx: &mut Context<Self>) {
-    // The editor's virtual list positions rows from cached item heights. Side
-    // panel collapse changes the document width before row children report the
-    // new measured width, so the old cache can otherwise paint for one frame.
-    self.measured_item_width = expected_width;
-    self.invalidate_document_layout_caches();
-    cx.notify();
-  }
-
   pub fn save(&mut self, cx: &mut Context<Self>) -> io::Result<()> {
     if self.disposed {
       return Err(io::Error::new(io::ErrorKind::NotFound, "editor is closed"));

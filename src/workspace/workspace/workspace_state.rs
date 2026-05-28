@@ -5,55 +5,13 @@ impl Workspace {
   }
 
   pub fn toggle_outline(&mut self, cx: &mut Context<Self>) {
-    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_outline_toggle(cx), cx);
     self.outline_collapsed = !self.outline_collapsed;
     cx.notify();
   }
 
   pub fn toggle_toolkit(&mut self, cx: &mut Context<Self>) {
-    self.prepare_active_editor_for_container_resize(self.expected_document_width_after_toolkit_toggle(cx), cx);
     self.toolkit_collapsed = !self.toolkit_collapsed;
     cx.notify();
-  }
-
-  fn prepare_active_editor_for_container_resize(&mut self, expected_width: Option<Pixels>, cx: &mut Context<Self>) {
-    let Some(editor) = self.active_editor.clone() else {
-      return;
-    };
-    editor.update(cx, |editor, cx| editor.prepare_for_container_resize(expected_width, cx));
-  }
-
-  fn current_document_panel_width(&self, cx: &mut Context<Self>) -> Option<Pixels> {
-    self
-      .content_resizable_state
-      .read(cx)
-      .sizes()
-      .first()
-      .copied()
-  }
-
-  fn expected_document_width_after_outline_toggle(&self, cx: &mut Context<Self>) -> Option<Pixels> {
-    let current_document_width = self.current_document_panel_width(cx)?;
-    let outline_sizes = self.body_resizable_state.read(cx).sizes().clone();
-    let current_outline_width = outline_sizes.first().copied().unwrap_or(px(240.0));
-    let delta = if self.outline_collapsed {
-      px(30.0) - px(240.0)
-    } else {
-      current_outline_width - px(30.0)
-    };
-    Some((current_document_width + delta).max(px(360.0)))
-  }
-
-  fn expected_document_width_after_toolkit_toggle(&self, cx: &mut Context<Self>) -> Option<Pixels> {
-    let sizes = self.content_resizable_state.read(cx).sizes().clone();
-    let current_document_width = sizes.first().copied()?;
-    let current_toolkit_width = sizes.get(1).copied().unwrap_or(px(300.0));
-    let delta = if self.toolkit_collapsed {
-      px(30.0) - px(300.0)
-    } else {
-      current_toolkit_width - px(30.0)
-    };
-    Some((current_document_width + delta).max(px(360.0)))
   }
 
   fn refresh_outline_tree(&mut self, cx: &mut Context<Self>) {
@@ -67,6 +25,10 @@ impl Workspace {
       return;
     };
     let Some(editor) = &self.active_editor else {
+      self.outline_cache = None;
+      self
+        .outline_tree
+        .update(cx, |tree, cx| tree.set_items(Vec::<TreeItem>::new(), cx));
       return;
     };
     let document = editor.read(cx).document().clone();
@@ -126,35 +88,61 @@ impl Workspace {
       .collect()
   }
 
+  fn dirty_panels(&self, cx: &App) -> Vec<PanelKind> {
+    let mut panels = self
+      .document_panels
+      .iter()
+      .filter(|panel| panel.read(cx).is_dirty(cx))
+      .map(|panel| PanelKind::Document(panel.read(cx).editor()))
+      .collect::<Vec<_>>();
+    panels.extend(
+      self
+        .flow_panels
+        .iter()
+        .filter(|panel| panel.read(cx).is_dirty(cx))
+        .map(|panel| PanelKind::Flow(panel.read(cx).editor())),
+    );
+    panels
+  }
+
   fn activate_document_id(&mut self, panel_id: Uuid, cx: &mut Context<Self>) {
-    let Some(panel) = self
+    if let Some(panel) = self
       .document_panels
       .iter()
       .find(|panel| panel.read(cx).id() == panel_id)
-    else {
+    {
+      self.active_document_id = Some(panel_id);
+      self.active_editor = Some(panel.read(cx).editor());
+      self.active_flow = None;
+      self.refresh_outline_tree(cx);
+      cx.notify();
       return;
-    };
-    self.active_document_id = Some(panel_id);
-    self.active_editor = Some(panel.read(cx).editor());
-    cx.notify();
+    }
+    if let Some(panel) = self
+      .flow_panels
+      .iter()
+      .find(|panel| panel.read(cx).id() == panel_id)
+    {
+      self.active_document_id = Some(panel_id);
+      self.active_editor = None;
+      self.active_flow = Some(panel.read(cx).editor());
+      self.outline_cache = None;
+      self.outline_viewport_paragraph = None;
+      self.outline_scrolled_paragraph = None;
+      cx.notify();
+    }
   }
 
   fn active_document_index(&self, cx: &App) -> Option<usize> {
     let active_id = self.active_document_id?;
-    self
-      .document_panels
-      .iter()
-      .position(|panel| panel.read(cx).id() == active_id)
+    self.document_tabs(cx).iter().position(|tab| tab.id == active_id)
   }
 
   fn activate_document_at_index(&mut self, index: usize, cx: &mut Context<Self>) {
-    let Some(panel) = self.document_panels.get(index) else {
-      return;
-    };
-    let panel = panel.read(cx);
-    self.active_document_id = Some(panel.id());
-    self.active_editor = Some(panel.editor());
-    cx.notify();
+    let panel_id = self.document_tabs(cx).get(index).map(|tab| tab.id);
+    if let Some(panel_id) = panel_id {
+      self.activate_document_id(panel_id, cx);
+    }
   }
 
   fn navigate_active_tab(&mut self, offset: isize, cx: &mut Context<Self>) {
@@ -166,7 +154,7 @@ impl Workspace {
     } else {
       active_index.checked_add(offset as usize)
     };
-    if let Some(target) = target.filter(|target| *target < self.document_panels.len()) {
+    if let Some(target) = target.filter(|target| *target < self.document_tabs(cx).len()) {
       self.activate_document_at_index(target, cx);
     }
   }
@@ -183,7 +171,7 @@ impl Workspace {
   }
 
   fn document_tabs(&self, cx: &App) -> Vec<DocumentTab> {
-    self
+    let mut tabs = self
       .document_panels
       .iter()
       .map(|panel| {
@@ -198,7 +186,20 @@ impl Workspace {
           active: Some(panel.id()) == self.active_document_id,
         }
       })
-      .collect()
+      .collect::<Vec<_>>();
+    tabs.extend(self.flow_panels.iter().map(|panel| {
+      let panel = panel.read(cx);
+      let title = panel.title_text();
+      let dirty = panel.is_dirty(cx);
+      let title = truncate_tab_title(&title, 32);
+      let label = if dirty { format!("*{title}").into() } else { title.into() };
+      DocumentTab {
+        id: panel.id(),
+        label,
+        active: Some(panel.id()) == self.active_document_id,
+      }
+    }));
+    tabs
   }
 
   fn active_outline_paragraph(&self, cx: &App) -> Option<usize> {

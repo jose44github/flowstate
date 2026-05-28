@@ -7,7 +7,7 @@ use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Entity, EntityInputHandler,
     EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
+    Hsla, Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
     Task, UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _, px,
 };
 use ropey::{Rope, RopeSlice};
@@ -93,6 +93,8 @@ actions!(
 pub enum InputEvent {
     Change,
     PressEnter { secondary: bool },
+    BackspaceEmpty,
+    DeleteEmpty,
     Focus,
     Blur,
 }
@@ -302,6 +304,8 @@ pub struct InputState {
     /// The mask pattern for formatting the input text
     pub(crate) mask_pattern: MaskPattern,
     pub(super) placeholder: SharedString,
+    pub(super) text_color: Option<Hsla>,
+    pub(super) placeholder_color: Option<Hsla>,
 
     /// Popover
     diagnostic_popover: Option<Entity<DiagnosticPopover>>,
@@ -397,6 +401,8 @@ impl InputState {
             deferred_scroll_offset: None,
             preferred_column: None,
             placeholder: SharedString::default(),
+            text_color: None,
+            placeholder_color: None,
             mask_pattern: MaskPattern::default(),
             lsp: Lsp::default(),
             diagnostic_popover: None,
@@ -1029,6 +1035,10 @@ impl InputState {
     }
 
     pub(super) fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
+        if self.text.len() == 0 && self.selected_range.is_empty() {
+            cx.emit(InputEvent::BackspaceEmpty);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.previous_boundary(self.cursor()), cx)
         }
@@ -1037,6 +1047,10 @@ impl InputState {
     }
 
     pub(super) fn delete(&mut self, _: &Delete, window: &mut Window, cx: &mut Context<Self>) {
+        if self.text.len() == 0 && self.selected_range.is_empty() {
+            cx.emit(InputEvent::DeleteEmpty);
+            return;
+        }
         if self.selected_range.is_empty() {
             self.select_to(self.next_boundary(self.cursor()), cx)
         }
@@ -1050,6 +1064,10 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.text.len() == 0 && self.selected_range.is_empty() {
+            cx.emit(InputEvent::BackspaceEmpty);
+            return;
+        }
         if !self.selected_range.is_empty() {
             self.replace_text_in_range(None, "", window, cx);
             self.pause_blink_cursor(cx);
@@ -1075,6 +1093,10 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.text.len() == 0 && self.selected_range.is_empty() {
+            cx.emit(InputEvent::DeleteEmpty);
+            return;
+        }
         if !self.selected_range.is_empty() {
             self.replace_text_in_range(None, "", window, cx);
             self.pause_blink_cursor(cx);
@@ -1100,6 +1122,10 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.text.len() == 0 && self.selected_range.is_empty() {
+            cx.emit(InputEvent::BackspaceEmpty);
+            return;
+        }
         if !self.selected_range.is_empty() {
             self.replace_text_in_range(None, "", window, cx);
             self.pause_blink_cursor(cx);
@@ -1122,6 +1148,10 @@ impl InputState {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.text.len() == 0 && self.selected_range.is_empty() {
+            cx.emit(InputEvent::DeleteEmpty);
+            return;
+        }
         if !self.selected_range.is_empty() {
             self.replace_text_in_range(None, "", window, cx);
             self.pause_blink_cursor(cx);

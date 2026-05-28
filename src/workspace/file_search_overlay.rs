@@ -32,7 +32,7 @@ pub struct FileSearchOverlay {
 
 impl FileSearchOverlay {
   pub fn new(workspace: WeakEntity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("file_name.db8 or file_name.docx"));
+    let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("file_name.db8, file_name.docx, or file_name.fl0"));
     let _input_subscription = cx.subscribe(&search_input, |overlay, _, event: &InputEvent, cx| match event {
       InputEvent::Change => overlay.refresh_results(cx),
       _ => {},
@@ -262,9 +262,9 @@ impl Render for FileSearchOverlay {
                   if self.loading {
                     "Indexing documents..."
                   } else if query.trim().is_empty() {
-                    "No .db8 or .docx files indexed"
+                    "No .db8, .docx, or .fl0 files indexed"
                   } else {
-                    "No matching .db8 or .docx files"
+                    "No matching .db8, .docx, or .fl0 files"
                   }
                   .into()
                 });

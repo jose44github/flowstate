@@ -12,6 +12,19 @@ impl Workspace {
     format!("Untitled{index}.db8")
   }
 
+  fn next_untitled_flow_title(&self, cx: &App) -> String {
+    let used = self
+      .flow_panels
+      .iter()
+      .filter_map(|panel| untitled_flow_index(panel.read(cx).title_text().as_ref()))
+      .collect::<HashSet<_>>();
+    let mut index = 1usize;
+    while used.contains(&index) {
+      index += 1;
+    }
+    format!("Untitled{index}.fl0")
+  }
+
   fn render_document_tab_bar_prefix(&self, active_index: usize, tab_count: usize, cx: &mut Context<Self>) -> impl IntoElement {
     h_flex()
       .h_full()
@@ -63,6 +76,7 @@ impl Workspace {
     // dispatch grows beyond direct callbacks, keep the buttons mapped to
     // `CommandId::NewDocument` and `CommandId::OpenDemoDocument`.
     let new_doc = cx.listener(|workspace, _, window, cx| workspace.new_document(window, cx));
+    let new_flow = cx.listener(|workspace, _, window, cx| workspace.new_flow(window, cx));
     let open_document = cx.listener(|workspace, _, window, cx| workspace.prompt_open_document(window, cx));
     let open_search = cx.listener(|workspace, _, window, cx| workspace.open_file_search_overlay(window, cx));
     v_flex()
@@ -88,6 +102,12 @@ impl Workspace {
               .on_click(new_doc),
           )
           .child(
+            Button::new("empty-new-flow")
+              .icon(IconName::Plus)
+              .label("New Flow")
+              .on_click(new_flow),
+          )
+          .child(
             Button::new("empty-open-document")
               .icon(IconName::FolderOpen)
               .label("Open")
@@ -108,7 +128,7 @@ impl Workspace {
       .w_full()
       .items_center()
       .px_2()
-      .border_t_1()
+      .border_t(APP_CHROME_BORDER_WIDTH)
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
       .child(

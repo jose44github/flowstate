@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, DefiniteLength, Edges, EdgesRefinement, Entity, InteractiveElement as _,
-    IntoElement, IsZero, MouseButton, ParentElement as _, Rems, RenderOnce, StyleRefinement,
+    Hsla, IntoElement, IsZero, MouseButton, ParentElement as _, Rems, RenderOnce, StyleRefinement,
     Styled, Window, div, px, relative,
 };
 
@@ -32,6 +32,8 @@ pub struct Input {
     disabled: bool,
     bordered: bool,
     focus_bordered: bool,
+    text_color: Option<Hsla>,
+    placeholder_color: Option<Hsla>,
     tab_index: isize,
     selected: bool,
 }
@@ -70,6 +72,8 @@ impl Input {
             disabled: false,
             bordered: true,
             focus_bordered: true,
+            text_color: None,
+            placeholder_color: None,
             tab_index: 0,
             selected: false,
         }
@@ -130,6 +134,18 @@ impl Input {
     /// Set to disable the input field.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    /// Override the input text color.
+    pub fn text_color(mut self, color: Hsla) -> Self {
+        self.text_color = Some(color);
+        self
+    }
+
+    /// Override the placeholder text color.
+    pub fn placeholder_color(mut self, color: Hsla) -> Self {
+        self.placeholder_color = Some(color);
         self
     }
 
@@ -245,6 +261,8 @@ impl RenderOnce for Input {
         self.state.update(cx, |state, _| {
             state.disabled = self.disabled;
             state.size = self.size;
+            state.text_color = self.text_color;
+            state.placeholder_color = self.placeholder_color;
         });
 
         let state = self.state.read(cx);

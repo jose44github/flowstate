@@ -2,8 +2,10 @@ impl Workspace {
   pub fn new(initial_path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
     let this = Self {
       document_panels: Vec::new(),
+      flow_panels: Vec::new(),
       active_document_id: None,
       active_editor: None,
+      active_flow: None,
       ribbon_collapsed: false,
       outline_collapsed: false,
       toolkit_collapsed: false,
@@ -29,9 +31,7 @@ impl Workspace {
       // already run after that first layout pass, so defer startup loading by
       // one frame to give the initial editor the same settled geometry.
       cx.on_next_frame(window, move |workspace, window, cx| {
-        let (document, document_path) =
-          load_document_for_open(&path).unwrap_or_else(|error| panic!("failed to open {}: {error}", path.display()));
-        workspace.add_document_panel(document, document_path, window, cx);
+        workspace.open_document_path(path, window, cx);
       });
     }
 
@@ -73,6 +73,7 @@ impl Workspace {
     ));
     self.active_document_id = Some(id);
     self.active_editor = Some(editor);
+    self.active_flow = None;
     self.document_panels.push(panel.clone());
     panel
   }
@@ -80,6 +81,18 @@ impl Workspace {
   pub fn set_active_document(&mut self, panel_id: Uuid, editor: Entity<RichTextEditor>, cx: &mut Context<Self>) {
     self.active_document_id = Some(panel_id);
     self.active_editor = Some(editor);
+    self.active_flow = None;
+    self.refresh_outline_tree(cx);
+    cx.notify();
+  }
+
+  pub fn set_active_flow(&mut self, panel_id: Uuid, editor: Entity<FlowEditor>, cx: &mut Context<Self>) {
+    self.active_document_id = Some(panel_id);
+    self.active_editor = None;
+    self.active_flow = Some(editor);
+    self.outline_cache = None;
+    self.outline_viewport_paragraph = None;
+    self.outline_scrolled_paragraph = None;
     cx.notify();
   }
 
@@ -91,18 +104,35 @@ impl Workspace {
       .find(|panel| panel.read(cx).id() == panel_id)
     {
       let editor = panel.read(cx).editor();
-      let _ = editor.update(cx, |editor, _| editor.dispose_for_close());
+      editor.update(cx, |editor, _| editor.dispose_for_close());
+    }
+    if let Some(panel) = self
+      .flow_panels
+      .iter()
+      .find(|panel| panel.read(cx).id() == panel_id)
+    {
+      let editor = panel.read(cx).editor();
+      editor.update(cx, |editor, _| editor.discard_recovery_file());
     }
     self
       .document_panels
       .retain(|panel| panel.read(cx).id() != panel_id);
+    self.flow_panels.retain(|panel| panel.read(cx).id() != panel_id);
     self.editor_subscriptions.retain(|(id, _)| *id != panel_id);
     if closing_active_document {
-      self.active_document_id = self.document_panels.last().map(|panel| panel.read(cx).id());
-      self.active_editor = self
-        .document_panels
-        .last()
-        .map(|panel| panel.read(cx).editor());
+      if let Some(panel) = self.document_panels.last() {
+        self.active_document_id = Some(panel.read(cx).id());
+        self.active_editor = Some(panel.read(cx).editor());
+        self.active_flow = None;
+      } else if let Some(panel) = self.flow_panels.last() {
+        self.active_document_id = Some(panel.read(cx).id());
+        self.active_editor = None;
+        self.active_flow = Some(panel.read(cx).editor());
+      } else {
+        self.active_document_id = None;
+        self.active_editor = None;
+        self.active_flow = None;
+      }
       self.outline_cache = None;
       self.outline_viewport_paragraph = self
         .active_editor
@@ -128,6 +158,10 @@ impl Workspace {
     self.add_document_panel(new_blank_document(), None, window, cx);
   }
 
+  pub fn new_flow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    self.add_flow_panel(flowstate_flow::FlowDocument::new(), None, window, cx);
+  }
+
   pub fn open_demo_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let path = PathBuf::from("data/demo.db8");
     let document = load_or_create_document(&path).unwrap_or_else(|_| demo_document());
@@ -135,11 +169,16 @@ impl Workspace {
   }
 
   pub fn open_document_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    if is_flow_path(&path) {
+      let document = flowstate_flow::load_flow_document_or_new(&path);
+      self.add_flow_panel(document, Some(path), window, cx);
+      return;
+    }
     match load_document_for_open(&path) {
       Ok((document, document_path)) => self.add_document_panel(document, document_path, window, cx),
       Err(error) => {
         let detail = format!("Failed to open {}: {error}", path.display());
-        let _ = window.prompt(PromptLevel::Critical, "Open failed", Some(&detail), &[PromptButton::ok("Ok")], cx);
+        drop(window.prompt(PromptLevel::Critical, "Open failed", Some(&detail), &[PromptButton::ok("Ok")], cx));
       },
     }
   }
@@ -149,7 +188,7 @@ impl Workspace {
       files: true,
       directories: false,
       multiple: false,
-      prompt: Some("Open .db8 or .docx document".into()),
+      prompt: Some("Open .db8, .docx, or .fl0 document".into()),
     });
     let window_handle = window.window_handle();
     cx.spawn(async move |workspace, cx| {
@@ -159,6 +198,15 @@ impl Workspace {
       let Some(path) = paths.into_iter().next() else {
         return;
       };
+      if is_flow_path(&path) {
+        let document = flowstate_flow::load_flow_document_or_new(&path);
+        let _ = window_handle.update(cx, |_, window, cx| {
+          let _ = workspace.update(cx, |workspace, cx| {
+            workspace.add_flow_panel(document, Some(path), window, cx);
+          });
+        });
+        return;
+      }
       let (document, document_path) = match load_document_for_open(&path) {
         Ok(result) => result,
         Err(error) => {
@@ -183,17 +231,61 @@ impl Workspace {
     cx.notify();
   }
 
+  fn create_flow_panel(
+    &mut self,
+    document: flowstate_flow::FlowDocument,
+    path: Option<PathBuf>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) -> Entity<FlowPanel> {
+    let editor = cx.new(|cx| FlowEditor::new_with_path(document, path.clone(), window, cx));
+    let workspace = cx.entity().downgrade();
+    let title = path
+      .as_ref()
+      .and_then(|path| path.file_name())
+      .map(|name| name.to_string_lossy().to_string())
+      .or_else(|| Some(self.next_untitled_flow_title(cx)));
+    let panel = cx.new(|cx| FlowPanel::new_with_title(title, path, editor.clone(), workspace, window, cx));
+    let id = panel.read(cx).id();
+    self.active_document_id = Some(id);
+    self.active_editor = None;
+    self.active_flow = Some(editor);
+    self.flow_panels.push(panel.clone());
+    self.outline_cache = None;
+    self.outline_viewport_paragraph = None;
+    self.outline_scrolled_paragraph = None;
+    panel
+  }
+
+  fn add_flow_panel(
+    &mut self,
+    document: flowstate_flow::FlowDocument,
+    path: Option<PathBuf>,
+    window: &mut Window,
+    cx: &mut Context<Self>,
+  ) {
+    self.create_flow_panel(document, path, window, cx);
+    cx.notify();
+  }
+
   pub fn close_document_panel(&mut self, panel_id: Uuid, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(panel) = self
+    let document_panel = self
       .document_panels
       .iter()
       .find(|panel| panel.read(cx).id() == panel_id)
-      .cloned()
+      .cloned();
+    let flow_panel = self
+      .flow_panels
+      .iter()
+      .find(|panel| panel.read(cx).id() == panel_id)
+      .cloned();
+    let Some(panel_kind) = document_panel
+      .map(|panel| PanelKind::Document(panel.read(cx).editor()))
+      .or_else(|| flow_panel.map(|panel| PanelKind::Flow(panel.read(cx).editor())))
     else {
       return;
     };
-    let editor = panel.read(cx).editor();
-    if !editor.read(cx).has_unsaved_changes() {
+    if !panel_kind.is_dirty(cx) {
       self.remove_document_panel(panel_id, window, cx);
       return;
     }
@@ -208,19 +300,15 @@ impl Workspace {
     let window_handle = window.window_handle();
     cx.spawn(async move |workspace, cx| {
       let should_close = match answer.await {
-        Ok(0) => match editor.update(cx, |editor, cx| editor.save(cx)) {
-          Ok(Ok(())) => true,
-          Ok(Err(error)) => {
-            eprintln!("failed to save before close: {error}");
-            false
-          },
+        Ok(0) => match panel_kind.save(cx) {
+          Ok(()) => true,
           Err(error) => {
-            eprintln!("failed to access editor before close: {error}");
+            eprintln!("failed to save before close: {error}");
             false
           },
         },
         Ok(1) => {
-          let _ = editor.update(cx, |editor, _| editor.discard_recovery_file());
+          panel_kind.discard(cx);
           true
         },
         _ => false,
@@ -236,13 +324,13 @@ impl Workspace {
   }
 
   fn request_close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let dirty_editors = self.dirty_editors(cx);
-    if dirty_editors.is_empty() {
+    let dirty_panels = self.dirty_panels(cx);
+    if dirty_panels.is_empty() {
       window.remove_window();
       return;
     }
 
-    let message = if dirty_editors.len() == 1 {
+    let message = if dirty_panels.len() == 1 {
       "This document has unsaved changes."
     } else {
       "One or more documents have unsaved changes."
@@ -260,20 +348,15 @@ impl Workspace {
       let should_close = match answer.await {
         Ok(0) => {
           let mut ok = true;
-          for editor in dirty_editors {
-            match editor.update(cx, |editor, cx| editor.save(cx)) {
-              Ok(Ok(())) => {},
-              Ok(Err(error)) => {
+          for panel in dirty_panels {
+            match panel.save(cx) {
+              Ok(()) => {},
+              Err(error) => {
                 ok = false;
-                let detail = error.to_string();
+                let detail = error;
                 let _ = window_handle.update(cx, |_, window, cx| {
                   window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
                 });
-                break;
-              },
-              Err(error) => {
-                ok = false;
-                eprintln!("failed to access editor before close: {error}");
                 break;
               },
             }
@@ -281,8 +364,8 @@ impl Workspace {
           ok
         },
         Ok(1) => {
-          for editor in dirty_editors {
-            let _ = editor.update(cx, |editor, _| editor.discard_recovery_file());
+          for panel in dirty_panels {
+            panel.discard(cx);
           }
           true
         },
@@ -297,28 +380,43 @@ impl Workspace {
   }
 
   pub fn save_active(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(editor) = self.active_editor.clone() else {
-      return;
-    };
-    if editor.read(cx).document_path().is_none() {
-      self.prompt_save_active_as(editor, window, cx);
+    if let Some(editor) = self.active_editor.clone() {
+      if editor.read(cx).document_path().is_none() {
+        self.prompt_save_active_as(editor, window, cx);
+        return;
+      }
+      match editor.update(cx, |editor, cx| editor.save(cx)) {
+        Ok(()) => {},
+        Err(error) => {
+          let detail = error.to_string();
+          drop(window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx));
+        },
+      }
+      cx.notify();
       return;
     }
-    match editor.update(cx, |editor, cx| editor.save(cx)) {
-      Ok(()) => {},
-      Err(error) => {
-        let detail = error.to_string();
-        let _ = window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx);
-      },
+    if let Some(editor) = self.active_flow.clone() {
+      if editor.read(cx).document_path().is_none() {
+        self.prompt_save_active_flow_as(editor, window, cx);
+        return;
+      }
+      match editor.update(cx, |editor, cx| editor.save(cx)) {
+        Ok(()) => {},
+        Err(error) => {
+          let detail = error.to_string();
+          drop(window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx));
+        },
+      }
+      cx.notify();
     }
-    cx.notify();
   }
 
   pub fn save_active_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-    let Some(editor) = self.active_editor.clone() else {
-      return;
-    };
-    self.prompt_save_active_as(editor, window, cx);
+    if let Some(editor) = self.active_editor.clone() {
+      self.prompt_save_active_as(editor, window, cx);
+    } else if let Some(editor) = self.active_flow.clone() {
+      self.prompt_save_active_flow_as(editor, window, cx);
+    }
   }
 
   pub fn close_active_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -396,4 +494,106 @@ impl Workspace {
     .detach();
   }
 
+  fn prompt_save_active_flow_as(&mut self, editor: Entity<FlowEditor>, window: &mut Window, cx: &mut Context<Self>) {
+    let Some(panel_id) = self.active_document_id else {
+      return;
+    };
+    let save_path = cx.prompt_for_new_path(&default_save_directory(), Some(UNTITLED_FLOW_NAME));
+    let window_handle = window.window_handle();
+    cx.spawn(async move |workspace, cx| {
+      let path = match save_path.await {
+        Ok(Ok(Some(path))) => normalize_fl0_path(path),
+        Ok(Ok(None)) => return,
+        Ok(Err(error)) => {
+          let detail = error.to_string();
+          let _ = window_handle.update(cx, |_, window, cx| {
+            window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
+          });
+          return;
+        },
+        Err(error) => {
+          eprintln!("save dialog was canceled before completion: {error}");
+          return;
+        },
+      };
+
+      match editor.update(cx, |editor, cx| editor.save_as(path.clone(), cx)) {
+        Ok(Ok(())) => {
+          let _ = workspace.update(cx, |workspace, cx| {
+            if let Some(panel) = workspace
+              .flow_panels
+              .iter()
+              .find(|panel| panel.read(cx).id() == panel_id)
+            {
+              panel.update(cx, |panel, cx| panel.set_path(path, cx));
+            }
+            cx.notify();
+          });
+        },
+        Ok(Err(error)) => {
+          let detail = error.to_string();
+          let _ = window_handle.update(cx, |_, window, cx| {
+            window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
+          });
+        },
+        Err(error) => {
+          eprintln!("failed to access flow before save: {error}");
+        },
+      }
+    })
+    .detach();
+  }
+
+}
+
+#[derive(Clone)]
+enum PanelKind {
+  Document(Entity<RichTextEditor>),
+  Flow(Entity<FlowEditor>),
+}
+
+impl PanelKind {
+  fn is_dirty(&self, cx: &App) -> bool {
+    match self {
+      PanelKind::Document(editor) => editor.read(cx).has_unsaved_changes(),
+      PanelKind::Flow(editor) => editor.read(cx).has_unsaved_changes(),
+    }
+  }
+
+  fn save(&self, cx: &mut gpui::AsyncApp) -> Result<(), String> {
+    match self {
+      PanelKind::Document(editor) => {
+        match editor.update(cx, |editor, cx| editor.save(cx)) {
+          Ok(Ok(())) => Ok(()),
+          Ok(Err(error)) => Err(error.to_string()),
+          Err(error) => Err(format!("failed to access editor before save: {error}")),
+        }
+      },
+      PanelKind::Flow(editor) => {
+        match editor.update(cx, |editor, cx| editor.save(cx)) {
+          Ok(Ok(())) => Ok(()),
+          Ok(Err(error)) => Err(error.to_string()),
+          Err(error) => Err(format!("failed to access flow before save: {error}")),
+        }
+      },
+    }
+  }
+
+  fn discard(&self, cx: &mut gpui::AsyncApp) {
+    match self {
+      PanelKind::Document(editor) => {
+        let _ = editor.update(cx, |editor, _| editor.discard_recovery_file());
+      },
+      PanelKind::Flow(editor) => {
+        let _ = editor.update(cx, |editor, _| editor.discard_recovery_file());
+      },
+    }
+  }
+}
+
+fn is_flow_path(path: &Path) -> bool {
+  path
+    .extension()
+    .and_then(|extension| extension.to_str())
+    .is_some_and(|extension| extension.eq_ignore_ascii_case("fl0"))
 }

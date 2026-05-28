@@ -9,6 +9,7 @@ pub mod app_settings;
 pub mod commands;
 pub mod docx_conversion;
 pub mod file_search;
+pub mod flow;
 pub mod ribbon;
 pub mod rich_text_element;
 pub mod workspace;

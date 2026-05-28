@@ -6,7 +6,7 @@ impl Workspace {
       .w_full()
       .items_center()
       .pl_2()
-      .border_b_1()
+      .border_b(APP_CHROME_BORDER_WIDTH)
       .border_color(cx.theme().title_bar_border)
       .bg(cx.theme().title_bar)
       // With a transparent system titlebar, this GPUI-drawn bar becomes the
@@ -17,7 +17,7 @@ impl Workspace {
           .h_full()
           .items_center()
           .gap_1()
-          .child(file_top_bar_button(self.active_editor.is_some(), cx))
+          .child(file_top_bar_button(self.active_document_id.is_some(), cx))
           .child(insert_top_bar_button(cx, self.active_editor.is_some()))
           .child(styles_top_bar_button(cx))
           .child(theme_top_bar_button(cx))
@@ -77,7 +77,14 @@ impl Workspace {
         .document_panels
         .iter()
         .find(|panel| panel.read(cx).id() == active_id)
-        .map(|panel| panel.read(cx).ribbon())
+        .map(|panel| panel.read(cx).ribbon().into_any_element())
+        .or_else(|| {
+          self
+            .flow_panels
+            .iter()
+            .find(|panel| panel.read(cx).id() == active_id)
+            .map(|panel| panel.read(cx).ribbon().into_any_element())
+        })
     });
     let show_placeholder = active_ribbon.is_none();
 
@@ -87,13 +94,21 @@ impl Workspace {
       .min_h(px(56.0))
       .w_full()
       .items_start()
-      .border_b_1()
+      .border_b(APP_CHROME_BORDER_WIDTH)
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
       .when_some(active_ribbon, |this, ribbon| {
-        ribbon.update(cx, |ribbon, cx| {
-          ribbon.set_height(ribbon_height, cx);
-        });
+        if let Some(active_id) = self.active_document_id {
+          if let Some(panel) = self.document_panels.iter().find(|panel| panel.read(cx).id() == active_id) {
+            panel.read(cx).ribbon().update(cx, |ribbon, cx| {
+              ribbon.set_height(ribbon_height, cx);
+            });
+          } else if let Some(panel) = self.flow_panels.iter().find(|panel| panel.read(cx).id() == active_id) {
+            panel.read(cx).ribbon().update(cx, |ribbon, cx| {
+              ribbon.set_height(ribbon_height, cx);
+            });
+          }
+        }
         this.child(ribbon)
       })
       .when(show_placeholder, |this| {

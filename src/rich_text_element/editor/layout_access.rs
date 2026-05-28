@@ -450,7 +450,7 @@ impl RichTextEditor {
       return;
     }
     self.measured_item_width = Some(width);
-    self.item_sizes_cache = None;
+    self.pending_item_sizes_patch_range = None;
     cx.notify();
   }
 

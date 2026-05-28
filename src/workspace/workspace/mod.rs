@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashSet, path::PathBuf, rc::Rc};
+use std::{cell::Cell, collections::HashSet, path::{Path, PathBuf}, rc::Rc};
 
 use gpui::{
   AnyElement, App, Axis, Bounds, ClickEvent, Context, Corner, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, PathPromptOptions,
@@ -11,6 +11,7 @@ use gpui_component::input::{Input, InputState, NumberInput};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel, v_resizable};
+use gpui_component::scroll::ScrollableElement;
 use gpui_component::select::{SearchableVec, Select, SelectEvent, SelectState};
 use gpui_component::setting::{NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::tab::{Tab, TabBar};
@@ -22,21 +23,28 @@ use uuid::Uuid;
 
 use crate::app_settings::{load_document_theme, load_smart_word_selection, save_document_theme, save_smart_word_selection, save_theme_name};
 use crate::docx_conversion::convert_docx_to_document;
+use crate::flow::{FlowEditor, FlowPanel};
 use crate::rich_text_element::{
   Document, DocumentTheme, ParagraphStyle, RichTextEditor, Save, ThemeUnderline, demo_document, load_or_create_document, paragraph_byte_range,
 };
 use crate::workspace::document_panel::DocumentPanel;
-use crate::workspace::file_management::{UNTITLED_DOCUMENT_NAME, default_save_directory, new_blank_document, normalize_db8_path};
+use crate::workspace::file_management::{
+  UNTITLED_DOCUMENT_NAME, UNTITLED_FLOW_NAME, default_save_directory, new_blank_document, normalize_db8_path, normalize_fl0_path,
+};
 use crate::workspace::file_search_overlay::FileSearchOverlay;
 use crate::workspace::icons::{AppIcon, icon_button};
+
+pub(super) const APP_CHROME_BORDER_WIDTH: Pixels = px(0.75);
 
 #[path = "../toolkit_panel.rs"]
 mod toolkit_panel;
 
 pub struct Workspace {
   document_panels: Vec<Entity<DocumentPanel>>,
+  flow_panels: Vec<Entity<FlowPanel>>,
   active_document_id: Option<Uuid>,
   active_editor: Option<Entity<RichTextEditor>>,
+  active_flow: Option<Entity<FlowEditor>>,
   ribbon_collapsed: bool,
   outline_collapsed: bool,
   toolkit_collapsed: bool,

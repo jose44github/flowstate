@@ -1,0 +1,11 @@
+[package]
+name = "flowstate-flow"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.102"
+rustc-hash = "2.1.2"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+uuid = { version = "1.23.1", features = ["v4", "serde"] }

@@ -7,7 +7,7 @@ impl Workspace {
       .h_full()
       .overflow_hidden()
       .bg(cx.theme().background)
-      .when(!self.document_panels.is_empty(), |this| {
+      .when(!(self.document_panels.is_empty() && self.flow_panels.is_empty()), |this| {
         this.child(self.render_document_tab_bar(active_index, cx))
       })
       .child(
@@ -17,24 +17,25 @@ impl Workspace {
           .h_full()
           .overflow_hidden()
           .when_some(self.active_editor.clone(), |this, editor| this.child(editor))
-          .when(self.active_editor.is_none(), |this| this.child(self.render_empty_state(cx))),
+          .when_some(self.active_flow.clone(), |this, editor| this.child(editor))
+          .when(self.active_editor.is_none() && self.active_flow.is_none(), |this| this.child(self.render_empty_state(cx))),
       )
   }
 
   fn render_document_tab_bar(&self, active_index: usize, cx: &mut Context<Self>) -> impl IntoElement {
     let tabs = self.document_tabs(cx);
-    let active_tab_fg = self
-      .active_editor
-      .as_ref()
-      .map(|editor| editor.read(cx).document().theme.default_text_color)
-      .unwrap_or_else(black);
+    let (active_tab_bg, active_tab_fg) = if let Some(editor) = &self.active_editor {
+      (white(), editor.read(cx).document().theme.default_text_color)
+    } else {
+      (cx.theme().background, cx.theme().foreground)
+    };
     TabBar::new("document-tab-bar")
       .xsmall()
       .track_scroll(&self.tab_bar_scroll_handle)
       .menu(true)
       .prefix(self.render_document_tab_bar_prefix(active_index, tabs.len(), cx))
       .suffix(self.render_document_tab_bar_suffix())
-      .active_tab_bg(white())
+      .active_tab_bg(active_tab_bg)
       .active_tab_fg(active_tab_fg)
       .selected_index(active_index)
       .on_click({

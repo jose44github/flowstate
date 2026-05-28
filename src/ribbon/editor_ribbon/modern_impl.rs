@@ -14,12 +14,10 @@ impl ModernStylesRibbon {
     cx: &mut Context<EditorRibbon>,
   ) -> AnyElement {
     let groups = modern_command_groups(style_state, armed_tool, document_theme, current_highlight, highlight_mode_active);
-    let mut metrics = RibbonLayoutMetrics::from_height(height);
-    let rows_allowed_by_height = metrics.max_chip_rows;
+    let metrics = RibbonLayoutMetrics::from_height(height);
     // Use vertical ribbon room proactively. Width pressure can force wrapping,
     // but when there is spare height we still prefer balanced columns over one
     // long horizontal strip.
-    metrics.max_chip_rows = rows_allowed_by_height;
     let wrap_widths = groups
       .iter()
       .map(|group| {

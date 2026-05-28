@@ -8,8 +8,8 @@ pub fn install_workspace_close_prompt(workspace: Entity<Workspace>, window: &mut
       return true;
     }
 
-    let dirty_editors = workspace.read(cx).dirty_editors(cx);
-    if dirty_editors.is_empty() {
+    let dirty_panels = workspace.read(cx).dirty_panels(cx);
+    if dirty_panels.is_empty() {
       return true;
     }
 
@@ -18,7 +18,7 @@ pub fn install_workspace_close_prompt(workspace: Entity<Workspace>, window: &mut
     }
     prompt_open.set(true);
 
-    let message = if dirty_editors.len() == 1 {
+    let message = if dirty_panels.len() == 1 {
       "This document has unsaved changes."
     } else {
       "One or more documents have unsaved changes."
@@ -37,20 +37,15 @@ pub fn install_workspace_close_prompt(workspace: Entity<Workspace>, window: &mut
       let should_close = match answer.await {
         Ok(0) => {
           let mut ok = true;
-          for editor in dirty_editors {
-            match editor.update(cx, |editor, cx| editor.save(cx)) {
-              Ok(Ok(())) => {},
-              Ok(Err(error)) => {
+          for panel in dirty_panels {
+            match panel.save(cx) {
+              Ok(()) => {},
+              Err(error) => {
                 ok = false;
-                let detail = error.to_string();
+                let detail = error;
                 let _ = window_handle.update(cx, |_, window, cx| {
                   window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
                 });
-                break;
-              },
-              Err(error) => {
-                ok = false;
-                eprintln!("failed to access editor before close: {error}");
                 break;
               },
             }
@@ -58,8 +53,8 @@ pub fn install_workspace_close_prompt(workspace: Entity<Workspace>, window: &mut
           ok
         },
         Ok(1) => {
-          for editor in dirty_editors {
-            let _ = editor.update(cx, |editor, _| editor.discard_recovery_file());
+          for panel in dirty_panels {
+            panel.discard(cx);
           }
           true
         },

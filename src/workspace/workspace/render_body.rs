@@ -1,6 +1,6 @@
 impl Workspace {
   fn render_resizable_workspace(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    if self.document_panels.is_empty() {
+    if self.document_panels.is_empty() && self.flow_panels.is_empty() {
       return div()
         .flex_1()
         .overflow_hidden()
@@ -84,7 +84,7 @@ impl Workspace {
       .items_center()
       .justify_end()
       .px_2()
-      .border_b_1()
+      .border_b(APP_CHROME_BORDER_WIDTH)
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
       .child(
@@ -110,8 +110,8 @@ impl Workspace {
       .size_full()
       .items_center()
       .pt_2()
-      .border_l_1()
-      .border_r_1()
+      .border_l(APP_CHROME_BORDER_WIDTH)
+      .border_r(APP_CHROME_BORDER_WIDTH)
       .border_color(cx.theme().border)
       .bg(cx.theme().background)
       .child(
