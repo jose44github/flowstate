@@ -317,6 +317,8 @@ impl AssetSource for AppAssets {
       "icons/underline.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/underline.svg")))),
       "icons/panel-top-open.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/panel-top-open.svg")))),
       "icons/panel-top-close.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/panel-top-close.svg")))),
+      "icons/caret-down.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/caret-down.svg")))),
+      "icons/caret-right.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/caret-right.svg")))),
       _ => gpui_component_assets::Assets.load(path),
     }
   }
@@ -350,6 +352,12 @@ impl AssetSource for AppAssets {
     }
     if "icons/panel-top-close.svg".starts_with(path) {
       assets.push("icons/panel-top-close.svg".into());
+    }
+    if "icons/caret-down.svg".starts_with(path) {
+      assets.push("icons/caret-down.svg".into());
+    }
+    if "icons/caret-right.svg".starts_with(path) {
+      assets.push("icons/caret-right.svg".into());
     }
     Ok(assets)
   }

@@ -71,11 +71,14 @@ rustflags = [
   "-Z", "threads=8",
   # q"-C", "target-cpu=native"
 ]
-# opt-level = 3
-# lto = "fat"
-# codegen-units = 1
 
 [profile.profile]
 inherits = "release"
 debug = true
 strip = false
+
+[profile.product]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+rustflags = q"-C", "target-cpu=native"
