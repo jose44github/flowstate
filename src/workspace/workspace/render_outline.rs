@@ -69,13 +69,18 @@ impl Workspace {
                   .items_center()
                   .gap_1()
                   .when(is_folder, |this| {
+                    let icon_path = if is_expanded { "icons/caret-down.svg" } else { "icons/caret-right.svg" };
                     this.child(
                       Button::new(("outline-toggle", ix))
-                        .icon(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
                         .xsmall()
                         .ghost()
                         .flex_none()
                         .disabled(!is_folder)
+                        .child(
+                          Icon::default()
+                            .path(icon_path)
+                            .with_size(gpui_component::Size::Small)
+                        )
                         .on_click({
                           let workspace = workspace.clone();
                           move |_, _, cx| {
@@ -98,6 +103,7 @@ impl Workspace {
                       .overflow_hidden()
                       .text_color(cx.theme().sidebar_foreground)
                       .whitespace_nowrap()
+                      .rounded(px(4.0))
                       .when(is_active_outline, |this| {
                         this.child(
                           div()
@@ -111,6 +117,9 @@ impl Workspace {
                             .border_color(cx.theme().primary)
                             .rounded(px(4.0)),
                         )
+                      })
+                      .when(!is_active_outline, |this| {
+                        this.hover(|style| style.bg(cx.theme().list_hover))
                       })
                       .child(label)
                       .on_mouse_down(MouseButton::Left, |_, _, cx| {
