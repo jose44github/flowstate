@@ -8,6 +8,10 @@ impl Workspace {
     let workspace = cx.entity().downgrade();
     let active_outline_paragraph = self.active_outline_paragraph(cx);
     self.scroll_outline_item_into_view(active_outline_paragraph, cx);
+    let mut outline_guides = Vec::new();
+    if let Some(cache) = &self.outline_cache {
+      collect_visible_outline_guides(&cache.nodes, &self.collapsed_outline_items, &mut outline_guides);
+    }
     v_flex()
       .size_full()
       .h_full()
@@ -50,14 +54,16 @@ impl Workspace {
             let is_expanded = entry.is_expanded();
             let is_active_outline = paragraph_ix == active_outline_paragraph;
             let depth = entry.depth();
+            let guide = outline_guides.get(ix).cloned().unwrap_or_default();
             let label_width = outline_label_width(nav_width, depth);
             let label = truncate_outline_label(entry.item().label.as_ref(), outline_label_text_width(label_width, window), window, cx);
             let workspace = workspace.clone();
+            let guide_depths = guide.ancestor_depths;
             ListItem::new(("outline-tree-item", ix))
               .w_full()
               .min_w_0()
               .overflow_hidden()
-              .pl(px(4.0) + px(12.0) * entry.depth())
+              .pl(px(4.0))
               .pr_1()
               .py_0()
               .text_xs()
@@ -68,26 +74,90 @@ impl Workspace {
                   .overflow_hidden()
                   .items_center()
                   .gap_1()
+                  .children((0..depth).map(|guide_depth| {
+                    let has_guide = guide_depths.contains(&guide_depth);
+                    div()
+                      .relative()
+                      .w(px(12.0))
+                      .h(px(20.0))
+                      .flex_none()
+                      .when(has_guide, |this| {
+                        this.child(
+                          div()
+                            .absolute()
+                            .top_0()
+                            .bottom_0()
+                            .left(px(11.5))
+                            .w(px(1.0))
+                            .bg(cx.theme().sidebar_border),
+                        )
+                      })
+                      .into_any_element()
+                  }))
                   .when(is_folder, |this| {
+                    let icon_path = if is_expanded { "icons/caret-down.svg" } else { "icons/caret-right.svg" };
                     this.child(
-                      Button::new(("outline-toggle", ix))
-                        .icon(if is_expanded { IconName::ChevronDown } else { IconName::ChevronRight })
-                        .xsmall()
-                        .ghost()
+                      div()
+                        .relative()
+                        .w(px(20.0))
+                        .h(px(20.0))
                         .flex_none()
-                        .disabled(!is_folder)
-                        .on_click({
-                          let workspace = workspace.clone();
-                          move |_, _, cx| {
-                            cx.stop_propagation();
-                            if let Some(paragraph_ix) = paragraph_ix {
-                              let _ = workspace.update(cx, |workspace, cx| workspace.toggle_outline_item(paragraph_ix, cx));
-                            }
-                          }
+                        .when(guide.extends_from_toggle, |this| {
+                          this.child(
+                            div()
+                              .absolute()
+                              .top(px(16.0))
+                              .bottom_0()
+                              .left(px(11.5))
+                              .w(px(1.0))
+                              .bg(cx.theme().sidebar_border),
+                          )
+                        })
+                        .child(
+                          Button::new(("outline-toggle", ix))
+                            .xsmall()
+                            .ghost()
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .disabled(!is_folder)
+                            .child(
+                              Icon::default()
+                                .path(icon_path)
+                                .with_size(gpui_component::Size::Small)
+                            )
+                            .on_click({
+                              let workspace = workspace.clone();
+                              move |_, _, cx| {
+                                cx.stop_propagation();
+                                if let Some(paragraph_ix) = paragraph_ix {
+                                  let _ = workspace.update(cx, |workspace, cx| workspace.toggle_outline_item(paragraph_ix, cx));
+                                }
+                              }
+                            }),
+                        ),
+                    )
+                  })
+                  .when(!is_folder, |this| {
+                    this.child(
+                      div()
+                        .relative()
+                        .w(px(20.0))
+                        .h(px(20.0))
+                        .flex_none()
+                        .when(guide.extends_from_toggle, |this| {
+                          this.child(
+                            div()
+                              .absolute()
+                              .top_0()
+                              .bottom_0()
+                              .left(px(11.5))
+                              .w(px(1.0))
+                              .bg(cx.theme().sidebar_border),
+                          )
                         }),
                     )
                   })
-                  .when(!is_folder, |this| this.child(div().w(px(20.0)).h(px(20.0)).flex_none()))
                   .child(
                     div()
                       .id(("outline-label", ix))
@@ -98,6 +168,7 @@ impl Workspace {
                       .overflow_hidden()
                       .text_color(cx.theme().sidebar_foreground)
                       .whitespace_nowrap()
+                      .rounded(px(4.0))
                       .when(is_active_outline, |this| {
                         this.child(
                           div()
@@ -111,6 +182,9 @@ impl Workspace {
                             .border_color(cx.theme().primary)
                             .rounded(px(4.0)),
                         )
+                      })
+                      .when(!is_active_outline, |this| {
+                        this.hover(|style| style.bg(cx.theme().list_hover))
                       })
                       .child(label)
                       .on_mouse_down(MouseButton::Left, |_, _, cx| {

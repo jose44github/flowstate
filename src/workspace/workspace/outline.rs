@@ -54,6 +54,12 @@ struct OutlineNode {
   children: Vec<OutlineNode>,
 }
 
+#[derive(Clone, Default)]
+struct OutlineRowGuides {
+  ancestor_depths: Vec<usize>,
+  extends_from_toggle: bool,
+}
+
 fn insert_outline_node(nodes: &mut Vec<OutlineNode>, level: usize, node: OutlineNode) {
   if level == 0 {
     nodes.push(node);
@@ -131,6 +137,32 @@ fn collect_visible_outline_paragraphs(nodes: &[OutlineNode], collapsed_items: &H
     output.push(node.paragraph_ix);
     if !collapsed_items.contains(&node.paragraph_ix) {
       collect_visible_outline_paragraphs(&node.children, collapsed_items, output);
+    }
+  }
+}
+
+fn collect_visible_outline_guides(nodes: &[OutlineNode], collapsed_items: &HashSet<usize>, output: &mut Vec<OutlineRowGuides>) {
+  collect_visible_outline_guides_with_ancestors(nodes, collapsed_items, 0, &mut Vec::new(), output);
+}
+
+fn collect_visible_outline_guides_with_ancestors(
+  nodes: &[OutlineNode],
+  collapsed_items: &HashSet<usize>,
+  depth: usize,
+  ancestor_depths: &mut Vec<usize>,
+  output: &mut Vec<OutlineRowGuides>,
+) {
+  for node in nodes {
+    let is_expanded_folder = !node.children.is_empty() && !collapsed_items.contains(&node.paragraph_ix);
+    output.push(OutlineRowGuides {
+      ancestor_depths: ancestor_depths.clone(),
+      extends_from_toggle: is_expanded_folder,
+    });
+
+    if is_expanded_folder {
+      ancestor_depths.push(depth);
+      collect_visible_outline_guides_with_ancestors(&node.children, collapsed_items, depth + 1, ancestor_depths, output);
+      ancestor_depths.pop();
     }
   }
 }
@@ -233,4 +265,3 @@ fn truncate_outline_label(label: &str, width: Pixels, window: &mut Window, cx: &
     .line_wrapper(text_style.font(), font_size)
     .truncate_line(label.to_string().into(), width, "…", &mut runs)
 }
-
