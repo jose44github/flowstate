@@ -143,6 +143,11 @@ impl RichTextEditor {
     if viewport_width > px(1.0) { viewport_width } else { px(900.0) }
   }
 
+  pub(crate) fn prepare_for_workspace_width_delta(&mut self, delta: Pixels, cx: &mut Context<Self>) {
+    let width = (self.current_layout_width() + delta).max(px(1.0));
+    self.note_measured_item_width(width, cx);
+  }
+
   fn block_ix_for_paragraph(&self, target_paragraph_ix: usize) -> Option<usize> {
     super::block_ix_for_paragraph(&self.document, target_paragraph_ix)
   }

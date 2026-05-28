@@ -35,6 +35,7 @@ use crate::workspace::file_search_overlay::FileSearchOverlay;
 use crate::workspace::icons::{AppIcon, icon_button};
 
 pub(super) const APP_CHROME_BORDER_WIDTH: Pixels = px(1.0);
+const SIDE_PANEL_COLLAPSED_WIDTH: Pixels = px(30.0);
 
 #[path = "../toolkit_panel.rs"]
 mod toolkit_panel;
