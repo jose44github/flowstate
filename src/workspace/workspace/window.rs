@@ -75,10 +75,8 @@ pub fn install_workspace_close_prompt(workspace: Entity<Workspace>, window: &mut
 }
 
 pub fn open_workspace_window(document_path: Option<PathBuf>, cx: &mut App) {
-  let bounds = Bounds::centered(None, size(px(1100.0), px(780.0)), cx);
   cx.open_window(
     WindowOptions {
-      window_bounds: Some(WindowBounds::Maximized(bounds)),
       titlebar: Some(TitleBar::title_bar_options()),
       window_decorations: window_decorations(),
       ..Default::default()

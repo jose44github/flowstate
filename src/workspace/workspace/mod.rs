@@ -1,9 +1,9 @@
 use std::{cell::Cell, collections::HashSet, path::{Path, PathBuf}, rc::Rc};
 
 use gpui::{
-  AnyElement, AnyWindowHandle, App, Axis, Bounds, Context, Corner, Entity, Hsla, InteractiveElement, IntoElement,
+  AnyElement, AnyWindowHandle, App, Axis, Context, Corner, Entity, Hsla, InteractiveElement, IntoElement,
   MouseButton, PathPromptOptions, Pixels, PromptButton, PromptLevel, Render, ScrollHandle, SharedString, Subscription,
-  WeakEntity, Window, WindowBounds, WindowDecorations, WindowOptions, black, div, prelude::*, px, rgb, size, white,
+  WeakEntity, Window, WindowDecorations, WindowOptions, black, div, prelude::*, px, rgb, white,
 };
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants, Toggle, ToggleVariants};
 use gpui_component::color_picker::{ColorPicker, ColorPickerState};
