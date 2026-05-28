@@ -295,8 +295,16 @@ impl Workspace {
       .find(|panel| panel.read(cx).id() == panel_id)
       .cloned();
     let Some(panel_kind) = document_panel
-      .map(|panel| PanelKind::Document(panel.read(cx).editor()))
-      .or_else(|| flow_panel.map(|panel| PanelKind::Flow(panel.read(cx).editor())))
+      .map(|panel| {
+        let editor = panel.read(cx).editor();
+        PanelKind::Document { panel, editor }
+      })
+      .or_else(|| {
+        flow_panel.map(|panel| {
+          let editor = panel.read(cx).editor();
+          PanelKind::Flow { panel, editor }
+        })
+      })
     else {
       return;
     };
@@ -315,10 +323,11 @@ impl Workspace {
     let window_handle = window.window_handle();
     cx.spawn(async move |workspace, cx| {
       let should_close = match answer.await {
-        Ok(0) => match panel_kind.save(cx).await {
-          Ok(()) => true,
-          Err(error) => {
-            eprintln!("failed to save before close: {error}");
+        Ok(0) => match panel_kind.save(window_handle, cx).await {
+          PanelSaveOutcome::Saved => true,
+          PanelSaveOutcome::Cancelled => false,
+          PanelSaveOutcome::Failed(error) => {
+            show_save_failed(window_handle, cx, error);
             false
           },
         },
@@ -364,14 +373,15 @@ impl Workspace {
         Ok(0) => {
           let mut ok = true;
           for panel in dirty_panels {
-            match panel.save(cx).await {
-              Ok(()) => {},
-              Err(error) => {
+            match panel.save(window_handle, cx).await {
+              PanelSaveOutcome::Saved => {},
+              PanelSaveOutcome::Cancelled => {
                 ok = false;
-                let detail = error;
-                let _ = window_handle.update(cx, |_, window, cx| {
-                  window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
-                });
+                break;
+              },
+              PanelSaveOutcome::Failed(error) => {
+                ok = false;
+                show_save_failed(window_handle, cx, error);
                 break;
               },
             }
@@ -575,41 +585,128 @@ impl Workspace {
 
 #[derive(Clone)]
 enum PanelKind {
-  Document(Entity<RichTextEditor>),
-  Flow(Entity<FlowEditor>),
+  Document {
+    panel: Entity<DocumentPanel>,
+    editor: Entity<RichTextEditor>,
+  },
+  Flow {
+    panel: Entity<FlowPanel>,
+    editor: Entity<FlowEditor>,
+  },
+}
+
+enum PanelSaveOutcome {
+  Saved,
+  Cancelled,
+  Failed(String),
 }
 
 impl PanelKind {
   fn is_dirty(&self, cx: &App) -> bool {
     match self {
-      PanelKind::Document(editor) => editor.read(cx).has_unsaved_changes(),
-      PanelKind::Flow(editor) => editor.read(cx).has_unsaved_changes(),
+      PanelKind::Document { editor, .. } => editor.read(cx).has_unsaved_changes(),
+      PanelKind::Flow { editor, .. } => editor.read(cx).has_unsaved_changes(),
     }
   }
 
-  async fn save(&self, cx: &mut gpui::AsyncApp) -> Result<(), String> {
+  async fn save(&self, window_handle: AnyWindowHandle, cx: &mut gpui::AsyncApp) -> PanelSaveOutcome {
     match self {
-      PanelKind::Document(editor) => match editor.update(cx, |editor, cx| editor.save(cx)) {
-        Ok(task) => task.await.map_err(|error| error.to_string()),
-        Err(error) => Err(format!("failed to access editor before save: {error}")),
+      PanelKind::Document { panel, editor } => {
+        let needs_save_as = match editor.update(cx, |editor, _| editor.document_path().is_none()) {
+          Ok(needs_save_as) => needs_save_as,
+          Err(error) => return PanelSaveOutcome::Failed(format!("failed to access editor before save: {error}")),
+        };
+        if needs_save_as {
+          let path = match prompt_for_panel_save_path(window_handle, cx, UNTITLED_DOCUMENT_NAME).await {
+            Ok(Some(path)) => normalize_db8_path(path),
+            Ok(None) => return PanelSaveOutcome::Cancelled,
+            Err(error) => return PanelSaveOutcome::Failed(error),
+          };
+          match editor.update(cx, |editor, cx| editor.save_as(path.clone(), cx)) {
+            Ok(task) => match task.await {
+              Ok(()) => {
+                let _ = panel.update(cx, |panel, cx| panel.set_path(path, cx));
+                PanelSaveOutcome::Saved
+              },
+              Err(error) => PanelSaveOutcome::Failed(error.to_string()),
+            },
+            Err(error) => PanelSaveOutcome::Failed(format!("failed to access editor before save: {error}")),
+          }
+        } else {
+          match editor.update(cx, |editor, cx| editor.save(cx)) {
+            Ok(task) => task
+              .await
+              .map(|_| PanelSaveOutcome::Saved)
+              .unwrap_or_else(|error| PanelSaveOutcome::Failed(error.to_string())),
+            Err(error) => PanelSaveOutcome::Failed(format!("failed to access editor before save: {error}")),
+          }
+        }
       },
-      PanelKind::Flow(editor) => match editor.update(cx, |editor, cx| editor.save(cx)) {
-        Ok(task) => task.await.map_err(|error| error.to_string()),
-        Err(error) => Err(format!("failed to access flow before save: {error}")),
+      PanelKind::Flow { panel, editor } => {
+        let needs_save_as = match editor.update(cx, |editor, _| editor.document_path().is_none()) {
+          Ok(needs_save_as) => needs_save_as,
+          Err(error) => return PanelSaveOutcome::Failed(format!("failed to access flow before save: {error}")),
+        };
+        if needs_save_as {
+          let path = match prompt_for_panel_save_path(window_handle, cx, UNTITLED_FLOW_NAME).await {
+            Ok(Some(path)) => normalize_fl0_path(path),
+            Ok(None) => return PanelSaveOutcome::Cancelled,
+            Err(error) => return PanelSaveOutcome::Failed(error),
+          };
+          match editor.update(cx, |editor, cx| editor.save_as(path.clone(), cx)) {
+            Ok(task) => match task.await {
+              Ok(()) => {
+                let _ = panel.update(cx, |panel, cx| panel.set_path(path, cx));
+                PanelSaveOutcome::Saved
+              },
+              Err(error) => PanelSaveOutcome::Failed(error.to_string()),
+            },
+            Err(error) => PanelSaveOutcome::Failed(format!("failed to access flow before save: {error}")),
+          }
+        } else {
+          match editor.update(cx, |editor, cx| editor.save(cx)) {
+            Ok(task) => task
+              .await
+              .map(|_| PanelSaveOutcome::Saved)
+              .unwrap_or_else(|error| PanelSaveOutcome::Failed(error.to_string())),
+            Err(error) => PanelSaveOutcome::Failed(format!("failed to access flow before save: {error}")),
+          }
+        }
       },
     }
   }
 
   fn discard(&self, cx: &mut gpui::AsyncApp) {
     match self {
-      PanelKind::Document(editor) => {
+      PanelKind::Document { editor, .. } => {
         let _ = editor.update(cx, |editor, cx| editor.discard_recovery_file(cx));
       },
-      PanelKind::Flow(editor) => {
+      PanelKind::Flow { editor, .. } => {
         let _ = editor.update(cx, |editor, _| editor.discard_recovery_file());
       },
     }
   }
+}
+
+async fn prompt_for_panel_save_path(
+  window_handle: AnyWindowHandle,
+  cx: &mut gpui::AsyncApp,
+  suggested_name: &'static str,
+) -> Result<Option<PathBuf>, String> {
+  let save_path = window_handle
+    .update(cx, |_, _, cx| cx.prompt_for_new_path(&default_save_directory(), Some(suggested_name)))
+    .map_err(|error| format!("failed to open save dialog: {error}"))?;
+  match save_path.await {
+    Ok(Ok(path)) => Ok(path),
+    Ok(Err(error)) => Err(error.to_string()),
+    Err(error) => Err(format!("save dialog closed unexpectedly: {error}")),
+  }
+}
+
+fn show_save_failed(window_handle: AnyWindowHandle, cx: &mut gpui::AsyncApp, detail: String) {
+  let _ = window_handle.update(cx, |_, window, cx| {
+    window.prompt(PromptLevel::Critical, "Save failed", Some(&detail), &[PromptButton::ok("Ok")], cx)
+  });
 }
 
 enum LoadedWorkspaceDocument {

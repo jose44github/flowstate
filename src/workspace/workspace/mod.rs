@@ -1,9 +1,9 @@
 use std::{cell::Cell, collections::HashSet, path::{Path, PathBuf}, rc::Rc};
 
 use gpui::{
-  AnyElement, App, Axis, Bounds, ClickEvent, Context, Corner, Entity, Hsla, InteractiveElement, IntoElement, MouseButton, PathPromptOptions,
-  Pixels, PromptButton, PromptLevel, Render, ScrollHandle, SharedString, Subscription, TitlebarOptions, WeakEntity, Window, WindowBounds,
-  WindowControlArea, WindowOptions, black, div, point, prelude::*, px, rgb, size, white,
+  AnyElement, AnyWindowHandle, App, Axis, Bounds, ClickEvent, Context, Corner, Entity, Hsla, InteractiveElement, IntoElement,
+  MouseButton, PathPromptOptions, Pixels, PromptButton, PromptLevel, Render, ScrollHandle, SharedString, Subscription, TitlebarOptions,
+  WeakEntity, Window, WindowBounds, WindowControlArea, WindowOptions, black, div, point, prelude::*, px, rgb, size, white,
 };
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants, Toggle, ToggleVariants};
 use gpui_component::color_picker::{ColorPicker, ColorPickerState};

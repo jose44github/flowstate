@@ -14,7 +14,10 @@ fn load_document_for_open(path: &PathBuf) -> std::io::Result<LoadedDocumentForOp
     return Ok(LoadedDocumentForOpen {
       document,
       path: None,
-      title: path.file_name().map(|name| name.to_string_lossy().to_string()),
+      title: path
+        .with_extension("db8")
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string()),
     });
   }
 
