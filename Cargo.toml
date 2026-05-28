@@ -81,4 +81,4 @@ strip = false
 inherits = "release"
 lto = "fat"
 codegen-units = 1
-rustflags = q"-C", "target-cpu=native"
+rustflags = ["-C", "target-cpu=native"]
