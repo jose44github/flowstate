@@ -110,9 +110,6 @@ impl Workspace {
       .size_full()
       .items_center()
       .pt_2()
-      .border_l(APP_CHROME_BORDER_WIDTH)
-      .border_r(APP_CHROME_BORDER_WIDTH)
-      .border_color(cx.theme().border)
       .bg(cx.theme().background)
       .child(
         Button::new(tooltip)

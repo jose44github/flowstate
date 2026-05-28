@@ -13,8 +13,6 @@ impl Workspace {
       .h_full()
       .gap_1()
       .p_2()
-      .border_r(APP_CHROME_BORDER_WIDTH)
-      .border_color(cx.theme().sidebar_border)
       .bg(cx.theme().sidebar)
       .text_color(cx.theme().sidebar_foreground)
       .child(
@@ -144,8 +142,6 @@ impl Workspace {
       .h_full()
       .gap_1()
       .p_2()
-      .border_r(APP_CHROME_BORDER_WIDTH)
-      .border_color(cx.theme().sidebar_border)
       .bg(cx.theme().sidebar)
       .text_color(cx.theme().sidebar_foreground)
       .child(

@@ -43,8 +43,6 @@ impl Workspace {
       .h_full()
       .gap_2()
       .p_3()
-      .border_l(super::APP_CHROME_BORDER_WIDTH)
-      .border_color(cx.theme().border)
       .bg(cx.theme().background)
       .child(
         div()

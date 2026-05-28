@@ -94,8 +94,6 @@ impl Workspace {
       .min_h(px(56.0))
       .w_full()
       .items_start()
-      .border_b(APP_CHROME_BORDER_WIDTH)
-      .border_color(cx.theme().border)
       .bg(cx.theme().background)
       .when_some(active_ribbon, |this, ribbon| {
         if let Some(active_id) = self.active_document_id {
