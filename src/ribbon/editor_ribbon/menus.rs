@@ -12,6 +12,7 @@ fn modern_highlight_menu(
   };
   let mode_active = command.selected;
   let document_theme = document_theme.clone();
+  let command_color = ribbon_command_color(command, cx);
 
   let chip_height = metrics.chip_height;
 
@@ -34,16 +35,16 @@ fn modern_highlight_menu(
               .px(metrics.chip_padding_x)
               .when(mode_active, |this| {
                 this
-                  .bg(cx.theme().secondary_active)
-                  .border_color(cx.theme().border)
-                  .text_color(cx.theme().foreground)
+                  .bg(command_color.opacity(0.18))
+                  .border_color(command_color)
+                  .text_color(command_color)
               })
               .tooltip_with_action("Highlight mode", &ApplyHighlightToSelection, Some("RichTextEditor"))
               .child(match accent {
                 RibbonAccent::Transparent => transparent_accent_bar(cx),
                 _ => accent_bar(accent_color(accent, cx), cx),
               })
-              .child(Icon::default().path("icons/highlighter.svg").xsmall())
+              .child(Icon::default().path("icons/highlighter.svg").xsmall().text_color(command_color))
               .when_some(shortcut_for(CommandId::ApplyHighlightToSelection), |this, shortcut| {
                 this.child(keycap(shortcut, cx))
               })
@@ -111,6 +112,7 @@ fn modern_condensed_menu(
   let checked = command.selected;
   let chip_height = metrics.chip_height;
   let label = RibbonLabel::for_command(command);
+  let command_color = ribbon_command_color(command, cx);
 
   DropdownButton::new("modern-ribbon-condensed-dropdown")
     .with_size(Size::Size(chip_height))
@@ -124,12 +126,14 @@ fn modern_condensed_menu(
         .px(metrics.chip_padding_x)
         .when(mode_active, |this| {
           this
-            .bg(cx.theme().secondary_active)
-            .border_color(cx.theme().border)
-            .text_color(cx.theme().foreground)
+            .bg(command_color.opacity(0.18))
+            .border_color(command_color)
+            .text_color(command_color)
         })
         .tooltip("Condensed")
-        .when_some(label.icon_path, |this, path| this.child(Icon::default().path(path).xsmall()))
+        .when_some(label.icon_path, |this, path| {
+          this.child(Icon::default().path(path).xsmall().text_color(command_color))
+        })
         .when(!label.prefers_icon(), |this| {
           this.child(
             div()
@@ -138,6 +142,7 @@ fn modern_condensed_menu(
               .line_height(relative(1.0))
               .whitespace_nowrap()
               .text_ellipsis()
+              .text_color(command_color)
               .child(label.text),
           )
         })
@@ -191,7 +196,7 @@ fn invisibility_mode_button(
       div()
         .text_size(px(10.0))
         .font_medium()
-        .text_color(cx.theme().muted_foreground)
+        .text_color(cx.theme().foreground)
         .child("Views"),
     )
     .child(
@@ -201,7 +206,7 @@ fn invisibility_mode_button(
         .outline()
         .h(metrics.chip_height)
         .w(metrics.chip_height)
-        .icon(if invisibility_mode { IconName::EyeOff } else { IconName::Eye })
+        .icon(Icon::new(if invisibility_mode { IconName::EyeOff } else { IconName::Eye }).text_color(cx.theme().info))
         .selected(invisibility_mode)
         .tooltip("Invisibility mode")
         .on_click(move |_, _, cx| {

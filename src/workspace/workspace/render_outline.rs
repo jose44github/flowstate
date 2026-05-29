@@ -60,6 +60,7 @@ impl Workspace {
             let label = truncate_outline_label(entry.item().label.as_ref(), outline_label_text_width(label_width, window), window, cx);
             let workspace = workspace.clone();
             let guide_depths = guide.ancestor_depths;
+            let hierarchy_color = outline_hierarchy_color(depth, cx);
             ListItem::new(("outline-tree-item", ix))
               .w_full()
               .min_w_0()
@@ -77,6 +78,7 @@ impl Workspace {
                   .gap_1()
                   .children((0..depth).map(|guide_depth| {
                     let has_guide = guide_depths.contains(&guide_depth);
+                    let guide_color = outline_hierarchy_color(guide_depth, cx);
                     div()
                       .relative()
                       .w(px(12.0))
@@ -90,7 +92,7 @@ impl Workspace {
                             .bottom_0()
                             .left(px(11.5))
                             .w(px(1.0))
-                            .bg(cx.theme().sidebar_border),
+                            .bg(guide_color.opacity(0.68)),
                         )
                       })
                       .into_any_element()
@@ -111,7 +113,7 @@ impl Workspace {
                               .bottom_0()
                               .left(px(11.5))
                               .w(px(1.0))
-                              .bg(cx.theme().sidebar_border),
+                              .bg(hierarchy_color.opacity(0.68)),
                           )
                         })
                         .child(
@@ -126,7 +128,7 @@ impl Workspace {
                               Icon::default()
                                 .path(icon_path)
                                 .with_size(gpui_component::Size::Small)
-                                .text_color(cx.theme().sidebar_foreground)
+                                .text_color(hierarchy_color)
                             )
                             .on_click({
                               let workspace = workspace.clone();
@@ -155,7 +157,7 @@ impl Workspace {
                               .bottom_0()
                               .left(px(11.5))
                               .w(px(1.0))
-                              .bg(cx.theme().sidebar_border),
+                              .bg(hierarchy_color.opacity(0.68)),
                           )
                         }),
                     )
@@ -168,7 +170,7 @@ impl Workspace {
                       .min_w_0()
                       .px_1()
                       .overflow_hidden()
-                      .text_color(cx.theme().sidebar_foreground)
+                      .text_color(if is_active_outline { cx.theme().sidebar_accent_foreground } else { hierarchy_color })
                       .whitespace_nowrap()
                       .rounded(cx.theme().radius)
                       .when(is_active_outline, |this| {
@@ -181,7 +183,7 @@ impl Workspace {
                             .bottom_0()
                             .bg(cx.theme().sidebar_accent)
                             .border_1()
-                            .border_color(cx.theme().primary)
+                            .border_color(hierarchy_color)
                             .rounded(cx.theme().radius),
                         )
                       })
@@ -362,6 +364,17 @@ impl Render for FlowOutlineDrag {
       .text_color(cx.theme().popover_foreground)
       .child(Icon::new(IconName::Menu).xsmall())
       .child(div().flex_1().truncate().child(self.label.clone()))
+  }
+}
+
+fn outline_hierarchy_color(depth: usize, cx: &App) -> Hsla {
+  let anchor = cx.theme().link.mix(cx.theme().foreground, 0.72);
+  match depth % 5 {
+    0 => anchor,
+    1 => anchor.mix(cx.theme().primary, 0.72),
+    2 => anchor.mix(cx.theme().info, 0.72),
+    3 => anchor.mix(cx.theme().accent_foreground, 0.76),
+    _ => anchor.mix(cx.theme().foreground, 0.82),
   }
 }
 

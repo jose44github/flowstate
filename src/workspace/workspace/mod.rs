@@ -18,7 +18,8 @@ use gpui_component::setting::{SettingGroup, SettingItem, SettingPage, Settings};
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::tree::{TreeItem, TreeState, tree};
 use gpui_component::{
-  ActiveTheme as _, Disableable, Icon, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, TitleBar, h_flex, v_flex,
+  ActiveTheme as _, Colorize as _, Disableable, Icon, IconName, PixelsExt, Root, Selectable, Sizable, Theme, ThemeRegistry, TitleBar,
+  h_flex, v_flex,
 };
 use uuid::Uuid;
 

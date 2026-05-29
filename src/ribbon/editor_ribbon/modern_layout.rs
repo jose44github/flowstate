@@ -31,7 +31,7 @@ fn modern_group(
           div()
             .text_size(px(10.0))
             .font_medium()
-            .text_color(cx.theme().muted_foreground)
+            .text_color(cx.theme().foreground)
             .child(group.label),
         )
         .child(
@@ -187,6 +187,7 @@ fn modern_command_chip(
   let shortcut = command.shortcut.clone();
   let label = RibbonLabel::for_command(command);
   let icon_path = label.prefers_icon().then_some(label.icon_path).flatten();
+  let command_color = ribbon_command_color(command, cx);
 
   Button::new(("modern-ribbon-command", ribbon_command_key(command_id)))
     .xsmall()
@@ -198,15 +199,18 @@ fn modern_command_chip(
     .rounded(cx.theme().radius)
     .selected(command.selected)
     .disabled(command.disabled)
+    .text_color(command_color)
     .tooltip(tooltip)
     .when(command.selected, |this| {
       this
-        .border_color(cx.theme().blue)
-        .bg(cx.theme().blue_light.opacity(0.22))
-        .text_color(cx.theme().foreground)
+        .border_color(command_color)
+        .bg(command_color.opacity(0.18))
+        .text_color(command_color)
     })
     .when_some(command.accent, |this, accent| this.child(accent_dot(accent_color(accent, cx))))
-    .when_some(icon_path, |this, path| this.child(Icon::default().path(path).xsmall()))
+    .when_some(icon_path, |this, path| {
+      this.child(Icon::default().path(path).xsmall().text_color(command_color))
+    })
     .when(icon_path.is_none(), |this| {
       this.child(
         div()
@@ -215,6 +219,7 @@ fn modern_command_chip(
           .line_height(relative(1.0))
           .whitespace_nowrap()
           .text_ellipsis()
+          .text_color(command_color)
           .child(label.text),
       )
     })
@@ -227,4 +232,14 @@ fn modern_command_chip(
       });
     })
     .into_any_element()
+}
+
+fn ribbon_command_color(command: &RibbonCommand, cx: &App) -> Hsla {
+  match command.id {
+    RibbonCommandId::Paragraph(_) => cx.theme().primary,
+    RibbonCommandId::Semantic(_) | RibbonCommandId::Underline | RibbonCommandId::Strikethrough => cx.theme().link,
+    RibbonCommandId::Highlight(_) | RibbonCommandId::HighlightMenu | RibbonCommandId::ToggleHighlightMode(_) => cx.theme().warning,
+    RibbonCommandId::ClearHighlight | RibbonCommandId::ClearFormatting => cx.theme().danger,
+    RibbonCommandId::CondensedMenu => cx.theme().info,
+  }
 }

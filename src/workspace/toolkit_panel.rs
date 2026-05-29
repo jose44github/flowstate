@@ -1,7 +1,7 @@
 use gpui::{Context, IntoElement, Pixels, div, prelude::*, px};
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::resizable::{h_resizable, resizable_panel};
-use gpui_component::{ActiveTheme as _, IconName, Sizable, v_flex};
+use gpui_component::{ActiveTheme as _, Icon, IconName, Sizable, v_flex};
 
 use super::{APP_CHROME_BORDER_WIDTH, SIDE_PANEL_COLLAPSED_WIDTH, Workspace};
 
@@ -58,7 +58,7 @@ impl Workspace {
       .border_color(cx.theme().border)
       .child(
         Button::new("toolkit-global-db8-search")
-          .icon(IconName::Search)
+          .icon(Icon::new(IconName::Search).text_color(cx.theme().link))
           .xsmall()
           .ghost()
           .tooltip("Find DB8 file")
@@ -86,7 +86,7 @@ impl Workspace {
           .justify_between()
           .child(
             Button::new("collapse-toolkit-panel")
-              .icon(IconName::PanelRightClose)
+              .icon(Icon::new(IconName::PanelRightClose).text_color(cx.theme().muted_foreground))
               .xsmall()
               .ghost()
               .tooltip("Collapse toolkit")
@@ -96,15 +96,16 @@ impl Workspace {
           )
           .child(
             div()
-              .text_sm()
-              .font_weight(gpui::FontWeight::SEMIBOLD)
-              .child("Toolkit"),
+          .text_sm()
+          .text_color(cx.theme().foreground)
+          .font_weight(gpui::FontWeight::SEMIBOLD)
+          .child("Toolkit"),
           ),
       )
       // Both of these need moving. Toolkit is for rendering live views of elements from other files. Todo:
       .child(
         Button::new("toolkit-global-db8-search")
-          .icon(IconName::Search)
+          .icon(Icon::new(IconName::Search).text_color(cx.theme().link))
           .label("Find DB8 File")
           .small()
           .on_click(open_file_search),
