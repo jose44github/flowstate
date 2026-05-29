@@ -68,7 +68,7 @@ cosmic-text = { version = "0.14.2", default-features = false, features = ["shape
 gpui-component = { path = "vendor/gpui-component" }
 
 [profile.release]
-rustflags = ["-Z", "threads=8"]
+rustflags = ["-Z", "threads=0"]
 incremental = true
 
 [profile.profiler]
