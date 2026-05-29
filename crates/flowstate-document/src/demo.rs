@@ -8,7 +8,13 @@ use super::*;
 pub fn document_from_input(theme: DocumentTheme, paragraphs: Vec<InputParagraph>) -> Document {
   let text_capacity = paragraphs
     .iter()
-    .map(|paragraph| paragraph.runs.iter().map(|run| run.text.len()).sum::<usize>())
+    .map(|paragraph| {
+      paragraph
+        .runs
+        .iter()
+        .map(|run| run.text.len())
+        .sum::<usize>()
+    })
     .sum::<usize>()
     + paragraphs.len().saturating_sub(1);
   let mut text = String::with_capacity(text_capacity);
@@ -39,7 +45,13 @@ pub fn document_from_input(theme: DocumentTheme, paragraphs: Vec<InputParagraph>
 pub fn document_from_paragraphs(theme: DocumentTheme, paragraphs: Vec<DocumentParagraphInput>) -> Document {
   let text_capacity = paragraphs
     .iter()
-    .map(|paragraph| paragraph.runs.iter().map(|run| run.text.len()).sum::<usize>())
+    .map(|paragraph| {
+      paragraph
+        .runs
+        .iter()
+        .map(|run| run.text.len())
+        .sum::<usize>()
+    })
     .sum::<usize>()
     + paragraphs.len().saturating_sub(1);
   let mut text = String::with_capacity(text_capacity);

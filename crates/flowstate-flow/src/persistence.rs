@@ -55,7 +55,10 @@ pub fn load_flow_document_or_new(path: impl AsRef<Path>) -> FlowDocument {
 #[hotpath::measure]
 pub fn save_flow_document(path: impl AsRef<Path>, document: &FlowDocument) -> Result<()> {
   let path = path.as_ref();
-  if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+  if let Some(parent) = path
+    .parent()
+    .filter(|parent| !parent.as_os_str().is_empty())
+  {
     fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
   }
   let text = get_json(document)?;

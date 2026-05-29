@@ -1,8 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::document::{
-  BoxNode, Flow, FlowDocument, Node, NodeId, NodeValue, Nodes, ROOT_ID, constrain_index, new_box_id, new_flow_id,
-};
+use crate::document::{BoxNode, Flow, FlowDocument, Node, NodeId, NodeValue, Nodes, ROOT_ID, constrain_index, new_box_id, new_flow_id};
 use crate::styles::DebateStyleFlow;
 
 pub type ActionBundle = Vec<Action>;
@@ -244,12 +242,7 @@ pub fn add_new_flow_actions(index: usize, style: &DebateStyleFlow, switch_speake
 
   if let Some(starter_boxes) = starter_boxes {
     for (index, placeholder) in starter_boxes.iter().enumerate() {
-      actions.push(new_box_action(
-        flow_id.clone(),
-        flow_id.clone(),
-        index,
-        Some((*placeholder).to_string()),
-      ));
+      actions.push(new_box_action(flow_id.clone(), flow_id.clone(), index, Some((*placeholder).to_string())));
     }
   } else {
     actions.push(new_box_action(flow_id.clone(), flow_id.clone(), 0, None));
@@ -300,11 +293,7 @@ pub fn delete_node_actions(document: &FlowDocument, id: NodeId) -> Option<Comman
   };
   let mut actions = Vec::new();
   collect_delete_actions(document, &id, &mut actions)?;
-  Some(CommandResult {
-    actions,
-    owner,
-    focus: None,
-  })
+  Some(CommandResult { actions, owner, focus: None })
 }
 
 #[hotpath::measure]

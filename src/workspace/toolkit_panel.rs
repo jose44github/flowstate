@@ -11,16 +11,8 @@ impl Workspace {
   /// resizable horizontal split. Keeping this next to `render_toolkit` makes
   /// the panel's width, collapse state, and visible contents easier to evolve.
   pub(super) fn render_content_area(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let toolkit_width = if self.toolkit_collapsed {
-      SIDE_PANEL_COLLAPSED_WIDTH
-    } else {
-      px(40.0)
-    };
-    let toolkit_range_end = if self.toolkit_collapsed {
-      SIDE_PANEL_COLLAPSED_WIDTH
-    } else {
-      px(40.0)
-    };
+    let toolkit_width = if self.toolkit_collapsed { SIDE_PANEL_COLLAPSED_WIDTH } else { px(40.0) };
+    let toolkit_range_end = if self.toolkit_collapsed { SIDE_PANEL_COLLAPSED_WIDTH } else { px(40.0) };
 
     h_resizable("workspace-content-resizable")
       .with_state(&self.content_resizable_state)
@@ -28,7 +20,13 @@ impl Workspace {
         resizable_panel()
           .size(px(560.0))
           .size_range(px(120.0)..Pixels::MAX)
-          .child(div().size_full().min_w_0().overflow_hidden().child(self.render_document_pane(cx))),
+          .child(
+            div()
+              .size_full()
+              .min_w_0()
+              .overflow_hidden()
+              .child(self.render_document_pane(cx)),
+          ),
       )
       .child(
         resizable_panel()

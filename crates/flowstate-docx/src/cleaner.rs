@@ -188,8 +188,22 @@ fn normalize_formatting_tag(tag: &str) -> (Option<String>, DocxCleanStats) {
       &mut stats.highlight_values_normalized,
     ),
     "tab" => {
-      normalize_attr(tag, &mut normalized, "val", supported_tab_alignment_value, "left", &mut stats.tab_values_normalized);
-      normalize_attr(tag, &mut normalized, "leader", supported_tab_leader_value, "none", &mut stats.tab_values_normalized);
+      normalize_attr(
+        tag,
+        &mut normalized,
+        "val",
+        supported_tab_alignment_value,
+        "left",
+        &mut stats.tab_values_normalized,
+      );
+      normalize_attr(
+        tag,
+        &mut normalized,
+        "leader",
+        supported_tab_leader_value,
+        "none",
+        &mut stats.tab_values_normalized,
+      );
     },
     "type" => normalize_attr(
       tag,
@@ -208,7 +222,14 @@ fn normalize_formatting_tag(tag: &str) -> (Option<String>, DocxCleanStats) {
       &mut stats.section_values_normalized,
     ),
     "top" | "left" | "bottom" | "right" | "insideH" | "insideV" | "tl2br" | "tr2bl" | "bar" => {
-      normalize_attr(tag, &mut normalized, "val", supported_border_value, "single", &mut stats.border_values_normalized);
+      normalize_attr(
+        tag,
+        &mut normalized,
+        "val",
+        supported_border_value,
+        "single",
+        &mut stats.border_values_normalized,
+      );
     },
     _ => {},
   }
@@ -298,7 +319,10 @@ fn attr_value_range(tag: &str, target_attr_name: &str) -> Option<(usize, usize)>
 
 #[hotpath::measure]
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
-  !needle.is_empty() && haystack.windows(needle.len()).any(|window| window == needle)
+  !needle.is_empty()
+    && haystack
+      .windows(needle.len())
+      .any(|window| window == needle)
 }
 
 impl DocxCleanStats {

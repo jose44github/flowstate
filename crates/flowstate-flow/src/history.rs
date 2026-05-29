@@ -47,7 +47,12 @@ impl History {
     let action = self.actions.get_mut(next_index)?;
     let inverse = document.apply_action_bundle(action.action_bundle.clone());
     action.action_bundle = inverse;
-    Some(action.after_focus.clone().or_else(|| action.before_focus.clone()))
+    Some(
+      action
+        .after_focus
+        .clone()
+        .or_else(|| action.before_focus.clone()),
+    )
   }
 
   pub fn can_undo(&self) -> bool {
@@ -55,7 +60,9 @@ impl History {
   }
 
   pub fn can_redo(&self) -> bool {
-    self.index.map_or(!self.actions.is_empty(), |index| index + 1 < self.actions.len())
+    self
+      .index
+      .map_or(!self.actions.is_empty(), |index| index + 1 < self.actions.len())
   }
 
   pub fn clear(&mut self) {
@@ -81,13 +88,7 @@ impl HistoryHolder {
     }
   }
 
-  pub fn add(
-    &mut self,
-    owner: NodeId,
-    action_bundle: ActionBundle,
-    before_focus: Option<NodeId>,
-    after_focus: Option<NodeId>,
-  ) {
+  pub fn add(&mut self, owner: NodeId, action_bundle: ActionBundle, before_focus: Option<NodeId>, after_focus: Option<NodeId>) {
     self
       .histories
       .entry(owner.clone())
@@ -120,7 +121,9 @@ impl HistoryHolder {
 
   pub fn clear(&mut self) {
     self.histories.clear();
-    self.histories.insert(ROOT_ID.to_string(), History::default());
+    self
+      .histories
+      .insert(ROOT_ID.to_string(), History::default());
     self.last_added_owner = None;
   }
 }

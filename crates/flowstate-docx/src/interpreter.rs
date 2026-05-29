@@ -1,7 +1,4 @@
-use std::{
-  io,
-  path::Path,
-};
+use std::{io, path::Path};
 
 use rdocx::Document as RDocxDocument;
 use rdocx_opc::OpcPackage;
@@ -132,7 +129,9 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
       .entry(paragraph_style_key.clone())
       .or_insert_with(|| docx.resolve_paragraph_properties(style_id));
     let paragraph_properties = EffectiveParagraphProperties {
-      direct_outline_lvl: direct_properties.get(paragraph_ix).and_then(|properties| properties.outline_lvl),
+      direct_outline_lvl: direct_properties
+        .get(paragraph_ix)
+        .and_then(|properties| properties.outline_lvl),
       resolved: resolved_paragraph_properties,
     };
     let direct_runs = direct_properties
@@ -350,7 +349,10 @@ fn direct_properties_by_paragraph_xml(doc_xml: &[u8]) -> io::Result<Vec<DirectPa
           })
           .collect();
         DirectParagraphFacts {
-          outline_lvl: paragraph.properties.as_ref().and_then(|properties| properties.outline_lvl),
+          outline_lvl: paragraph
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.outline_lvl),
           runs,
         }
       })
@@ -820,8 +822,8 @@ mod tests {
     outline_lvl: Option<u32>,
   }
 
-    #[hotpath::measure_all]
-impl ParagraphProperties for TestParagraphProperties {
+  #[hotpath::measure_all]
+  impl ParagraphProperties for TestParagraphProperties {
     fn outline_lvl(&self) -> Option<u32> {
       self.outline_lvl
     }
@@ -896,18 +898,7 @@ impl ParagraphProperties for TestParagraphProperties {
       ParagraphStyle::Block
     );
 
-    let run_styles = recognize_run_styles_for_context(
-      &runs[0],
-      0,
-      None,
-      true,
-      false,
-      false,
-      ParagraphStyle::Block,
-      false,
-      false,
-      &styles,
-    );
+    let run_styles = recognize_run_styles_for_context(&runs[0], 0, None, true, false, false, ParagraphStyle::Block, false, false, &styles);
     assert_eq!(run_styles.semantic, RunSemanticStyle::Plain);
     assert!(!run_styles.direct_underline);
     assert_eq!(run_styles.highlight, None);
@@ -920,16 +911,7 @@ impl ParagraphProperties for TestParagraphProperties {
     let run = run(Some("Heading3Char"), "Plan text");
 
     assert_eq!(
-      recognize_run_semantic_for_context(
-        &run,
-        0,
-        None,
-        true,
-        ParagraphStyle::Block,
-        false,
-        false,
-        &styles,
-      ),
+      recognize_run_semantic_for_context(&run, 0, None, true, ParagraphStyle::Block, false, false, &styles,),
       RunSemanticStyle::Plain
     );
   }
@@ -941,16 +923,7 @@ impl ParagraphProperties for TestParagraphProperties {
     let run = run(Some("Emphasis"), "important");
 
     assert_eq!(
-      recognize_run_semantic_for_context(
-        &run,
-        0,
-        None,
-        true,
-        ParagraphStyle::Block,
-        false,
-        false,
-        &styles,
-      ),
+      recognize_run_semantic_for_context(&run, 0, None, true, ParagraphStyle::Block, false, false, &styles,),
       RunSemanticStyle::Plain
     );
   }
@@ -964,18 +937,7 @@ impl ParagraphProperties for TestParagraphProperties {
     run.strikethrough = true;
     run.highlight = true;
 
-    let run_styles = recognize_run_styles_for_context(
-      &run,
-      0,
-      None,
-      true,
-      false,
-      false,
-      ParagraphStyle::Block,
-      false,
-      false,
-      &styles,
-    );
+    let run_styles = recognize_run_styles_for_context(&run, 0, None, true, false, false, ParagraphStyle::Block, false, false, &styles);
 
     assert_eq!(run_styles.semantic, RunSemanticStyle::Plain);
     assert!(!run_styles.direct_underline);
@@ -992,18 +954,7 @@ impl ParagraphProperties for TestParagraphProperties {
     run.strikethrough = true;
     run.highlight = true;
 
-    let run_styles = recognize_run_styles_for_context(
-      &run,
-      0,
-      None,
-      true,
-      true,
-      true,
-      ParagraphStyle::Tag,
-      false,
-      false,
-      &styles,
-    );
+    let run_styles = recognize_run_styles_for_context(&run, 0, None, true, true, true, ParagraphStyle::Tag, false, false, &styles);
 
     assert_eq!(run_styles.semantic, RunSemanticStyle::Plain);
     assert!(run_styles.direct_underline);
@@ -1018,18 +969,7 @@ impl ParagraphProperties for TestParagraphProperties {
     let mut run = run(None, "spoken text");
     run.highlight = true;
 
-    let run_styles = recognize_run_styles_for_context(
-      &run,
-      0,
-      None,
-      false,
-      false,
-      true,
-      ParagraphStyle::Normal,
-      false,
-      false,
-      &styles,
-    );
+    let run_styles = recognize_run_styles_for_context(&run, 0, None, false, false, true, ParagraphStyle::Normal, false, false, &styles);
 
     assert_eq!(run_styles.highlight, Some(HighlightStyle::Spoken));
   }

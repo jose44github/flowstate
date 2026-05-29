@@ -46,17 +46,50 @@ pub struct DebateStyle {
 #[hotpath::measure]
 pub fn all_debate_style_templates() -> Vec<DebateStyleTemplate> {
   vec![
-    DebateStyleTemplate { key: DebateStyleKey::Policy, label: "Policy" },
-    DebateStyleTemplate { key: DebateStyleKey::PublicForum, label: "Public Forum" },
-    DebateStyleTemplate { key: DebateStyleKey::LincolnDouglas, label: "Lincoln Douglas" },
-    DebateStyleTemplate { key: DebateStyleKey::Congress, label: "Congress" },
-    DebateStyleTemplate { key: DebateStyleKey::WorldSchools, label: "World Schools" },
-    DebateStyleTemplate { key: DebateStyleKey::BigQuestions, label: "Big Questions" },
-    DebateStyleTemplate { key: DebateStyleKey::NofSpar, label: "NOF SPAR" },
-    DebateStyleTemplate { key: DebateStyleKey::Parli, label: "Parli" },
-    DebateStyleTemplate { key: DebateStyleKey::Classic, label: "Classic" },
-    DebateStyleTemplate { key: DebateStyleKey::BritishParliamentary, label: "British Parliamentary" },
-    DebateStyleTemplate { key: DebateStyleKey::Ippf, label: "International Public Policy Forum" },
+    DebateStyleTemplate {
+      key: DebateStyleKey::Policy,
+      label: "Policy",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::PublicForum,
+      label: "Public Forum",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::LincolnDouglas,
+      label: "Lincoln Douglas",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::Congress,
+      label: "Congress",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::WorldSchools,
+      label: "World Schools",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::BigQuestions,
+      label: "Big Questions",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::NofSpar,
+      label: "NOF SPAR",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::Parli,
+      label: "Parli",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::Classic,
+      label: "Classic",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::BritishParliamentary,
+      label: "British Parliamentary",
+    },
+    DebateStyleTemplate {
+      key: DebateStyleKey::Ippf,
+      label: "International Public Policy Forum",
+    },
   ]
 }
 
@@ -161,11 +194,10 @@ pub fn debate_style(key: DebateStyleKey) -> DebateStyle {
       flows: vec![flow(
         "bill",
         &[
-          "1A", "Q/1N", "Q/2A", "Q/2N", "Q/3A", "Q/3N", "Q/4A", "Q/4N", "Q/5A", "Q/5N", "Q/6A", "Q/6N",
-          "Q/7A", "Q/7N", "Q/8A", "Q/8N", "Q/9A", "Q/9N", "Q/10A", "Q/10N", "Q/11A", "Q/11N", "Q/12A",
-          "Q/12N", "Q/13A", "Q/13N", "Q/14A", "Q/14N", "Q/15A", "Q/15N", "Q/16A", "Q/16N", "Q/17A",
-          "Q/17N", "Q/18A", "Q/18N", "Q/19A", "Q/19N", "Q/20A", "Q/20N", "Q/20A", "Q/20N", "Q/21A",
-          "Q/21N", "Q/22A", "Q/22N", "Q/23A", "Q/23N", "Q/24A", "Q/24N", "Q/25A", "Q/25N",
+          "1A", "Q/1N", "Q/2A", "Q/2N", "Q/3A", "Q/3N", "Q/4A", "Q/4N", "Q/5A", "Q/5N", "Q/6A", "Q/6N", "Q/7A", "Q/7N", "Q/8A", "Q/8N", "Q/9A",
+          "Q/9N", "Q/10A", "Q/10N", "Q/11A", "Q/11N", "Q/12A", "Q/12N", "Q/13A", "Q/13N", "Q/14A", "Q/14N", "Q/15A", "Q/15N", "Q/16A", "Q/16N",
+          "Q/17A", "Q/17N", "Q/18A", "Q/18N", "Q/19A", "Q/19N", "Q/20A", "Q/20N", "Q/20A", "Q/20N", "Q/21A", "Q/21N", "Q/22A", "Q/22N", "Q/23A",
+          "Q/23N", "Q/24A", "Q/24N", "Q/25A", "Q/25N",
         ],
         false,
       )],
@@ -212,10 +244,7 @@ pub fn debate_style(key: DebateStyleKey) -> DebateStyle {
       prep_time_ms: Some(3 * 60 * 1000),
     },
     DebateStyleKey::NofSpar => DebateStyle {
-      flows: vec![
-        flow("pro", &["PC", "CC", "PR", "CR"], false),
-        flow("con", &["CC", "PR", "CR"], true),
-      ],
+      flows: vec![flow("pro", &["PC", "CC", "PR", "CR"], false), flow("con", &["CC", "PR", "CR"], true)],
       alternative_flows_1: None,
       timer_speeches: speeches(&[
         ("PREP", 2 * 60 * 1000, false),

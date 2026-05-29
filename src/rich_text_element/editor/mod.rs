@@ -470,10 +470,7 @@ struct ParagraphCacheRetainRanges {
 
 impl Default for ParagraphCacheRetainRanges {
   fn default() -> Self {
-    Self {
-      visible: 0..0,
-      active: 0..0,
-    }
+    Self { visible: 0..0, active: 0..0 }
   }
 }
 
@@ -718,7 +715,9 @@ impl HeightPrefixIndex {
     }
 
     let removed = range.end - range.start;
-    self.heights.splice(range.clone(), sizes.iter().map(|size| size.height));
+    self
+      .heights
+      .splice(range.clone(), sizes.iter().map(|size| size.height));
     self
       .origins
       .splice(range.clone(), std::iter::repeat_n(px(0.0), sizes.len()));

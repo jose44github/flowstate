@@ -89,7 +89,9 @@ pub(super) fn invisibility_projected_document(document: &Document, paragraph_ix:
     runs,
     // Give the projected paragraph a distinct cache key from the source
     // paragraph so invisible-mode layout cannot reuse a full-text layout.
-    version: paragraph.version.wrapping_add(INVISIBILITY_PROJECTED_VERSION_OFFSET),
+    version: paragraph
+      .version
+      .wrapping_add(INVISIBILITY_PROJECTED_VERSION_OFFSET),
   };
   let paragraphs = Arc::new(vec![paragraph.clone()]);
   Some(Document {
@@ -124,7 +126,11 @@ pub(super) fn projected_visible_paragraph_text_and_runs(document: &Document, par
   let paragraph = document.paragraphs.get(paragraph_ix)?;
   let paragraph_start = paragraph_byte_range(document, paragraph_ix).start;
   let paragraph_len = paragraph_text_len(paragraph);
-  let visible_run_count = paragraph.runs.iter().filter(|run| run.len > 0 && run_is_visible(run.styles)).count();
+  let visible_run_count = paragraph
+    .runs
+    .iter()
+    .filter(|run| run.len > 0 && run_is_visible(run.styles))
+    .count();
   if visible_run_count == 0 {
     return None;
   }

@@ -235,7 +235,10 @@ impl FlowEditor {
     let selected_box_node = selected_box
       .as_ref()
       .and_then(|id| self.document.box_node(id));
-    let owner = self.selected_flow_id.clone().unwrap_or_else(|| ROOT_ID.to_string());
+    let owner = self
+      .selected_flow_id
+      .clone()
+      .unwrap_or_else(|| ROOT_ID.to_string());
     FlowCommandState {
       has_flow: self.selected_flow_id.is_some(),
       has_selected_box: selected_box.is_some(),
@@ -243,7 +246,9 @@ impl FlowEditor {
       can_fold,
       selected_bold: selected_box_node.is_some_and(|box_node| box_node.bold),
       selected_crossed: selected_box_node.is_some_and(|box_node| box_node.crossed),
-      selected_folded: selected_box.as_ref().is_some_and(|id| self.folded.contains(id)),
+      selected_folded: selected_box
+        .as_ref()
+        .is_some_and(|id| self.folded.contains(id)),
       can_undo: self.history.can_undo(&owner),
       can_redo: self.history.can_redo(&owner),
     }
@@ -359,7 +364,9 @@ impl FlowEditor {
     self.resolve_pending_edit(cx);
     let after_focus = command.focus.clone().or(before_focus.clone());
     let inverse = self.document.apply_action_bundle(command.actions);
-    self.history.add(command.owner, inverse, before_focus, after_focus.clone());
+    self
+      .history
+      .add(command.owner, inverse, before_focus, after_focus.clone());
     self.dirty = true;
     if let Some(focus) = after_focus {
       if self.document.node(&focus).is_some() {
@@ -708,7 +715,10 @@ impl FlowEditor {
     }
     let owner = match &value {
       NodeValue::Flow(_) => id.clone(),
-      NodeValue::Box(_) => self.document.parent_flow_id(&id).unwrap_or_else(|| ROOT_ID.to_string()),
+      NodeValue::Box(_) => self
+        .document
+        .parent_flow_id(&id)
+        .unwrap_or_else(|| ROOT_ID.to_string()),
       NodeValue::Root => ROOT_ID.to_string(),
     };
     if self
@@ -739,7 +749,11 @@ impl FlowEditor {
     let Some(pending) = self.pending_edit.take() else {
       return;
     };
-    let Some(current) = self.document.node(&pending.id).map(|node| node.value.clone()) else {
+    let Some(current) = self
+      .document
+      .node(&pending.id)
+      .map(|node| node.value.clone())
+    else {
       return;
     };
     if current == pending.old_value {
@@ -1139,9 +1153,11 @@ impl FlowEditor {
               })),
           )
           .child(
-            v_flex()
-              .gap_2()
-              .children(children.into_iter().map(|child| self.render_box_tree(child, &flow.columns, window, cx))),
+            v_flex().gap_2().children(
+              children
+                .into_iter()
+                .map(|child| self.render_box_tree(child, &flow.columns, window, cx)),
+            ),
           ),
       )
       .into_any_element()
@@ -1161,9 +1177,12 @@ impl FlowEditor {
         .items_start()
         .child(div().w(px(COLUMN_WIDTH)).h(px(10.0)).flex_none())
         .child(
-          v_flex()
-            .gap_2()
-            .children(node.children.into_iter().map(|child| self.render_box_tree(child, columns, window, cx))),
+          v_flex().gap_2().children(
+            node
+              .children
+              .into_iter()
+              .map(|child| self.render_box_tree(child, columns, window, cx)),
+          ),
         )
         .into_any_element();
     }
@@ -1173,9 +1192,11 @@ impl FlowEditor {
       .child(self.render_box_cell(box_id.clone(), node, columns, window, cx))
       .when(!self.folded.contains(&box_id), |this| {
         this.child(
-          v_flex()
-            .gap_2()
-            .children(children.into_iter().map(|child| self.render_box_tree(child, columns, window, cx))),
+          v_flex().gap_2().children(
+            children
+              .into_iter()
+              .map(|child| self.render_box_tree(child, columns, window, cx)),
+          ),
         )
       })
       .when(self.folded.contains(&box_id), |this| {
@@ -1240,20 +1261,22 @@ impl FlowEditor {
           .items_start()
           .gap_1()
           .when(box_node.is_extension, |this| {
-            this.child(Icon::new(IconName::ArrowRight).xsmall().text_color(colors.foreground))
+            this.child(
+              Icon::new(IconName::ArrowRight)
+                .xsmall()
+                .text_color(colors.foreground),
+            )
           })
           .child(
-            div()
-              .flex_1()
-              .child(
-                Input::new(&input)
-                  .appearance(false)
-                  .bordered(false)
-                  .focus_bordered(false)
-                  .text_color(if box_node.crossed { weak } else { colors.foreground })
-                  .placeholder_color(colors.foreground.opacity(0.62))
-                  .w_full(),
-              ),
+            div().flex_1().child(
+              Input::new(&input)
+                .appearance(false)
+                .bordered(false)
+                .focus_bordered(false)
+                .text_color(if box_node.crossed { weak } else { colors.foreground })
+                .placeholder_color(colors.foreground.opacity(0.62))
+                .w_full(),
+            ),
           ),
       )
       .into_any_element()

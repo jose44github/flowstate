@@ -41,7 +41,10 @@ impl DocumentFileSearch {
     let root = normalize_search_root(root)?;
     let mut files = Vec::new();
     collect_document_files(&root, &mut files);
-    let mut files = files.into_iter().map(DocumentFileEntry::new).collect::<Vec<_>>();
+    let mut files = files
+      .into_iter()
+      .map(DocumentFileEntry::new)
+      .collect::<Vec<_>>();
     files.sort_by(|a, b| a.full_path_lower.cmp(&b.full_path_lower));
     Ok(Self { root, files })
   }
@@ -116,9 +119,7 @@ fn search_document_files(files: &[DocumentFileEntry], typed_query: &str, limit: 
     return files
       .iter()
       .take(limit)
-      .map(|entry| FileSearchHit {
-        path: entry.path.clone(),
-      })
+      .map(|entry| FileSearchHit { path: entry.path.clone() })
       .collect();
   }
 
@@ -135,9 +136,7 @@ fn search_document_files(files: &[DocumentFileEntry], typed_query: &str, limit: 
   scored
     .into_iter()
     .take(limit)
-    .map(|(_, entry)| FileSearchHit {
-      path: entry.path.clone(),
-    })
+    .map(|(_, entry)| FileSearchHit { path: entry.path.clone() })
     .collect()
 }
 

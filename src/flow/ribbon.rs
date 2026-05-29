@@ -1,7 +1,7 @@
 use flowstate_flow::{DebateStyleKey, FormatKind, all_debate_style_templates};
 use gpui::{
-  AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription, Window,
-  div, prelude::*, px,
+  AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, ParentElement, Render, SharedString, Subscription,
+  Window, div, prelude::*, px,
 };
 use gpui_component::button::{Button, ButtonVariants, Toggle};
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -40,13 +40,17 @@ impl FlowRibbon {
         .default_value(editor.read(cx).selected_flow_title())
     });
     let style_editor = editor.clone();
-    let style_subscription = cx.subscribe_in(&style_select, window, move |_, _, event: &SelectEvent<DebateStyleSelectDelegate>, _, cx| {
-      if let SelectEvent::Confirm(Some(label)) = event
-        && let Some(style) = style_key_for_label(label)
-      {
-        style_editor.update(cx, |editor, cx| editor.set_selected_style(style, cx));
-      }
-    });
+    let style_subscription = cx.subscribe_in(
+      &style_select,
+      window,
+      move |_, _, event: &SelectEvent<DebateStyleSelectDelegate>, _, cx| {
+        if let SelectEvent::Confirm(Some(label)) = event
+          && let Some(style) = style_key_for_label(label)
+        {
+          style_editor.update(cx, |editor, cx| editor.set_selected_style(style, cx));
+        }
+      },
+    );
     let title_editor = editor.clone();
     let title_subscription = cx.subscribe(&title_input, move |ribbon, input, event: &InputEvent, cx| match event {
       InputEvent::Change => {
@@ -115,7 +119,12 @@ impl FlowRibbon {
     controls.push(
       div()
         .w(px(164.0))
-        .child(Select::new(&self.style_select).placeholder("Debate style").search_placeholder("Search styles").w_full())
+        .child(
+          Select::new(&self.style_select)
+            .placeholder("Debate style")
+            .search_placeholder("Search styles")
+            .w_full(),
+        )
         .into_any_element(),
     );
     if selected_style == DebateStyleKey::LincolnDouglas {
@@ -149,19 +158,19 @@ impl FlowRibbon {
       );
     }
     controls.extend(templates.into_iter().enumerate().map(|(ix, template)| {
-        let label = template.name.clone();
-        flow_chip(("flow-ribbon-add-template", ix), metrics, cx)
-          .icon(IconName::Plus)
-          .label(label)
-          .tooltip("Add flow")
-          .on_click({
-            let editor = editor.clone();
-            move |_, window, cx| {
-              editor.update(cx, |editor, cx| editor.add_flow(template.clone(), window, cx));
-            }
-          })
-          .into_any_element()
-      }));
+      let label = template.name.clone();
+      flow_chip(("flow-ribbon-add-template", ix), metrics, cx)
+        .icon(IconName::Plus)
+        .label(label)
+        .tooltip("Add flow")
+        .on_click({
+          let editor = editor.clone();
+          move |_, window, cx| {
+            editor.update(cx, |editor, cx| editor.add_flow(template.clone(), window, cx));
+          }
+        })
+        .into_any_element()
+    }));
     flow_ribbon_group("Setup", controls, metrics, cx)
   }
 
@@ -171,7 +180,13 @@ impl FlowRibbon {
       vec![
         div()
           .w(px(220.0))
-          .child(Input::new(&self.title_input).appearance(false).bordered(true).focus_bordered(true).w_full())
+          .child(
+            Input::new(&self.title_input)
+              .appearance(false)
+              .bordered(true)
+              .focus_bordered(true)
+              .w_full(),
+          )
           .into_any_element(),
         flow_chip("flow-ribbon-delete-flow", metrics, cx)
           .icon(IconName::Delete)
@@ -372,10 +387,14 @@ struct FlowRibbonMetrics {
 #[hotpath::measure_all]
 impl FlowRibbonMetrics {
   fn from_height(height: gpui::Pixels) -> Self {
-    let height = px(height.as_f32().clamp(min_flow_ribbon_height().as_f32(), max_flow_ribbon_height().as_f32()));
+    let height = px(
+      height
+        .as_f32()
+        .clamp(min_flow_ribbon_height().as_f32(), max_flow_ribbon_height().as_f32()),
+    );
     let scale = ((height.as_f32() - min_flow_ribbon_height().as_f32())
       / (max_flow_ribbon_height().as_f32() - min_flow_ribbon_height().as_f32()))
-      .clamp(0.0, 1.0);
+    .clamp(0.0, 1.0);
     Self {
       height,
       chip_height: px(20.0 + 10.0 * scale),

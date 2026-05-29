@@ -62,10 +62,7 @@ pub fn register_default_keybindings(cx: &mut App) {
 /// types, while still letting editor commands be registered from the same data.
 #[hotpath::measure]
 pub fn register_keymap(cx: &mut App, keymap: &Keymap) {
-  let bindings = keymap
-    .entries
-    .iter()
-    .filter_map(keybinding_for_entry);
+  let bindings = keymap.entries.iter().filter_map(keybinding_for_entry);
   cx.bind_keys(bindings);
 }
 
