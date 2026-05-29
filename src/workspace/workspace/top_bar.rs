@@ -33,12 +33,29 @@ fn flowstate_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
                 theme_names.iter().fold(menu, |menu, theme_name| {
                   let selected = theme_name == &current_theme;
                   let label = theme_name.clone();
-                  let theme_name = theme_name.clone();
+                  let preview_theme = theme_name.clone();
+                  let restore_theme = current_theme.clone();
+                  let apply_theme = theme_name.clone();
+                  let committed = Rc::new(Cell::new(false));
                   menu.item(
                     PopupMenuItem::new(label)
                       .checked(selected)
-                      .on_click(move |_, window, cx| {
-                        apply_app_theme(&theme_name, Some(window), cx);
+                      .on_hover({
+                        let committed = committed.clone();
+                        move |hovered, window, cx| {
+                          if *hovered {
+                            preview_app_theme(&preview_theme, Some(window), cx);
+                          } else if !committed.get() {
+                            preview_app_theme(&restore_theme, Some(window), cx);
+                          }
+                        }
+                      })
+                      .on_click({
+                        let committed = committed.clone();
+                        move |_, window, cx| {
+                          committed.set(true);
+                          apply_app_theme(&apply_theme, Some(window), cx);
+                        }
                       }),
                   )
                 })

@@ -77,8 +77,10 @@ pub fn install_workspace_close_prompt(workspace: Entity<Workspace>, window: &mut
 
 #[hotpath::measure]
 pub fn open_workspace_window(document_path: Option<PathBuf>, cx: &mut App) {
+  let window_bounds = startup_window_bounds(cx);
   cx.open_window(
     WindowOptions {
+      window_bounds,
       titlebar: Some(TitleBar::title_bar_options()),
       window_decorations: window_decorations(),
       ..Default::default()
@@ -91,6 +93,20 @@ pub fn open_workspace_window(document_path: Option<PathBuf>, cx: &mut App) {
     },
   )
   .unwrap();
+}
+
+#[cfg(target_os = "windows")]
+fn startup_window_bounds(cx: &mut App) -> Option<WindowBounds> {
+  Some(WindowBounds::Maximized(Bounds::centered(
+    None,
+    size(px(1200.0), px(800.0)),
+    cx,
+  )))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn startup_window_bounds(_: &mut App) -> Option<WindowBounds> {
+  None
 }
 
 #[cfg(target_os = "linux")]

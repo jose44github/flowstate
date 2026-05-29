@@ -42,6 +42,7 @@ pub enum PopupMenuItem {
         action: Option<Box<dyn Action>>,
         // For link item
         handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+        hover_handler: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     },
     /// A menu item with custom element render.
     ElementItem {
@@ -51,6 +52,7 @@ pub enum PopupMenuItem {
         action: Option<Box<dyn Action>>,
         render: Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>,
         handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+        hover_handler: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
     },
     /// A submenu item that opens another popup menu.
     ///
@@ -76,6 +78,7 @@ impl PopupMenuItem {
             action: None,
             is_link: false,
             handler: None,
+            hover_handler: None,
         }
     }
 
@@ -93,6 +96,7 @@ impl PopupMenuItem {
             action: None,
             render: Box::new(move |window, cx| builder(window, cx).into_any_element()),
             handler: None,
+            hover_handler: None,
         }
     }
 
@@ -208,6 +212,29 @@ impl PopupMenuItem {
         self
     }
 
+    /// Add a hover handler for the menu item.
+    ///
+    /// Only works for [`PopupMenuItem::Item`] and [`PopupMenuItem::ElementItem`].
+    pub fn on_hover<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(&bool, &mut Window, &mut App) + 'static,
+    {
+        match &mut self {
+            PopupMenuItem::Item {
+                hover_handler: h, ..
+            } => {
+                *h = Some(Rc::new(handler));
+            }
+            PopupMenuItem::ElementItem {
+                hover_handler: h, ..
+            } => {
+                *h = Some(Rc::new(handler));
+            }
+            _ => {}
+        }
+        self
+    }
+
     /// Create a link menu item.
     #[inline]
     pub fn link(label: impl Into<SharedString>, href: impl Into<String>) -> Self {
@@ -220,6 +247,7 @@ impl PopupMenuItem {
             action: None,
             is_link: true,
             handler: Some(Rc::new(move |_, _, cx| cx.open_url(&href))),
+            hover_handler: None,
         }
     }
 
@@ -1046,6 +1074,11 @@ impl PopupMenu {
             Size::Small => (px(16.), options.radius.half()),
             _ => (px(21.), options.radius),
         };
+        let hover_handler = match item {
+            PopupMenuItem::Item { hover_handler, .. }
+            | PopupMenuItem::ElementItem { hover_handler, .. } => hover_handler.clone(),
+            _ => None,
+        };
 
         let this = MenuItemElement::new(ix, &group_name)
             .relative()
@@ -1055,7 +1088,7 @@ impl PopupMenu {
             .rounded(radius)
             .items_center()
             .selected(selected)
-            .on_hover(cx.listener(move |this, hovered, _, cx| {
+            .on_hover(cx.listener(move |this, hovered, window, cx| {
                 if *hovered {
                     this.selected_index = Some(ix);
                 } else if !is_submenu && this.selected_index == Some(ix) {
@@ -1063,6 +1096,9 @@ impl PopupMenu {
                     this.selected_index = None;
                 }
 
+                if let Some(handler) = &hover_handler {
+                    handler(hovered, window, cx);
+                }
                 cx.notify();
             }));
 

@@ -1,12 +1,23 @@
-fn apply_app_theme(theme_name: &str, window: Option<&mut Window>, cx: &mut App) {
+fn apply_app_theme_config(theme_name: &str, window: Option<&mut Window>, cx: &mut App) -> bool {
   let Some(theme) = ThemeRegistry::global(cx).themes().get(theme_name).cloned() else {
-    return;
+    return false;
   };
 
   let mode = theme.mode;
   Theme::global_mut(cx).apply_config(&theme);
   Theme::change(mode, window, cx);
   cx.refresh_windows();
+  true
+}
+
+fn preview_app_theme(theme_name: &str, window: Option<&mut Window>, cx: &mut App) {
+  let _ = apply_app_theme_config(theme_name, window, cx);
+}
+
+fn apply_app_theme(theme_name: &str, window: Option<&mut Window>, cx: &mut App) {
+  if !apply_app_theme_config(theme_name, window, cx) {
+    return;
+  }
 
   let theme_name = theme_name.to_string();
   cx.background_executor()
