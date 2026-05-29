@@ -20,6 +20,10 @@ pub fn load_smart_word_selection() -> bool {
   load_app_settings().editor.smart_word_selection
 }
 
+pub fn load_autosave() -> bool {
+  load_app_settings().editor.autosave
+}
+
 // Document style appearance is intentionally user-side. The DB8 file keeps
 // semantic assignments only; this app setting decides how those semantics look.
 pub fn save_theme_name(theme_name: &str) -> io::Result<()> {
@@ -46,6 +50,12 @@ pub fn save_smart_word_selection(enabled: bool) -> io::Result<()> {
   save_app_settings(settings)
 }
 
+pub fn save_autosave(enabled: bool) -> io::Result<()> {
+  let mut settings = load_app_settings();
+  settings.editor.autosave = enabled;
+  save_app_settings(settings)
+}
+
 fn save_app_settings(settings: AppSettings) -> io::Result<()> {
   let path = settings_path();
   if let Some(parent) = path.parent() {
@@ -54,4 +64,3 @@ fn save_app_settings(settings: AppSettings) -> io::Result<()> {
   let text = serde_json::to_string_pretty(&settings)?;
   fs::write(path, text)
 }
-

@@ -21,6 +21,7 @@ pub struct AppSettings {
 pub struct EditorSettings {
   pub ribbon_mode: RibbonMode,
   pub smart_word_selection: bool,
+  pub autosave: bool,
 }
 
 impl Default for EditorSettings {
@@ -28,6 +29,7 @@ impl Default for EditorSettings {
     Self {
       ribbon_mode: RibbonMode::default(),
       smart_word_selection: true,
+      autosave: false,
     }
   }
 }

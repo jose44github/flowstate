@@ -1,11 +1,12 @@
-use std::{cell::Cell, collections::HashSet, path::{Path, PathBuf}, rc::Rc};
+use std::{cell::Cell, collections::{HashMap, HashSet}, path::{Path, PathBuf}, rc::Rc};
 
 use gpui::{
   AnyElement, AnyWindowHandle, App, Context, Corner, Entity, Hsla, InteractiveElement, IntoElement,
   MouseButton, PathPromptOptions, Pixels, PromptButton, PromptLevel, Render, ScrollHandle, SharedString, Subscription,
   WeakEntity, Window, WindowDecorations, WindowOptions, black, div, prelude::*, px,
 };
-use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants, Toggle, ToggleVariants};
+use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
+use gpui_component::checkbox::Checkbox;
 use gpui_component::color_picker::{ColorPicker, ColorPickerState};
 use gpui_component::input::{InputEvent, InputState, NumberInput, NumberInputEvent, StepAction};
 use gpui_component::list::ListItem;
@@ -21,7 +22,9 @@ use gpui_component::{
 };
 use uuid::Uuid;
 
-use crate::app_settings::{load_document_theme, load_smart_word_selection, save_document_theme, save_smart_word_selection, save_theme_name};
+use crate::app_settings::{
+  load_autosave, load_document_theme, load_smart_word_selection, save_autosave, save_document_theme, save_smart_word_selection, save_theme_name,
+};
 use crate::docx_conversion::convert_docx_to_document;
 use crate::flow::{FlowEditor, FlowPanel};
 use crate::rich_text_element::{
@@ -63,6 +66,10 @@ pub struct Workspace {
   editor_subscriptions: Vec<(Uuid, Subscription)>,
   settings_overlay: Option<WorkspaceSettingsOverlay>,
   document_style_section: DocumentStyleSection,
+  settings_section: WorkspaceSettingsSection,
+  autosave_enabled: bool,
+  autosave_document_generations: HashMap<Uuid, u64>,
+  autosave_flow_in_flight: HashSet<Uuid>,
   file_search_overlay: Option<Entity<FileSearchOverlay>>,
 }
 
@@ -90,6 +97,25 @@ struct StyleNumberInputState {
 enum WorkspaceSettingsOverlay {
   Styles,
   Settings,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceSettingsSection {
+  General,
+}
+
+impl WorkspaceSettingsSection {
+  fn title(self) -> &'static str {
+    match self {
+      Self::General => "General",
+    }
+  }
+
+  fn index(self) -> usize {
+    match self {
+      Self::General => 0,
+    }
+  }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

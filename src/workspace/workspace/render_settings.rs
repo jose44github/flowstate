@@ -21,7 +21,9 @@ impl Workspace {
         DocumentStyleSection::Size => "document-popup-settings-size",
         DocumentStyleSection::Background => "document-popup-settings-background",
       },
-      WorkspaceSettingsOverlay::Settings => "app-popup-settings",
+      WorkspaceSettingsOverlay::Settings => match self.settings_section {
+        WorkspaceSettingsSection::General => "app-popup-settings-general",
+      },
     };
 
     div()
@@ -87,7 +89,7 @@ impl Workspace {
                 .selected_page(if overlay == WorkspaceSettingsOverlay::Styles {
                   self.document_style_section.index()
                 } else {
-                  0
+                  self.settings_section.index()
                 })
                 .pages(pages),
             ),
@@ -430,13 +432,12 @@ impl Workspace {
     vec![
       SettingPage::new("General")
         .default_open(true)
-        .description("Application preferences.")
         .resettable(false)
         .group(
           SettingGroup::new()
             .title("Editing")
-            .description("Selection behavior for text editing.")
-            .item(smart_word_selection_item(workspace)),
+            .item(smart_word_selection_item(workspace.clone()))
+            .item(autosave_item(workspace)),
         ),
     ]
   }

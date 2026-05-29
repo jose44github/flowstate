@@ -366,23 +366,45 @@ fn smart_word_selection_item(workspace: WeakEntity<Workspace>) -> SettingItem {
         div()
           .flex_1()
           .min_w_0()
-          .child(div().text_sm().child("Smart word selection"))
-          .child(
-            div()
-              .text_xs()
-              .text_color(cx.theme().muted_foreground)
-              .child("Snap mouse drag selections to whole words after crossing a word boundary."),
-          ),
+          .child(div().text_sm().child("Smart word selection")),
       )
       .child(
-        Toggle::new("document-style-smart-word-selection")
+        Checkbox::new("document-style-smart-word-selection")
           .small()
-          .outline()
           .checked(enabled)
           .on_click({
             let workspace = workspace.clone();
-            move |_, _, cx| {
-              update_smart_word_selection(cx, &workspace, !enabled);
+            move |checked, _, cx| {
+              update_smart_word_selection(cx, &workspace, *checked);
+            }
+          }),
+      )
+      .into_any_element()
+  })
+}
+
+fn autosave_item(workspace: WeakEntity<Workspace>) -> SettingItem {
+  SettingItem::render(move |_, _, cx| {
+    let enabled = active_autosave(cx, &workspace);
+    h_flex()
+      .w_full()
+      .items_center()
+      .justify_between()
+      .gap_4()
+      .child(
+        div()
+          .flex_1()
+          .min_w_0()
+          .child(div().text_sm().child("Autosave")),
+      )
+      .child(
+        Checkbox::new("workspace-autosave")
+          .small()
+          .checked(enabled)
+          .on_click({
+            let workspace = workspace.clone();
+            move |checked, _, cx| {
+              update_autosave(cx, &workspace, *checked);
             }
           }),
       )
@@ -413,6 +435,32 @@ fn update_smart_word_selection(cx: &mut App, workspace: &WeakEntity<Workspace>, 
       editor.update(cx, |editor, cx| {
         editor.set_smart_word_selection(enabled, cx);
       });
+    }
+    cx.notify();
+  });
+}
+
+fn active_autosave(cx: &App, workspace: &WeakEntity<Workspace>) -> bool {
+  workspace
+    .upgrade()
+    .map(|workspace| workspace.read(cx).autosave_enabled)
+    .unwrap_or_else(load_autosave)
+}
+
+fn update_autosave(cx: &mut App, workspace: &WeakEntity<Workspace>, enabled: bool) {
+  cx.background_executor()
+    .spawn(async move {
+      if let Err(error) = save_autosave(enabled) {
+        eprintln!("failed to save autosave setting: {error}");
+      }
+    })
+    .detach();
+
+  let _ = workspace.update(cx, |workspace, cx| {
+    workspace.autosave_enabled = enabled;
+    if !enabled {
+      workspace.autosave_document_generations.clear();
+      workspace.autosave_flow_in_flight.clear();
     }
     cx.notify();
   });

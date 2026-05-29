@@ -23,6 +23,10 @@ impl Workspace {
       editor_subscriptions: Vec::new(),
       settings_overlay: None,
       document_style_section: DocumentStyleSection::Text,
+      settings_section: WorkspaceSettingsSection::General,
+      autosave_enabled: load_autosave(),
+      autosave_document_generations: HashMap::new(),
+      autosave_flow_in_flight: HashSet::new(),
       file_search_overlay: None,
     };
 
@@ -68,12 +72,13 @@ impl Workspace {
     let id = panel.read(cx).id();
     self.editor_subscriptions.push((
       id,
-      cx.observe(&editor, |workspace, _, cx| {
+      cx.observe(&editor, move |workspace, editor, cx| {
         let viewport_paragraph = workspace.active_editor_viewport_paragraph(cx);
         if workspace.outline_viewport_paragraph != viewport_paragraph {
           workspace.outline_viewport_paragraph = viewport_paragraph;
           cx.notify();
         }
+        workspace.maybe_autosave_document(id, editor.clone(), cx);
       }),
     ));
     self.active_document_id = Some(id);
@@ -263,6 +268,12 @@ impl Workspace {
       .or_else(|| Some(self.next_untitled_flow_title(cx)));
     let panel = cx.new(|cx| FlowPanel::new_with_title(title, path, editor.clone(), workspace, window, cx));
     let id = panel.read(cx).id();
+    self.editor_subscriptions.push((
+      id,
+      cx.observe(&editor, move |workspace, editor, cx| {
+        workspace.maybe_autosave_flow(id, editor.clone(), cx);
+      }),
+    ));
     self.active_document_id = Some(id);
     self.active_editor = None;
     self.active_flow = Some(editor);
@@ -476,6 +487,62 @@ impl Workspace {
   pub fn close_file_search_overlay(&mut self, cx: &mut Context<Self>) {
     self.file_search_overlay = None;
     cx.notify();
+  }
+
+  fn maybe_autosave_document(&mut self, panel_id: Uuid, editor: Entity<RichTextEditor>, cx: &mut Context<Self>) {
+    if !self.autosave_enabled {
+      return;
+    }
+
+    let (has_path, has_unsaved_changes, generation) = {
+      let editor = editor.read(cx);
+      (
+        editor.document_path().is_some(),
+        editor.has_unsaved_changes(),
+        editor.edit_generation(),
+      )
+    };
+    if !has_path || !has_unsaved_changes {
+      return;
+    }
+    if self.autosave_document_generations.get(&panel_id) == Some(&generation) {
+      return;
+    }
+    self.autosave_document_generations.insert(panel_id, generation);
+    let save_task = editor.update(cx, |editor, cx| editor.save(cx));
+    cx.spawn(async move |workspace, cx| {
+      if let Err(error) = save_task.await {
+        eprintln!("autosave failed: {error}");
+        let _ = workspace.update(cx, |workspace, _| {
+          if workspace.autosave_document_generations.get(&panel_id) == Some(&generation) {
+            workspace.autosave_document_generations.remove(&panel_id);
+          }
+        });
+      }
+    })
+    .detach();
+  }
+
+  fn maybe_autosave_flow(&mut self, panel_id: Uuid, editor: Entity<FlowEditor>, cx: &mut Context<Self>) {
+    if !self.autosave_enabled
+      || self.autosave_flow_in_flight.contains(&panel_id)
+      || editor.read(cx).document_path().is_none()
+      || !editor.read(cx).has_unsaved_changes()
+    {
+      return;
+    }
+
+    self.autosave_flow_in_flight.insert(panel_id);
+    let save_task = editor.update(cx, |editor, cx| editor.save(cx));
+    cx.spawn(async move |workspace, cx| {
+      if let Err(error) = save_task.await {
+        eprintln!("flow autosave failed: {error}");
+      }
+      let _ = workspace.update(cx, |workspace, _| {
+        workspace.autosave_flow_in_flight.remove(&panel_id);
+      });
+    })
+    .detach();
   }
 
   fn prompt_save_active_as(&mut self, editor: Entity<RichTextEditor>, window: &mut Window, cx: &mut Context<Self>) {
