@@ -26,13 +26,7 @@ impl RichTextEditor {
   }
 
   fn paragraph_needs_layout_prep(&self, paragraph_ix: usize) -> bool {
-    if self.invisibility_mode
-      && self
-        .document
-        .paragraphs
-        .get(paragraph_ix)
-        .is_some_and(|paragraph| !paragraph_is_visible(paragraph))
-    {
+    if self.invisibility_mode && !self.paragraph_materialized_in_current_mode(paragraph_ix) {
       return false;
     }
     self.valid_paragraph_prep(paragraph_ix).is_none()

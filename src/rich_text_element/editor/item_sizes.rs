@@ -323,10 +323,10 @@ impl RichTextEditor {
       let mut block_height = px(0.0);
 
       match self.document.blocks.get(block_ix) {
-        Some(Block::Paragraph(paragraph)) => {
+        Some(Block::Paragraph(_paragraph)) => {
           let current_paragraph_ix = paragraph_ix;
           paragraph_ix += 1;
-          if self.invisibility_mode && !paragraph_is_visible(paragraph) {
+          if self.invisibility_mode && !self.paragraph_materialized_in_current_mode(current_paragraph_ix) {
             block_item_ranges.push(block_start..items.len());
             block_heights.push(px(0.0));
             continue;

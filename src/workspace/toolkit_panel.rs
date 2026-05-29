@@ -26,8 +26,8 @@ impl Workspace {
       .child(
         resizable_panel()
           .size(px(560.0))
-          .size_range(px(360.0)..Pixels::MAX)
-          .child(self.render_document_pane(cx)),
+          .size_range(px(120.0)..Pixels::MAX)
+          .child(div().size_full().min_w_0().overflow_hidden().child(self.render_document_pane(cx))),
       )
       .child(
         resizable_panel()

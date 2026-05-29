@@ -79,8 +79,8 @@ impl Workspace {
       .child(
         resizable_panel()
           .size(px(860.0))
-          .size_range(px(580.0)..Pixels::MAX)
-          .child(self.render_content_area(cx)),
+          .size_range(px(160.0)..Pixels::MAX)
+          .child(div().size_full().min_w_0().overflow_hidden().child(self.render_content_area(cx))),
       )
   }
 

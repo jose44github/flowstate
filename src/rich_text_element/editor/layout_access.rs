@@ -1,11 +1,18 @@
 impl RichTextEditor {
   fn paragraph_visible_in_current_mode(&self, paragraph_ix: usize) -> bool {
-    !self.invisibility_mode
-      || self
-        .document
-        .paragraphs
-        .get(paragraph_ix)
-        .is_some_and(paragraph_is_visible)
+    !self.invisibility_mode || self.paragraph_materialized_in_current_mode(paragraph_ix)
+  }
+
+  fn paragraph_materialized_in_current_mode(&self, paragraph_ix: usize) -> bool {
+    let Some(paragraph) = self.document.paragraphs.get(paragraph_ix) else {
+      return false;
+    };
+    paragraph_is_visible(paragraph)
+      || (self.invisibility_mode
+        && self.selected_block.is_none()
+        && self.selection.is_caret()
+        && self.selection.head.paragraph == paragraph_ix
+        && matches!(paragraph.style, ParagraphStyle::Normal))
   }
 
   fn schedule_viewport_size_refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {

@@ -103,20 +103,6 @@ pub(super) fn build_paragraph_prep(
     edit_generation,
   };
 
-  if invisibility_mode && !paragraph_is_visible(paragraph) {
-    return Some(ParagraphPrep {
-      key,
-      paragraph_ix,
-      paragraph_text: Arc::from(""),
-      layout_runs: Arc::from(Vec::<TextRun>::new().into_boxed_slice()),
-      layout_style: paragraph.style,
-      layout_version: paragraph.version,
-      source_len,
-      wrap_break_ends: Arc::from(Vec::<usize>::new().into_boxed_slice()),
-      visible: false,
-    });
-  }
-
   if invisibility_mode && matches!(paragraph.style, ParagraphStyle::Normal) {
     let source = paragraph_text(document, paragraph_ix);
     let mut byte = 0usize;
@@ -149,16 +135,15 @@ pub(super) fn build_paragraph_prep(
     }
 
     if text.is_empty() {
-      let source_wrap_break_ends = wrap_break_ends(&source);
       return Some(ParagraphPrep {
         key,
         paragraph_ix,
-        paragraph_text: Arc::from(source),
-        layout_runs: Arc::from(paragraph.runs.clone().into_boxed_slice()),
+        paragraph_text: Arc::from(""),
+        layout_runs: Arc::from(Vec::<TextRun>::new().into_boxed_slice()),
         layout_style: paragraph.style,
         layout_version: paragraph.version,
         source_len,
-        wrap_break_ends: Arc::from(source_wrap_break_ends.into_boxed_slice()),
+        wrap_break_ends: Arc::from(Vec::<usize>::new().into_boxed_slice()),
         visible: true,
       });
     }
@@ -174,6 +159,20 @@ pub(super) fn build_paragraph_prep(
       source_len,
       wrap_break_ends: Arc::from(wrap_break_ends.into_boxed_slice()),
       visible: true,
+    });
+  }
+
+  if invisibility_mode && !paragraph_is_visible(paragraph) {
+    return Some(ParagraphPrep {
+      key,
+      paragraph_ix,
+      paragraph_text: Arc::from(""),
+      layout_runs: Arc::from(Vec::<TextRun>::new().into_boxed_slice()),
+      layout_style: paragraph.style,
+      layout_version: paragraph.version,
+      source_len,
+      wrap_break_ends: Arc::from(Vec::<usize>::new().into_boxed_slice()),
+      visible: false,
     });
   }
 

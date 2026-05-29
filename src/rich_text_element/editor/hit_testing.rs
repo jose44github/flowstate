@@ -122,6 +122,13 @@ impl RichTextEditor {
       self.delete_selection_internal();
     }
     let caret = self.selection.head;
+    if self.invisibility_mode && self.document.paragraphs.get(caret.paragraph).is_some_and(|paragraph| matches!(paragraph.style, ParagraphStyle::Normal)) {
+      if let Some(paragraph) = paragraphs_mut(&mut self.document).get_mut(caret.paragraph) {
+        paragraph.style = ParagraphStyle::Analytic;
+        bump_paragraph_version(paragraph);
+      }
+      update_paragraph_block(&mut self.document, caret.paragraph);
+    }
     // Inherit styles from the run that contains the caret. With left-bias at
     // run boundaries this matches Word's "type continues the previous run's
     // styling" behavior.

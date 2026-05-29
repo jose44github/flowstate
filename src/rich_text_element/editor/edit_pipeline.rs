@@ -7,6 +7,9 @@ impl RichTextEditor {
     let Some(paragraph) = self.document.paragraphs.get(caret.paragraph) else {
       return false;
     };
+    if self.invisibility_mode && matches!(paragraph.style, ParagraphStyle::Normal) {
+      return false;
+    }
     if caret.byte > paragraph_text_len(paragraph) {
       return false;
     }
