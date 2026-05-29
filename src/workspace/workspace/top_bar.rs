@@ -1,3 +1,56 @@
+fn flowstate_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
+  let workspace = cx.entity().downgrade();
+  let current_theme = Theme::global(cx).theme_name().to_string();
+  let theme_names = ThemeRegistry::global(cx)
+    .sorted_themes()
+    .into_iter()
+    .map(|theme| theme.name.to_string())
+    .collect::<Vec<_>>();
+
+  div()
+    .h_full()
+    .flex_none()
+    .flex()
+    .items_center()
+    .justify_center()
+    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    .child(
+      Button::new("top-flowstate")
+        .label("Flowstate")
+        .xsmall()
+        .ghost()
+        .dropdown_menu(move |menu, window, cx| {
+          let workspace = workspace.clone();
+          menu
+            .submenu("Change Theme", window, cx, {
+              let theme_names = theme_names.clone();
+              let current_theme = current_theme.clone();
+              move |menu, _, _| {
+                let menu = menu
+                  .scrollable(true)
+                  .scrollbar_show(gpui_component::scroll::ScrollbarShow::Always);
+                theme_names.iter().fold(menu, |menu, theme_name| {
+                  let selected = theme_name == &current_theme;
+                  let label = theme_name.clone();
+                  let theme_name = theme_name.clone();
+                  menu.item(
+                    PopupMenuItem::new(label)
+                      .checked(selected)
+                      .on_click(move |_, window, cx| {
+                        apply_app_theme(&theme_name, Some(window), cx);
+                      }),
+                  )
+                })
+              }
+            })
+            .separator()
+            .item(PopupMenuItem::new("Quit Flowstate").on_click(move |_, window, cx| {
+              let _ = workspace.update(cx, |workspace, cx| workspace.request_close_window(window, cx));
+            }))
+        }),
+    )
+}
+
 fn styles_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
   div()
     .h_full()
@@ -207,7 +260,6 @@ fn view_top_bar_button(cx: &mut Context<Workspace>, outline_open: bool, ribbon_o
                   let _ = toolkit_workspace.update(cx, |workspace, cx| workspace.toggle_toolkit(cx));
                 }),
             )
-        })
-        .anchor(Corner::BottomLeft),
+        }),
     )
 }

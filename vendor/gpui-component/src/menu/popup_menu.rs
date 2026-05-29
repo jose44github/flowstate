@@ -1,7 +1,7 @@
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::actions::{SelectLeft, SelectRight};
 use crate::menu::menu_item::MenuItemElement;
-use crate::scroll::ScrollableElement;
+use crate::scroll::{Scrollbar, ScrollbarAxis, ScrollbarShow};
 use crate::{ActiveTheme, Icon, IconName, Sizable as _, h_flex, v_flex};
 use crate::{Side, Size, StyledExt, kbd::Kbd};
 use gpui::{
@@ -285,6 +285,7 @@ pub struct PopupMenu {
     /// The parent menu of this menu, if this is a submenu
     parent_menu: Option<WeakEntity<Self>>,
     scrollable: bool,
+    scrollbar_show: Option<ScrollbarShow>,
     external_link_icon: bool,
     scroll_handle: ScrollHandle,
     // This will update on render
@@ -307,6 +308,7 @@ impl PopupMenu {
             check_side: Side::Left,
             bounds: Bounds::default(),
             scrollable: false,
+            scrollbar_show: None,
             scroll_handle: ScrollHandle::default(),
             external_link_icon: true,
             size: Size::default(),
@@ -356,6 +358,12 @@ impl PopupMenu {
     /// NOTE: If this is true, the sub-menus will cannot be support.
     pub fn scrollable(mut self, scrollable: bool) -> Self {
         self.scrollable = scrollable;
+        self
+    }
+
+    /// Set the scrollbar visibility mode for scrollable popup menus.
+    pub fn scrollbar_show(mut self, scrollbar_show: ScrollbarShow) -> Self {
+        self.scrollbar_show = Some(scrollbar_show);
         self
     }
 
@@ -1028,20 +1036,20 @@ impl PopupMenu {
         };
 
         let selected = self.selected_index == Some(ix);
-        const EDGE_PADDING: Pixels = px(4.);
-        const INNER_PADDING: Pixels = px(8.);
+        const EDGE_PADDING: Pixels = px(3.);
+        const INNER_PADDING: Pixels = px(6.);
 
         let is_submenu = matches!(item, PopupMenuItem::Submenu { .. });
         let group_name = format!("popup-menu-item-{}", ix);
 
         let (item_height, radius) = match self.size {
-            Size::Small => (px(20.), options.radius.half()),
-            _ => (px(26.), options.radius),
+            Size::Small => (px(16.), options.radius.half()),
+            _ => (px(21.), options.radius),
         };
 
         let this = MenuItemElement::new(ix, &group_name)
             .relative()
-            .text_sm()
+            .text_xs()
             .py_0()
             .px(INNER_PADDING)
             .rounded(radius)
@@ -1277,9 +1285,9 @@ impl Render for PopupMenu {
             .child(
                 v_flex()
                     .id("items")
-                    .p_1()
+                    .p(px(3.))
                     .gap_y_0p5()
-                    .min_w(rems(8.))
+                    .min_w(rems(7.))
                     .when_some(self.min_width, |this, min_width| this.min_w(min_width))
                     .max_w(max_width)
                     .when(self.scrollable, |this| {
@@ -1306,7 +1314,22 @@ impl Render for PopupMenu {
             )
             .when(self.scrollable, |this| {
                 // TODO: When the menu is limited by `overflow_y_scroll`, the sub-menu will cannot be displayed.
-                this.vertical_scrollbar(&self.scroll_handle)
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom_0()
+                        .child(
+                            Scrollbar::new(&self.scroll_handle)
+                                .id("popup-menu-scrollbar")
+                                .axis(ScrollbarAxis::Vertical)
+                                .when_some(self.scrollbar_show, |this, scrollbar_show| {
+                                    this.scrollbar_show(scrollbar_show)
+                                }),
+                        ),
+                )
             })
     }
 }
