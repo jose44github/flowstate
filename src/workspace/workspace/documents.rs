@@ -21,7 +21,7 @@ impl Workspace {
       outline_viewport_paragraph: None,
       outline_scrolled_paragraph: None,
       editor_subscriptions: Vec::new(),
-      styles_settings_open: false,
+      settings_overlay: None,
       file_search_overlay: None,
     };
 

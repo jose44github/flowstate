@@ -3,46 +3,80 @@ impl Workspace {
     self.save_active(window, cx);
   }
 
-  fn render_styles_settings_view(&self, cx: &mut Context<Self>) -> impl IntoElement {
+  fn render_settings_overlay(&self, overlay: WorkspaceSettingsOverlay, cx: &mut Context<Self>) -> impl IntoElement {
     let workspace = cx.entity().downgrade();
     let has_document = self.active_editor.is_some();
+    let title = match overlay {
+      WorkspaceSettingsOverlay::Styles => "Styles",
+      WorkspaceSettingsOverlay::Settings => "Settings",
+    };
+    let pages = match overlay {
+      WorkspaceSettingsOverlay::Styles => self.document_style_pages(workspace, has_document),
+      WorkspaceSettingsOverlay::Settings => self.workspace_settings_pages(workspace),
+    };
+    let settings_id = match overlay {
+      WorkspaceSettingsOverlay::Styles => "styles-popup-settings",
+      WorkspaceSettingsOverlay::Settings => "app-popup-settings",
+    };
 
-    v_flex()
-      .flex_1()
-      .overflow_hidden()
-      .bg(cx.theme().background)
+    div()
+      .absolute()
+      .top_0()
+      .right_0()
+      .bottom_0()
+      .left_0()
+      .bg(cx.theme().background.opacity(0.72))
+      .flex()
+      .items_center()
+      .justify_center()
+      .occlude()
+      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
       .child(
-        h_flex()
-          .h(px(44.0))
-          .flex_none()
-          .items_center()
-          .justify_between()
-          .px_4()
-          .border_b_1()
+        v_flex()
+          .w(px(840.0))
+          .h(px(580.0))
+          .max_w_full()
+          .max_h_full()
+          .overflow_hidden()
+          .rounded_lg()
+          .border_1()
           .border_color(cx.theme().border)
+          .bg(cx.theme().popover)
+          .shadow_lg()
           .child(
-            div()
-              .font_weight(gpui::FontWeight::SEMIBOLD)
-              .child("Document Style Settings"),
+            h_flex()
+              .h(px(42.0))
+              .flex_none()
+              .items_center()
+              .justify_between()
+              .px_4()
+              .border_b_1()
+              .border_color(cx.theme().border)
+              .child(
+                div()
+                  .font_weight(gpui::FontWeight::SEMIBOLD)
+                  .child(title),
+              )
+              .child(
+                Button::new("close-settings-overlay")
+                  .icon(IconName::Close)
+                  .xsmall()
+                  .ghost()
+                  .tooltip("Close")
+                  .on_click(cx.listener(|workspace, _, _, cx| {
+                    workspace.settings_overlay = None;
+                    cx.notify();
+                  })),
+              ),
           )
           .child(
-            Button::new("close-styles-settings")
-              .icon(IconName::Close)
-              .label("Close")
-              .small()
-              .ghost()
-              .on_click(cx.listener(|workspace, _, _, cx| {
-                workspace.styles_settings_open = false;
-                cx.notify();
-              })),
+            div().flex_1().overflow_hidden().child(
+              Settings::new(settings_id)
+                .sidebar_width(px(176.0))
+                .pages(pages),
+            ),
           ),
-      )
-      .child(
-        div().flex_1().overflow_hidden().child(
-          Settings::new("document-style-settings")
-            .sidebar_width(px(220.0))
-            .pages(self.document_style_pages(workspace, has_document)),
-        ),
       )
   }
 
@@ -56,12 +90,6 @@ impl Workspace {
           "Open a document to preview style values."
         })
         .resettable(false)
-        .group(
-          SettingGroup::new()
-            .title("Editing")
-            .description("Selection behavior for text editing.")
-            .item(smart_word_selection_item(workspace.clone())),
-        )
         .group(
           SettingGroup::new()
             .title("Apply to All")
@@ -297,6 +325,21 @@ impl Workspace {
                 theme.highlight_alternative = value;
               },
             )),
+        ),
+    ]
+  }
+
+  fn workspace_settings_pages(&self, workspace: WeakEntity<Workspace>) -> Vec<SettingPage> {
+    vec![
+      SettingPage::new("General")
+        .default_open(true)
+        .description("Application preferences.")
+        .resettable(false)
+        .group(
+          SettingGroup::new()
+            .title("Editing")
+            .description("Selection behavior for text editing.")
+            .item(smart_word_selection_item(workspace)),
         ),
     ]
   }

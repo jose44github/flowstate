@@ -65,7 +65,10 @@ fn styles_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
         .xsmall()
         .ghost()
         .on_click(cx.listener(|workspace, _, _, cx| {
-          workspace.styles_settings_open = !workspace.styles_settings_open;
+          workspace.settings_overlay = match workspace.settings_overlay {
+            Some(WorkspaceSettingsOverlay::Styles) => None,
+            _ => Some(WorkspaceSettingsOverlay::Styles),
+          };
           cx.stop_propagation();
           cx.notify();
         })),
@@ -200,10 +203,7 @@ fn insert_default_equation_from_top_bar(workspace: &WeakEntity<Workspace>, cx: &
   });
 }
 
-fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
-  // The top bar itself starts native window dragging on mouse down. Each
-  // button owns its mouse-down event so it behaves like a control instead of
-  // dragging the window.
+fn settings_top_bar_button(cx: &mut Context<Workspace>) -> impl IntoElement {
   div()
     .h_full()
     .flex_none()
@@ -212,11 +212,18 @@ fn top_bar_button(id: &'static str, label: &'static str) -> impl IntoElement {
     .justify_center()
     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
     .child(
-      Button::new(id)
-        .label(label)
+      Button::new("top-settings")
+        .label("Settings")
         .xsmall()
         .ghost()
-        .on_click(|_, _, cx| cx.stop_propagation()),
+        .on_click(cx.listener(|workspace, _, _, cx| {
+          workspace.settings_overlay = match workspace.settings_overlay {
+            Some(WorkspaceSettingsOverlay::Settings) => None,
+            _ => Some(WorkspaceSettingsOverlay::Settings),
+          };
+          cx.stop_propagation();
+          cx.notify();
+        })),
     )
 }
 

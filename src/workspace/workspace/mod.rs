@@ -61,7 +61,7 @@ pub struct Workspace {
   outline_viewport_paragraph: Option<usize>,
   outline_scrolled_paragraph: Option<usize>,
   editor_subscriptions: Vec<(Uuid, Subscription)>,
-  styles_settings_open: bool,
+  settings_overlay: Option<WorkspaceSettingsOverlay>,
   file_search_overlay: Option<Entity<FileSearchOverlay>>,
 }
 
@@ -77,6 +77,12 @@ type FontFamilySelectDelegate = SearchableVec<SharedString>;
 struct FontFamilySelectState {
   select: Entity<SelectState<FontFamilySelectDelegate>>,
   _subscription: Subscription,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WorkspaceSettingsOverlay {
+  Styles,
+  Settings,
 }
 
 include!("documents.rs");

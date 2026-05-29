@@ -16,7 +16,7 @@ impl Workspace {
           .child(insert_top_bar_button(cx, self.active_editor.is_some()))
           .child(styles_top_bar_button(cx))
           .child(view_top_bar_button(cx, !self.outline_collapsed, !self.ribbon_collapsed, !self.toolkit_collapsed))
-          .child(top_bar_button("top-settings", "Settings"))
+          .child(settings_top_bar_button(cx))
       )
   }
 
