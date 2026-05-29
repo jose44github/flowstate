@@ -30,7 +30,11 @@ impl Workspace {
       .items_center()
       .justify_center()
       .occlude()
-      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .on_mouse_down(MouseButton::Left, cx.listener(|workspace, _, _, cx| {
+        workspace.settings_overlay = None;
+        cx.stop_propagation();
+        cx.notify();
+      }))
       .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
       .child(
         v_flex()
@@ -44,6 +48,7 @@ impl Workspace {
           .border_color(cx.theme().border)
           .bg(cx.theme().popover)
           .shadow_lg()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
           .child(
             h_flex()
               .h(px(42.0))

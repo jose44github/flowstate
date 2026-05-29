@@ -1,7 +1,7 @@
 use crate::{
-    IconName, Sizable, Size, StyledExt,
+    Sizable, Size, StyledExt,
     group_box::GroupBoxVariant,
-    input::{Input, InputState},
+    input::InputState,
     resizable::{h_resizable, resizable_panel},
     setting::{SettingGroup, SettingPage},
     sidebar::{Sidebar, SidebarMenu, SidebarMenuItem},
@@ -141,18 +141,11 @@ impl Settings {
         cx: &mut App,
     ) -> impl IntoElement {
         let selected_index = state.read(cx).selected_index;
-        let search_input = state.read(cx).search_input.clone();
-
         Sidebar::left()
             .w(relative(1.))
             .border_0()
             .refine_style(&self.sidebar_style)
             .collapsed(false)
-            .header(
-                div()
-                    .w_full()
-                    .child(Input::new(&search_input).prefix(IconName::Search)),
-            )
             .child(
                 SidebarMenu::new().children(pages.iter().enumerate().map(|(page_ix, page)| {
                     let is_page_active =

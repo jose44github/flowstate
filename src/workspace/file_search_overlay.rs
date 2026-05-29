@@ -203,7 +203,10 @@ impl Render for FileSearchOverlay {
       .justify_center()
       .occlude()
       .on_key_down(cx.listener(Self::on_key_down))
-      .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+      .on_mouse_down(MouseButton::Left, cx.listener(|overlay, _, _, cx| {
+        overlay.close(cx);
+        cx.stop_propagation();
+      }))
       .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
       .child(
         v_flex()
@@ -216,6 +219,7 @@ impl Render for FileSearchOverlay {
           .border_color(cx.theme().border)
           .bg(cx.theme().popover)
           .shadow_lg()
+          .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
           .child(
             h_flex()
               .gap_2()
