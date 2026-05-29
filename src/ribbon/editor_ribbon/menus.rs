@@ -41,7 +41,7 @@ fn modern_highlight_menu(
               .tooltip_with_action("Highlight mode", &ApplyHighlightToSelection, Some("RichTextEditor"))
               .child(match accent {
                 RibbonAccent::Transparent => transparent_accent_bar(cx),
-                _ => accent_bar(accent_color(accent, cx)),
+                _ => accent_bar(accent_color(accent, cx), cx),
               })
               .child(Icon::default().path("icons/highlighter.svg").xsmall())
               .when_some(shortcut_for(CommandId::ApplyHighlightToSelection), |this, shortcut| {
@@ -212,4 +212,3 @@ fn invisibility_mode_button(
     )
     .into_any_element()
 }
-

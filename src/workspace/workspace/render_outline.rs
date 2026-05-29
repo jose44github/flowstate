@@ -168,7 +168,7 @@ impl Workspace {
                       .overflow_hidden()
                       .text_color(cx.theme().sidebar_foreground)
                       .whitespace_nowrap()
-                      .rounded(px(4.0))
+                      .rounded(cx.theme().radius)
                       .when(is_active_outline, |this| {
                         this.child(
                           div()
@@ -180,7 +180,7 @@ impl Workspace {
                             .bg(cx.theme().sidebar_accent)
                             .border_1()
                             .border_color(cx.theme().primary)
-                            .rounded(px(4.0)),
+                            .rounded(cx.theme().radius),
                         )
                       })
                       .when(!is_active_outline, |this| {
@@ -283,7 +283,7 @@ impl Workspace {
               .child(
                 ListItem::new(("flow-outline-item", source_index))
                   .selected(selected)
-                  .rounded(px(4.0))
+                  .rounded(cx.theme().radius)
                   .on_click(move |_, window, cx| {
                     let _ = workspace_for_click.update(cx, |workspace, cx| {
                       if let Some(editor) = workspace.active_flow.clone() {
@@ -316,7 +316,7 @@ impl Workspace {
             div()
               .id("flow-outline-drop-end")
               .h(px(22.0))
-              .rounded(px(4.0))
+              .rounded(cx.theme().radius)
               .drag_over::<FlowOutlineDrag>(|this, _, _, cx| {
                 this.border_1().border_color(cx.theme().drag_border)
               })
@@ -349,7 +349,7 @@ impl Render for FlowOutlineDrag {
       .w(px(180.0))
       .items_center()
       .gap_2()
-      .rounded(px(6.0))
+      .rounded(cx.theme().radius)
       .border_1()
       .border_color(cx.theme().drag_border)
       .bg(cx.theme().popover.opacity(0.92))

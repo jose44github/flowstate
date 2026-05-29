@@ -195,7 +195,7 @@ fn modern_command_chip(
     .h(metrics.chip_height)
     .max_w(metrics.chip_max_width)
     .px(metrics.chip_padding_x)
-    .rounded(px(6.0))
+    .rounded(cx.theme().radius)
     .selected(command.selected)
     .disabled(command.disabled)
     .tooltip(tooltip)
@@ -228,4 +228,3 @@ fn modern_command_chip(
     })
     .into_any_element()
 }
-

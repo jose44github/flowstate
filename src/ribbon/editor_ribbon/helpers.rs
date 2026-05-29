@@ -33,7 +33,7 @@ fn keycap(shortcut: String, cx: &mut Context<EditorRibbon>) -> AnyElement {
   div()
     .flex_none()
     .whitespace_nowrap()
-    .rounded(px(4.0))
+    .rounded(cx.theme().radius)
     .border_1()
     .border_color(cx.theme().border)
     .bg(cx.theme().muted.opacity(0.68))
@@ -55,12 +55,12 @@ fn accent_dot(color: Hsla) -> AnyElement {
     .into_any_element()
 }
 
-fn accent_bar(color: Hsla) -> AnyElement {
+fn accent_bar(color: Hsla, cx: &mut Context<EditorRibbon>) -> AnyElement {
   div()
     .flex_none()
     .w(px(3.0))
     .h(px(12.0))
-    .rounded(px(2.0))
+    .rounded(cx.theme().radius)
     .bg(color)
     .into_any_element()
 }
@@ -70,7 +70,7 @@ fn transparent_accent_bar(cx: &mut Context<EditorRibbon>) -> AnyElement {
     .flex_none()
     .w(px(3.0))
     .h(px(12.0))
-    .rounded(px(2.0))
+    .rounded(cx.theme().radius)
     .border_1()
     .border_color(cx.theme().border.opacity(0.62))
     .bg(cx.theme().background.opacity(0.0))
