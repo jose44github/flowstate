@@ -28,6 +28,10 @@ pub fn load_autosave() -> bool {
   load_app_settings().editor.autosave
 }
 
+pub fn load_tub_root() -> Option<PathBuf> {
+  load_app_settings().toolkit.tub_root
+}
+
 // Document style appearance is intentionally user-side. The DB8 file keeps
 // semantic assignments only; this app setting decides how those semantics look.
 #[hotpath::measure]
@@ -62,6 +66,12 @@ pub fn save_smart_word_selection(enabled: bool) -> io::Result<()> {
 pub fn save_autosave(enabled: bool) -> io::Result<()> {
   let mut settings = load_app_settings();
   settings.editor.autosave = enabled;
+  save_app_settings(settings)
+}
+
+pub fn save_tub_root(path: Option<PathBuf>) -> io::Result<()> {
+  let mut settings = load_app_settings();
+  settings.toolkit.tub_root = path;
   save_app_settings(settings)
 }
 

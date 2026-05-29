@@ -1,7 +1,14 @@
 #[hotpath::measure_all]
 impl Workspace {
   pub fn new(initial_path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-    let this = Self {
+    let toolkit_search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Search tub blocks, tags, and analytics"));
+    let _toolkit_search_subscription = cx.subscribe(&toolkit_search_input, |workspace, _, event: &InputEvent, cx| {
+      if let InputEvent::Change = event {
+        workspace.refresh_toolkit_search(cx);
+      }
+    });
+
+    let mut this = Self {
       document_panels: Vec::new(),
       flow_panels: Vec::new(),
       active_document_id: None,
@@ -10,6 +17,7 @@ impl Workspace {
       ribbon_collapsed: false,
       outline_collapsed: false,
       toolkit_collapsed: false,
+      left_nav_mode: LeftNavMode::Outline,
       tab_bar_scroll_handle: ScrollHandle::new(),
       body_resizable_state: cx.new(|_| ResizableState::default()),
       content_resizable_state: cx.new(|_| ResizableState::default()),
@@ -29,7 +37,29 @@ impl Workspace {
       autosave_document_generations: HashMap::new(),
       autosave_flow_in_flight: HashSet::new(),
       file_search_overlay: None,
+      tub_root: None,
+      tub_index: None,
+      tub_files: Vec::new(),
+      tub_tree: cx.new(|cx| TreeState::new(cx)),
+      tub_tree_entries: Vec::new(),
+      tub_expanded_dirs: HashSet::new(),
+      tub_status: "No tub selected".into(),
+      tub_watcher: None,
+      tub_watch_polling: false,
+      tub_scan_in_flight: false,
+      tub_scan_pending: false,
+      active_tub_path: None,
+      toolkit_search_input,
+      toolkit_search_filter: ToolkitSearchFilter::All,
+      toolkit_hits: Vec::new(),
+      toolkit_status: "Select a tub to search evidence.".into(),
+      toolkit_search_generation: 0,
+      _toolkit_search_subscription,
     };
+
+    if let Some(root) = load_tub_root() {
+      this.load_tub_root(root, cx);
+    }
 
     if let Some(path) = initial_path {
       // Initial window creation happens before GPUI has produced stable
@@ -479,7 +509,8 @@ impl Workspace {
     }
 
     let workspace = cx.entity().downgrade();
-    let overlay = cx.new(|cx| FileSearchOverlay::new(workspace, window, cx));
+    let tub_search = self.active_tub_index_for_search();
+    let overlay = cx.new(|cx| FileSearchOverlay::new(workspace, tub_search, window, cx));
     overlay.update(cx, |overlay, cx| overlay.focus_search(window, cx));
     self.file_search_overlay = Some(overlay);
     cx.notify();

@@ -1,6 +1,7 @@
 use gpui_component::button::Button;
 use gpui_component::button::ButtonVariants as _;
 use gpui_component::{Icon, IconName, Sizable as _};
+#[cfg(target_os = "macos")]
 use gpui::ParentElement;
 
 #[derive(Clone, Copy)]
