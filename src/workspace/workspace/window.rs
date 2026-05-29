@@ -77,7 +77,7 @@ pub fn install_workspace_close_prompt(workspace: Entity<Workspace>, window: &mut
 
 #[hotpath::measure]
 pub fn open_workspace_window(document_path: Option<PathBuf>, cx: &mut App) {
-  cx.open_window(
+  if let Err(error) = cx.open_window(
     WindowOptions {
       titlebar: Some(TitleBar::title_bar_options()),
       window_decorations: window_decorations(),
@@ -89,8 +89,9 @@ pub fn open_workspace_window(document_path: Option<PathBuf>, cx: &mut App) {
       install_workspace_close_prompt(workspace.clone(), window, cx);
       cx.new(|cx| Root::new(workspace, window, cx))
     },
-  )
-  .unwrap();
+  ) {
+    eprintln!("failed to open Flowstate window: {error}");
+  }
 }
 
 #[cfg(target_os = "linux")]
