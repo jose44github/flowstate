@@ -30,6 +30,7 @@ impl RichTextEditor {
       saved_generation,
       next_edit_generation: 1,
       last_send_db8_generation: None,
+      zoom_percent: 100.0,
       save_status: SaveStatus::Saved,
       undo_stack: Vec::new(),
       redo_stack: Vec::new(),
@@ -123,6 +124,8 @@ impl RichTextEditor {
     self.saved_generation = 0;
     self.next_edit_generation = 1;
     self.last_send_db8_generation = None;
+    self.zoom_percent = 100.0;
+    self.document.theme.zoom_factor = 1.0;
     self.save_status = SaveStatus::Saved;
     self.last_recovery_generation = 0;
   }

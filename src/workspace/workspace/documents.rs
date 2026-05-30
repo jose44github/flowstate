@@ -1,6 +1,23 @@
 #[hotpath::measure_all]
 impl Workspace {
   pub fn new(initial_path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    let zoom_slider = cx.new(|_| {
+      SliderState::new()
+        .min(25.0)
+        .max(400.0)
+        .step(1.0)
+        .default_value(100.0)
+    });
+    let zoom_slider_subscription = cx.subscribe(&zoom_slider, |workspace, _, event: &SliderEvent, cx| {
+      let SliderEvent::Change(SliderValue::Single(percent)) = event else {
+        return;
+      };
+      if let Some(editor) = workspace.active_editor.clone() {
+        editor.update(cx, |editor, cx| {
+          editor.set_zoom_percent(*percent, cx);
+        });
+      }
+    });
     let this = Self {
       document_panels: Vec::new(),
       flow_panels: Vec::new(),
@@ -29,6 +46,8 @@ impl Workspace {
       autosave_document_generations: HashMap::new(),
       autosave_flow_in_flight: HashSet::new(),
       file_search_overlay: None,
+      zoom_slider,
+      _zoom_slider_subscription: zoom_slider_subscription,
     };
 
     if let Some(path) = initial_path {
