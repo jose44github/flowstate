@@ -16,12 +16,14 @@ pub struct AppSettings {
   pub editor: EditorSettings,
 }
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct EditorSettings {
   pub ribbon_mode: RibbonMode,
   pub smart_word_selection: bool,
   pub autosave: bool,
+  pub send_to_document_directory: bool,
+  pub send_custom_directory: Option<PathBuf>,
 }
 
 #[hotpath::measure_all]
@@ -31,6 +33,8 @@ impl Default for EditorSettings {
       ribbon_mode: RibbonMode::default(),
       smart_word_selection: true,
       autosave: false,
+      send_to_document_directory: true,
+      send_custom_directory: None,
     }
   }
 }

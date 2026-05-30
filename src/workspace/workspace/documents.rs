@@ -69,6 +69,11 @@ impl Workspace {
           .map(|name| name.to_string_lossy().to_string())
       })
       .or_else(|| Some(self.next_untitled_title(cx)));
+    if let Some(title) = title.clone() {
+      editor.update(cx, |editor, cx| {
+        editor.set_document_display_name(title.into(), cx);
+      });
+    }
     let panel = cx.new(|cx| DocumentPanel::new_with_title(title, path, editor.clone(), workspace, cx));
     let id = panel.read(cx).id();
     self.editor_subscriptions.push((

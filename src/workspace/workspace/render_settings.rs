@@ -494,7 +494,9 @@ impl Workspace {
           SettingGroup::new()
             .title("Editing")
             .item(smart_word_selection_item(workspace.clone()))
-            .item(autosave_item(workspace)),
+            .item(autosave_item(workspace.clone()))
+            .item(send_to_document_directory_item(workspace.clone()))
+            .item(send_custom_directory_item(workspace)),
         ),
     ]
   }

@@ -13,7 +13,7 @@ use gpui::{
 use gpui_component::button::{Button, ButtonCustomVariant, ButtonVariants};
 use gpui_component::checkbox::Checkbox;
 use gpui_component::color_picker::{ColorPicker, ColorPickerState};
-use gpui_component::input::{InputEvent, InputState, NumberInput, NumberInputEvent, StepAction};
+use gpui_component::input::{Input, InputEvent, InputState, NumberInput, NumberInputEvent, StepAction};
 use gpui_component::list::ListItem;
 use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
 use gpui_component::resizable::{ResizableState, h_resizable, resizable_panel, v_resizable};
@@ -29,7 +29,8 @@ use gpui_component::{
 use uuid::Uuid;
 
 use crate::app_settings::{
-  load_autosave, load_document_theme, load_smart_word_selection, save_autosave, save_document_theme, save_smart_word_selection, save_theme_name,
+  load_autosave, load_document_theme, load_send_custom_directory, load_send_to_document_directory, load_smart_word_selection, save_autosave,
+  save_document_theme, save_send_custom_directory, save_send_to_document_directory, save_smart_word_selection, save_theme_name,
 };
 use crate::docx_conversion::convert_docx_to_document;
 use crate::flow::{FlowEditor, FlowPanel};

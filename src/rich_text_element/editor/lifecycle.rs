@@ -17,6 +17,10 @@ impl RichTextEditor {
       focus_subscriptions: Vec::new(),
       scroll_handle: VirtualListScrollHandle::new(),
       disposed: false,
+      document_display_name: document_path
+        .as_ref()
+        .and_then(|path| path.file_name())
+        .map(|name| SharedString::from(name.to_string_lossy().to_string())),
       recovery_path: document_path.as_deref().map(recovery_path_for_document),
       document_path,
       document,
@@ -25,6 +29,7 @@ impl RichTextEditor {
       edit_generation: 0,
       saved_generation,
       next_edit_generation: 1,
+      last_send_db8_generation: None,
       save_status: SaveStatus::Saved,
       undo_stack: Vec::new(),
       redo_stack: Vec::new(),
@@ -117,6 +122,7 @@ impl RichTextEditor {
     self.edit_generation = 0;
     self.saved_generation = 0;
     self.next_edit_generation = 1;
+    self.last_send_db8_generation = None;
     self.save_status = SaveStatus::Saved;
     self.last_recovery_generation = 0;
   }
@@ -318,6 +324,11 @@ impl RichTextEditor {
 
   pub fn document_path(&self) -> Option<&PathBuf> {
     self.document_path.as_ref()
+  }
+
+  pub fn set_document_display_name(&mut self, name: SharedString, cx: &mut Context<Self>) {
+    self.document_display_name = Some(name);
+    cx.notify();
   }
 
   pub fn config(&self) -> &RichTextEditorConfig {
