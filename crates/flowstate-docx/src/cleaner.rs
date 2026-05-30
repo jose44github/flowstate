@@ -78,7 +78,7 @@ fn normalize_docx_formatting_values(bytes: Vec<u8>) -> std::io::Result<(Vec<u8>,
   let main_document_part = package.main_document_part();
   let mut stats = DocxCleanStats::default();
 
-  for (part_name, part) in package.parts.iter_mut() {
+  for (part_name, part) in &mut package.parts {
     if !part_might_contain_word_xml(part_name, part) {
       continue;
     }
@@ -111,15 +111,17 @@ fn normalize_docx_formatting_values(bytes: Vec<u8>) -> std::io::Result<(Vec<u8>,
 #[hotpath::measure]
 fn part_might_contain_word_xml(part_name: &str, part: &[u8]) -> bool {
   part_name.starts_with("/word/")
-    && part_name.ends_with(".xml")
+    && std::path::Path::new(part_name)
+      .extension()
+      .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
     && (part.starts_with(b"<?xml") || contains_bytes(part, b"<w:") || contains_bytes(part, b"<u "))
 }
 
 #[hotpath::measure]
 fn normalize_formatting_values_in_xml(xml: &str) -> (Option<String>, DocxCleanStats) {
   let mut normalized = None::<String>;
-  let mut cursor = 0usize;
-  let mut flushed_cursor = 0usize;
+  let mut cursor = 0_usize;
+  let mut flushed_cursor = 0_usize;
   let mut stats = DocxCleanStats::default();
 
   while let Some(relative_start) = xml[cursor..].find('<') {
@@ -133,7 +135,7 @@ fn normalize_formatting_values_in_xml(xml: &str) -> (Option<String>, DocxCleanSt
     if tag_stats.has_changes() {
       let normalized = normalized.get_or_insert_with(|| String::with_capacity(xml.len()));
       normalized.push_str(&xml[flushed_cursor..tag_start]);
-      normalized.push_str(tag.as_deref().unwrap_or(&xml[tag_start..tag_end]));
+      normalized.push_str(tag.as_deref().unwrap_or_else(|| &xml[tag_start..tag_end]));
       flushed_cursor = tag_end;
       stats.merge(tag_stats);
     }
@@ -278,7 +280,7 @@ fn normalize_attr(
 
 #[hotpath::measure]
 fn attr_value_range(tag: &str, target_attr_name: &str) -> Option<(usize, usize)> {
-  let mut cursor = 0usize;
+  let mut cursor = 0_usize;
   while let Some(relative_val) = tag[cursor..].find(target_attr_name) {
     let val_start = cursor + relative_val;
     let attr_name_start = tag[..val_start]
@@ -327,7 +329,7 @@ fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
 
 impl DocxCleanStats {
   #[hotpath::measure]
-  fn has_changes(self) -> bool {
+  const fn has_changes(self) -> bool {
     self.underline_values_normalized
       + self.highlight_values_normalized
       + self.border_values_normalized
@@ -339,7 +341,7 @@ impl DocxCleanStats {
   }
 
   #[hotpath::measure]
-  fn merge(&mut self, other: Self) {
+  const fn merge(&mut self, other: Self) {
     self.underline_values_normalized += other.underline_values_normalized;
     self.highlight_values_normalized += other.highlight_values_normalized;
     self.border_values_normalized += other.border_values_normalized;

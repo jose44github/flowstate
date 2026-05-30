@@ -1,7 +1,7 @@
 use std::{
   collections::{BTreeMap, BTreeSet, HashMap, HashSet},
   fs,
-  hash::{Hash, Hasher},
+  hash::{Hash, Hasher as _},
   path::{Path, PathBuf},
   sync::mpsc::{self, Receiver},
   time::{SystemTime, UNIX_EPOCH},
@@ -13,13 +13,13 @@ use flowstate_document::{
   read_db8,
 };
 use ignore::WalkBuilder;
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use rusqlite::{Connection, OptionalExtension, params};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
+use rusqlite::{Connection, OptionalExtension as _, params};
 use serde::{Deserialize, Serialize};
 use tantivy::{
   Index, IndexWriter, TantivyDocument, Term, doc,
   query::QueryParser,
-  schema::{Field, IndexRecordOption, STORED, STRING, Schema, TEXT, TextFieldIndexing, TextOptions, Value},
+  schema::{Field, IndexRecordOption, STORED, STRING, Schema, TEXT, TextFieldIndexing, TextOptions, Value as _},
   tokenizer::NgramTokenizer,
 };
 
@@ -36,7 +36,8 @@ pub enum FileKind {
 }
 
 impl FileKind {
-  pub fn as_str(self) -> &'static str {
+  #[must_use]
+  pub const fn as_str(self) -> &'static str {
     match self {
       Self::Db8 => "db8",
       Self::Docx => "docx",
@@ -61,7 +62,8 @@ pub enum SearchUnitKind {
 }
 
 impl SearchUnitKind {
-  pub fn as_str(self) -> &'static str {
+  #[must_use]
+  pub const fn as_str(self) -> &'static str {
     match self {
       Self::File => "file",
       Self::Pocket => "pocket",
@@ -94,7 +96,7 @@ impl SearchUnitKind {
     }
   }
 
-  fn from_section(kind: SectionKind) -> Self {
+  const fn from_section(kind: SectionKind) -> Self {
     match kind {
       SectionKind::Pocket => Self::Pocket,
       SectionKind::Hat => Self::Hat,
@@ -184,6 +186,7 @@ impl TubIndex {
     Ok(this)
   }
 
+  #[must_use]
   pub fn root(&self) -> &Path {
     &self.root
   }
@@ -207,7 +210,10 @@ impl TubIndex {
         Ok(entry) => entry,
         Err(_) => continue,
       };
-      if !entry.file_type().is_some_and(|file_type| file_type.is_file()) {
+      if entry
+        .file_type()
+        .is_some_and(|file_type| file_type.is_dir())
+      {
         continue;
       }
       let path = entry.path();
@@ -222,15 +228,12 @@ impl TubIndex {
       let parent_display_path = parent_display_path(&display_path);
       let file_name = path
         .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| display_path.clone());
+        .map_or_else(|| display_path.clone(), |name| name.to_string_lossy().to_string());
       let size_bytes = metadata.len();
       let modified_ns = modified_ns(&metadata);
       let fingerprint = fingerprint(size_bytes, modified_ns);
       let existing = existing.get(&path);
-      let file_id = existing
-        .map(|record| record.file_id.clone())
-        .unwrap_or_else(|| stable_file_id(&self.root, &path));
+      let file_id = existing.map_or_else(|| stable_file_id(&self.root, &path), |record| record.file_id.clone());
 
       if let Some(existing) = existing
         && existing.kind == kind
@@ -334,21 +337,23 @@ impl TubIndex {
   }
 
   pub fn tree_entries(&self, expanded_dirs: &HashSet<PathBuf>) -> Result<Vec<TubTreeNode>> {
-    build_tree_entries(&self.root, self.list_files()?, expanded_dirs)
+    Ok(build_tree_entries(&self.root, self.list_files()?, expanded_dirs))
   }
 
   pub fn tree_entries_for_files(&self, files: &[TubFile], expanded_dirs: &HashSet<PathBuf>) -> Result<Vec<TubTreeNode>> {
-    build_tree_entries(&self.root, files.to_vec(), expanded_dirs)
+    Ok(build_tree_entries(&self.root, files.to_vec(), expanded_dirs))
   }
 
   pub fn search_files(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
     if query.trim().is_empty() {
-      return Ok(self
-        .list_files()?
-        .into_iter()
-        .take(limit)
-        .map(SearchHit::from)
-        .collect());
+      return Ok(
+        self
+          .list_files()?
+          .into_iter()
+          .take(limit)
+          .map(SearchHit::from)
+          .collect(),
+      );
     }
     self.search_tantivy(query, &[SearchUnitKind::File], limit, true)
   }
@@ -358,11 +363,7 @@ impl TubIndex {
       return Ok(Vec::new());
     }
     let kinds = if kinds.is_empty() {
-      &[
-        SearchUnitKind::BlockSection,
-        SearchUnitKind::TagSection,
-        SearchUnitKind::Analytic,
-      ][..]
+      &[SearchUnitKind::BlockSection, SearchUnitKind::TagSection, SearchUnitKind::Analytic][..]
     } else {
       kinds
     };
@@ -384,11 +385,7 @@ impl TubIndex {
     let reader = self.index.reader()?;
     let searcher = reader.searcher();
     let fields = if filename_only {
-      vec![
-        self.schema.file_name,
-        self.schema.display_path,
-        self.schema.file_name_exact,
-      ]
+      vec![self.schema.file_name, self.schema.display_path, self.schema.file_name_exact]
     } else {
       vec![
         self.schema.heading,
@@ -453,7 +450,7 @@ impl TubIndex {
     Connection::open(&self.catalog_path).with_context(|| format!("opening tub catalog {}", self.catalog_path.display()))
   }
 
-  fn index_writer<'a>(&self, writer: &'a mut Option<IndexWriter>) -> Result<&'a mut IndexWriter> {
+  fn index_writer<'writer>(&self, writer: &'writer mut Option<IndexWriter>) -> Result<&'writer mut IndexWriter> {
     if writer.is_none() {
       *writer = Some(self.index.writer(WRITER_MEMORY_BYTES)?);
     }
@@ -476,8 +473,8 @@ impl TubIndex {
         parent_display_path: row.get(3)?,
         file_name: row.get(4)?,
         kind: file_kind_from_str(&row.get::<_, String>(5)?).unwrap_or(FileKind::Db8),
-        size_bytes: row.get::<_, i64>(6)?.max(0) as u64,
-        modified_ns: row.get::<_, i64>(7)?.max(0) as u64,
+        size_bytes: row.get::<_, i64>(6)?.max(0).cast_unsigned(),
+        modified_ns: row.get::<_, i64>(7)?.max(0).cast_unsigned(),
         fingerprint: row.get(8)?,
         indexed: row.get::<_, i64>(9)? != 0,
         last_error: row.get(10)?,
@@ -520,7 +517,7 @@ impl TubIndex {
         record.size_bytes.min(i64::MAX as u64) as i64,
         record.modified_ns.min(i64::MAX as u64) as i64,
         record.fingerprint.as_str(),
-        if record.indexed { 1 } else { 0 },
+        i32::from(record.indexed),
         record.last_error.as_deref(),
       ],
     )?;
@@ -533,7 +530,7 @@ impl TubIndex {
     Ok(())
   }
 
-  #[allow(dead_code)]
+  #[allow(dead_code, reason = "Point lookup is retained for targeted catalog/debug workflows.")]
   fn file_by_id(&self, file_id: &str) -> Result<Option<TubFile>> {
     let connection = self.connection()?;
     let record = connection
@@ -552,8 +549,8 @@ impl TubIndex {
             parent_display_path: row.get(3)?,
             file_name: row.get(4)?,
             kind: file_kind_from_str(&row.get::<_, String>(5)?).unwrap_or(FileKind::Db8),
-            size_bytes: row.get::<_, i64>(6)?.max(0) as u64,
-            modified_ns: row.get::<_, i64>(7)?.max(0) as u64,
+            size_bytes: row.get::<_, i64>(6)?.max(0).cast_unsigned(),
+            modified_ns: row.get::<_, i64>(7)?.max(0).cast_unsigned(),
             fingerprint: row.get(8)?,
             indexed: row.get::<_, i64>(9)? != 0,
             last_error: row.get(10)?,
@@ -571,6 +568,7 @@ pub struct TubWatcher {
 }
 
 impl TubWatcher {
+  #[must_use]
   pub fn drain_events(&self) -> Vec<notify::Result<notify::Event>> {
     let mut events = Vec::new();
     while let Ok(event) = self.receiver.try_recv() {
@@ -579,7 +577,8 @@ impl TubWatcher {
     events
   }
 
-  pub fn keepalive(&self) -> &RecommendedWatcher {
+  #[must_use]
+  pub const fn keepalive(&self) -> &RecommendedWatcher {
     &self.watcher
   }
 }
@@ -674,12 +673,12 @@ struct IndexUnit {
   paragraph_end_exclusive: Option<usize>,
 }
 
-struct FileDocumentInput<'a> {
-  file_id: &'a str,
+struct FileDocumentInput<'input> {
+  file_id: &'input str,
   kind: FileKind,
-  path: &'a Path,
-  display_path: &'a str,
-  file_name: &'a str,
+  path: &'input Path,
+  display_path: &'input str,
+  file_name: &'input str,
   size_bytes: u64,
   modified_ns: u64,
 }
@@ -800,10 +799,8 @@ fn hit_from_document(schema: &TubSchema, document: &TantivyDocument, score: f32)
     snippet: preview_text(&stored_text(document, schema.body).unwrap_or_default(), 360),
     insert_text: stored_text(document, schema.insert_text).unwrap_or_default(),
     score,
-    paragraph_start: stored_text(document, schema.paragraph_start)
-      .and_then(|value| value.parse::<usize>().ok()),
-    paragraph_end_exclusive: stored_text(document, schema.paragraph_end)
-      .and_then(|value| value.parse::<usize>().ok()),
+    paragraph_start: stored_text(document, schema.paragraph_start).and_then(|value| value.parse::<usize>().ok()),
+    paragraph_end_exclusive: stored_text(document, schema.paragraph_end).and_then(|value| value.parse::<usize>().ok()),
   })
 }
 
@@ -842,17 +839,17 @@ fn db8_index_units(file_id: &str, path: &Path, display_path: &str, file_name: &s
       .and_then(|id| paragraph_index_for_id(&document, id))
       .map(|ix| paragraph_text_trimmed(&document, ix))
       .filter(|text| !text.is_empty())
-      .unwrap_or_else(|| first_non_empty_line(&body).unwrap_or_else(|| unit_kind.as_str().to_string()));
+      .unwrap_or_else(|| first_non_empty_line(&body).unwrap_or_else(|| unit_kind.as_str().to_owned()));
     let heading_path = section_heading_path(&document, &sections_by_id, section);
     let cite = cite_for_range(&document, start, end);
     let unit_id = format!("{file_id}:{}:{}", unit_kind.as_str(), section.start_paragraph.0);
     units.push(IndexUnit {
-      file_id: file_id.to_string(),
+      file_id: file_id.to_owned(),
       unit_id,
       unit_kind,
       path: path.to_path_buf(),
-      display_path: display_path.to_string(),
-      file_name: file_name.to_string(),
+      display_path: display_path.to_owned(),
+      file_name: file_name.to_owned(),
       heading_path,
       heading,
       cite,
@@ -867,9 +864,8 @@ fn db8_index_units(file_id: &str, path: &Path, display_path: &str, file_name: &s
 }
 
 fn section_end_index(document: &Document, section: &DocumentSection) -> Option<usize> {
-  section
-    .end_paragraph_exclusive
-    .and_then(|id| paragraph_index_for_id(document, id))
+  let id = section.end_paragraph_exclusive?;
+  paragraph_index_for_id(document, id)
 }
 
 fn section_heading_path(document: &Document, sections_by_id: &HashMap<SectionId, &DocumentSection>, section: &DocumentSection) -> Vec<String> {
@@ -901,26 +897,26 @@ fn paragraph_range_text(document: &Document, start: usize, end: usize) -> String
     }
     text.push_str(&paragraph_text_trimmed(document, paragraph_ix));
   }
-  text.trim().to_string()
+  text.trim().to_owned()
 }
 
 fn paragraph_text_trimmed(document: &Document, paragraph_ix: usize) -> String {
   document_text_slice(document, paragraph_byte_range(document, paragraph_ix))
     .trim()
-    .to_string()
+    .to_owned()
 }
 
 fn cite_for_range(document: &Document, start: usize, end: usize) -> Option<String> {
   for paragraph_ix in start..end {
     let paragraph = document.paragraphs.get(paragraph_ix)?;
     let paragraph_range = paragraph_byte_range(document, paragraph_ix);
-    let mut offset = 0usize;
+    let mut offset = 0_usize;
     for run in &paragraph.runs {
       if run.styles.semantic == RunSemanticStyle::Cite {
         let text = document_text_slice(document, paragraph_range.start + offset..paragraph_range.start + offset + run.len);
         let text = text.trim();
         if !text.is_empty() {
-          return Some(text.to_string());
+          return Some(text.to_owned());
         }
       }
       offset += run.len;
@@ -942,7 +938,10 @@ fn preview_text(text: &str, max_chars: usize) -> String {
   if normalized.chars().count() <= max_chars {
     return normalized;
   }
-  let mut preview = normalized.chars().take(max_chars.saturating_sub(1)).collect::<String>();
+  let mut preview = normalized
+    .chars()
+    .take(max_chars.saturating_sub(1))
+    .collect::<String>();
   preview.push_str("...");
   preview
 }
@@ -993,13 +992,16 @@ fn parent_display_path(display_path: &str) -> String {
 }
 
 fn modified_ns(metadata: &fs::Metadata) -> u64 {
-  metadata
-    .modified()
-    .unwrap_or(SystemTime::UNIX_EPOCH)
-    .duration_since(UNIX_EPOCH)
-    .unwrap_or_default()
-    .as_nanos()
-    .min(u64::MAX as u128) as u64
+  u64::try_from(
+    metadata
+      .modified()
+      .unwrap_or(SystemTime::UNIX_EPOCH)
+      .duration_since(UNIX_EPOCH)
+      .unwrap_or_default()
+      .as_nanos()
+      .min(u128::from(u64::MAX)),
+  )
+  .expect("nanosecond timestamp is clamped to u64::MAX")
 }
 
 fn fingerprint(size_bytes: u64, modified_ns: u64) -> String {
@@ -1012,7 +1014,7 @@ fn stable_file_id(root: &Path, path: &Path) -> String {
   format!("{:016x}", hasher.finish())
 }
 
-fn build_tree_entries(root: &Path, files: Vec<TubFile>, expanded_dirs: &HashSet<PathBuf>) -> Result<Vec<TubTreeNode>> {
+fn build_tree_entries(root: &Path, files: Vec<TubFile>, expanded_dirs: &HashSet<PathBuf>) -> Vec<TubTreeNode> {
   let mut dirs = BTreeSet::<PathBuf>::new();
   let mut files_by_parent = BTreeMap::<PathBuf, Vec<TubFile>>::new();
   let mut child_dirs = BTreeMap::<PathBuf, BTreeSet<PathBuf>>::new();
@@ -1023,10 +1025,16 @@ fn build_tree_entries(root: &Path, files: Vec<TubFile>, expanded_dirs: &HashSet<
     for component in relative_parent.components() {
       let next = current.join(component.as_os_str());
       dirs.insert(next.clone());
-      child_dirs.entry(current.clone()).or_default().insert(next.clone());
+      child_dirs
+        .entry(current.clone())
+        .or_default()
+        .insert(next.clone());
       current = next;
     }
-    files_by_parent.entry(relative_parent).or_default().push(file);
+    files_by_parent
+      .entry(relative_parent)
+      .or_default()
+      .push(file);
   }
 
   for files in files_by_parent.values_mut() {
@@ -1042,15 +1050,15 @@ fn build_tree_entries(root: &Path, files: Vec<TubFile>, expanded_dirs: &HashSet<
     entries: Vec::new(),
   };
   emit_tree_dir(Path::new(""), 0, &mut context);
-  Ok(context.entries)
+  context.entries
 }
 
-struct TreeEmitContext<'a> {
-  root: &'a Path,
-  dirs: &'a BTreeSet<PathBuf>,
-  child_dirs: &'a BTreeMap<PathBuf, BTreeSet<PathBuf>>,
-  files_by_parent: &'a BTreeMap<PathBuf, Vec<TubFile>>,
-  expanded_dirs: &'a HashSet<PathBuf>,
+struct TreeEmitContext<'tree> {
+  root: &'tree Path,
+  dirs: &'tree BTreeSet<PathBuf>,
+  child_dirs: &'tree BTreeMap<PathBuf, BTreeSet<PathBuf>>,
+  files_by_parent: &'tree BTreeMap<PathBuf, Vec<TubFile>>,
+  expanded_dirs: &'tree HashSet<PathBuf>,
   entries: Vec<TubTreeNode>,
 }
 

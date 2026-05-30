@@ -1,17 +1,27 @@
-use std::{collections::{BTreeMap, BTreeSet}, path::{Path, PathBuf}, rc::Rc, sync::Arc, time::Duration};
+use std::{
+  collections::{BTreeMap, BTreeSet},
+  path::{Path, PathBuf},
+  rc::Rc,
+  sync::Arc,
+  time::Duration,
+};
 
 use gpui::{App, Context, IntoElement, PathPromptOptions, Pixels, SharedString, Timer, Window, div, prelude::*, px, rgb, size};
 use gpui_component::{
-  ActiveTheme as _, Icon, IconName, Selectable, Sizable, h_flex, v_virtual_list,
+  ActiveTheme as _, Icon, IconName, Selectable, Sizable,
   button::{Button, ButtonVariants},
+  h_flex,
   input::Input,
   resizable::{h_resizable, resizable_panel},
   scroll::ScrollableElement,
   tree::{TreeItem, tree},
-  v_flex,
+  v_flex, v_virtual_list,
 };
 
-use crate::{app_settings::{flowstate_data_dir, save_tub_root}, rich_text_element::ToolkitTextDrag};
+use crate::{
+  app_settings::{flowstate_data_dir, save_tub_root},
+  rich_text_element::ToolkitTextDrag,
+};
 
 use super::{
   APP_CHROME_BORDER_WIDTH, LeftNavMode, OutlineRowGuides, SIDE_PANEL_COLLAPSED_WIDTH, SidebarTreeAction, SidebarTreeRow, ToolkitSearchFilter,
@@ -34,16 +44,8 @@ impl Workspace {
   /// search results are miniature scrollable windows that can be opened,
   /// inserted, or dragged into the editor.
   pub(super) fn render_content_area(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-    let toolkit_width = if self.toolkit_collapsed {
-      SIDE_PANEL_COLLAPSED_WIDTH
-    } else {
-      px(380.0)
-    };
-    let toolkit_range_end = if self.toolkit_collapsed {
-      SIDE_PANEL_COLLAPSED_WIDTH
-    } else {
-      px(620.0)
-    };
+    let toolkit_width = if self.toolkit_collapsed { SIDE_PANEL_COLLAPSED_WIDTH } else { px(380.0) };
+    let toolkit_range_end = if self.toolkit_collapsed { SIDE_PANEL_COLLAPSED_WIDTH } else { px(620.0) };
 
     h_resizable("workspace-content-resizable")
       .with_state(&self.content_resizable_state)
@@ -95,6 +97,7 @@ impl Workspace {
     self.tub_index.clone()
   }
 
+  #[allow(dead_code, reason = "Tub root picker is kept for the upcoming toolkit settings entry point.")]
   pub(super) fn prompt_select_tub(&mut self, window: &mut Window, cx: &mut Context<Self>) {
     let paths = cx.prompt_for_paths(PathPromptOptions {
       files: false,
@@ -119,6 +122,7 @@ impl Workspace {
     .detach();
   }
 
+  #[allow(dead_code, reason = "Tub root setter is retained for the upcoming toolkit settings entry point.")]
   fn set_tub_root(&mut self, root: PathBuf, cx: &mut Context<Self>) {
     let _ = save_tub_root(Some(root.clone()));
     self.tub_root = Some(root.clone());
@@ -195,7 +199,6 @@ impl Workspace {
             if persist_root {
               let _ = save_tub_root(Some(result.root.clone()));
             }
-            let file_count = result.files.len();
             let tree_items = build_tub_tree_items(&result.root, &result.files, &workspace.tub_expanded_dirs);
             let tree_entries = result
               .index
@@ -210,16 +213,20 @@ impl Workspace {
               .tub_tree
               .update(cx, |tree, cx| tree.set_items(tree_items, cx));
             workspace.tub_status = "Tub indexed".into();
-            workspace.toolkit_status = if workspace.toolkit_search_input.read(cx).value().trim().is_empty() {
+            workspace.toolkit_status = if workspace
+              .toolkit_search_input
+              .read(cx)
+              .value()
+              .trim()
+              .is_empty()
+            {
               "Search DB8 blocks, tags, and analytics.".into()
             } else {
               "Ready".into()
             };
             workspace.refresh_toolkit_search(cx);
             workspace.start_tub_watch_poll(cx);
-            if rescan_pending
-              && let Some(root) = workspace.tub_root.clone()
-            {
+            if rescan_pending && let Some(root) = workspace.tub_root.clone() {
               workspace.spawn_tub_scan(root, true, cx);
             }
           },
@@ -234,9 +241,7 @@ impl Workspace {
             workspace.toolkit_hits.clear();
             workspace.tub_status = format!("Tub unavailable: {error}").into();
             workspace.toolkit_status = "Tub unavailable".into();
-            if rescan_pending
-              && let Some(root) = workspace.tub_root.clone()
-            {
+            if rescan_pending && let Some(root) = workspace.tub_root.clone() {
               workspace.spawn_tub_scan(root, true, cx);
             }
           },
@@ -426,7 +431,11 @@ impl Workspace {
             h_flex()
               .items_center()
               .gap_2()
-              .child(Icon::new(IconName::Search).xsmall().text_color(cx.theme().muted_foreground))
+              .child(
+                Icon::new(IconName::Search)
+                  .xsmall()
+                  .text_color(cx.theme().muted_foreground),
+              )
               .child(
                 div()
                   .text_sm()
@@ -434,17 +443,17 @@ impl Workspace {
                   .text_color(cx.theme().foreground)
                   .child("Toolkit"),
               ),
-        )
-        .child(
-          Button::new("collapse-toolkit-panel")
-            .icon(Icon::new(IconName::PanelRightClose).text_color(cx.theme().muted_foreground))
-            .xsmall()
-            .ghost()
-            .tooltip("Collapse toolkit")
-            .on_click(cx.listener(|workspace, _, _, cx| {
-              workspace.toggle_toolkit(cx);
-            })),
-        ),
+          )
+          .child(
+            Button::new("collapse-toolkit-panel")
+              .icon(Icon::new(IconName::PanelRightClose).text_color(cx.theme().muted_foreground))
+              .xsmall()
+              .ghost()
+              .tooltip("Collapse toolkit")
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.toggle_toolkit(cx);
+              })),
+          ),
       )
       .child(
         v_flex()
@@ -453,18 +462,26 @@ impl Workspace {
           .p_2()
           .border_b_1()
           .border_color(cx.theme().border)
-          .child(Input::new(&self.toolkit_search_input).w_full().cleanable(true))
           .child(
-            h_flex()
+            Input::new(&self.toolkit_search_input)
               .w_full()
-              .items_center()
-              .gap_1()
-              .children([
-                self.render_toolkit_filter_button(ToolkitSearchFilter::All, cx).into_any_element(),
-                self.render_toolkit_filter_button(ToolkitSearchFilter::Blocks, cx).into_any_element(),
-                self.render_toolkit_filter_button(ToolkitSearchFilter::Tags, cx).into_any_element(),
-                self.render_toolkit_filter_button(ToolkitSearchFilter::Analytics, cx).into_any_element(),
-              ]),
+              .cleanable(true),
+          )
+          .child(
+            h_flex().w_full().items_center().gap_1().children([
+              self
+                .render_toolkit_filter_button(ToolkitSearchFilter::All, cx)
+                .into_any_element(),
+              self
+                .render_toolkit_filter_button(ToolkitSearchFilter::Blocks, cx)
+                .into_any_element(),
+              self
+                .render_toolkit_filter_button(ToolkitSearchFilter::Tags, cx)
+                .into_any_element(),
+              self
+                .render_toolkit_filter_button(ToolkitSearchFilter::Analytics, cx)
+                .into_any_element(),
+            ]),
           )
           .child(
             h_flex()
@@ -558,7 +575,11 @@ impl Workspace {
             h_flex()
               .items_start()
               .gap_2()
-              .child(Icon::new(hit_icon(hit.unit_kind)).xsmall().text_color(cx.theme().link))
+              .child(
+                Icon::new(hit_icon(hit.unit_kind))
+                  .xsmall()
+                  .text_color(cx.theme().link),
+              )
               .child(
                 v_flex()
                   .flex_1()
@@ -637,7 +658,6 @@ impl Workspace {
   }
 
   pub(super) fn render_tub_nav(&self, nav_width: Pixels, cx: &mut Context<Self>) -> gpui::AnyElement {
-    let tub_status = self.tub_status.clone();
     let tree_list = if self.tub_tree_entries.is_empty() {
       div()
         .h(px(120.0))
@@ -691,24 +711,28 @@ impl Workspace {
             }
           });
         });
-        render_sidebar_tree_row(SidebarTreeRow {
-          row_id: ("tub-tree-item", ix),
-          toggle_id: ("tub-toggle", ix),
-          label_id: ("tub-label", ix),
-          label: entry.item().label.clone(),
-          nav_width,
-          depth,
-          is_folder,
-          is_expanded,
-          is_active,
-          guide,
-          icon: Some(icon),
-          icon_color: Some(icon_color),
-          toggle_action: Some(toggle_action),
-          label_action,
-          stop_icon_mouse_down: !is_folder,
-          stop_label_mouse_down: !is_folder,
-        }, window, cx)
+        render_sidebar_tree_row(
+          SidebarTreeRow {
+            row_id: ("tub-tree-item", ix),
+            toggle_id: ("tub-toggle", ix),
+            label_id: ("tub-label", ix),
+            label: entry.item().label.clone(),
+            nav_width,
+            depth,
+            is_folder,
+            is_expanded,
+            is_active,
+            guide,
+            icon: Some(icon),
+            icon_color: Some(icon_color),
+            toggle_action: Some(toggle_action),
+            label_action,
+            stop_icon_mouse_down: !is_folder,
+            stop_label_mouse_down: !is_folder,
+          },
+          window,
+          cx,
+        )
       })
       .into_any_element()
     };
@@ -755,7 +779,12 @@ impl Workspace {
           )
           .child(
             Button::new("left-nav-swap-mode")
-              .icon(Icon::default().path(swap_icon_path).xsmall().text_color(cx.theme().sidebar_primary))
+              .icon(
+                Icon::default()
+                  .path(swap_icon_path)
+                  .xsmall()
+                  .text_color(cx.theme().sidebar_primary),
+              )
               .xsmall()
               .ghost()
               .tooltip(swap_tooltip)
@@ -776,7 +805,6 @@ impl Workspace {
           })),
       )
   }
-
 }
 
 fn toolkit_preview_lines(text: &str) -> Vec<SharedString> {
@@ -829,10 +857,16 @@ fn build_tub_tree_items(root: &Path, files: &[flowstate_tub::TubFile], expanded_
     for component in relative_parent.components() {
       let next = current.join(component.as_os_str());
       dirs.insert(next.clone());
-      child_dirs.entry(current.clone()).or_default().insert(next.clone());
+      child_dirs
+        .entry(current.clone())
+        .or_default()
+        .insert(next.clone());
       current = next;
     }
-    files_by_parent.entry(relative_parent).or_default().push(file);
+    files_by_parent
+      .entry(relative_parent)
+      .or_default()
+      .push(file);
   }
 
   for files in files_by_parent.values_mut() {
@@ -851,10 +885,7 @@ fn build_tub_tree_dir_items(
   expanded_dirs: &std::collections::HashSet<PathBuf>,
 ) -> Vec<TreeItem> {
   let mut items = Vec::new();
-  let children = child_dirs
-    .get(relative_dir)
-    .cloned()
-    .unwrap_or_default();
+  let children = child_dirs.get(relative_dir).cloned().unwrap_or_default();
 
   for child in children {
     if !dirs.contains(&child) {
@@ -874,9 +905,11 @@ fn build_tub_tree_dir_items(
   }
 
   if let Some(files) = files_by_parent.get(relative_dir) {
-    items.extend(files.iter().map(|file| {
-      TreeItem::new(file.path.to_string_lossy().to_string(), file.file_name.clone())
-    }));
+    items.extend(
+      files
+        .iter()
+        .map(|file| TreeItem::new(file.path.to_string_lossy().to_string(), file.file_name.clone())),
+    );
   }
 
   items

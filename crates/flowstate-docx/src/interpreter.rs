@@ -114,7 +114,7 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
   let mut paragraphs = Vec::with_capacity(docx_paragraphs.len());
   let mut paragraph_property_cache: FxHashMap<Option<String>, CT_PPr> = FxHashMap::default();
   let mut run_property_cache: FxHashMap<(Option<String>, Option<String>), CT_RPr> = FxHashMap::default();
-  let mut runs_imported = 0usize;
+  let mut runs_imported = 0_usize;
   let mut unknown_paragraph_styles = Vec::new();
   let mut unknown_run_styles = Vec::new();
   let mut unknown_paragraph_style_seen = FxHashSet::default();
@@ -124,7 +124,7 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
 
   for (paragraph_ix, paragraph) in docx_paragraphs.into_iter().enumerate() {
     let style_id = paragraph.style_id();
-    let paragraph_style_key = style_id.map(str::to_string);
+    let paragraph_style_key = style_id.map(str::to_owned);
     let resolved_paragraph_properties = paragraph_property_cache
       .entry(paragraph_style_key.clone())
       .or_insert_with(|| docx.resolve_paragraph_properties(style_id));
@@ -134,21 +134,20 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
         .and_then(|properties| properties.outline_lvl),
       resolved: resolved_paragraph_properties,
     };
-    let direct_runs = direct_properties
+    let direct_runs: &[DirectRunProperties] = direct_properties
       .get(paragraph_ix)
-      .map(|properties| properties.runs.as_slice())
-      .unwrap_or(&[]);
+      .map_or(&[], |properties| properties.runs.as_slice());
     let run_facts = paragraph
       .runs()
       .enumerate()
       .map(|(run_ix, run)| {
         let text = run.text();
-        let run_style_id = run.style_id().map(str::to_string);
+        let run_style_id = run.style_id().map(str::to_owned);
         let run_style_id_ref = run_style_id.as_deref();
-        let effective = run_property_cache
+        let effective_properties = run_property_cache
           .entry((paragraph_style_key.clone(), run_style_id.clone()))
           .or_insert_with(|| docx.resolve_run_properties(style_id, run_style_id_ref));
-        let effective: &CT_RPr = effective;
+        let effective: &CT_RPr = effective_properties;
         let direct = direct_runs.get(run_ix).copied().unwrap_or_default();
         let run_size = run.size();
         let source_size_pt = direct.size_pt.or(run_size);
@@ -157,12 +156,12 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
           style_id: run_style_id,
           bold: run.is_bold() || direct.bold || effective.bold == Some(true) || effective.bold_cs == Some(true),
           bold_off: direct.bold_off || (effective.bold == Some(false) && effective.bold_cs != Some(true)),
-          underline: direct.underline || underline_is_on(&effective.underline),
+          underline: direct.underline || underline_is_on(effective.underline.as_ref()),
           strikethrough: direct.strikethrough || effective.strike == Some(true) || effective.dstrike == Some(true),
           highlight: direct.highlight || effective.highlight.is_some() || effective.shading.is_some(),
           border: false,
           source_size_pt,
-          size_pt: source_size_pt.or_else(|| effective.sz.map(|size| size.to_pt())),
+          size_pt: source_size_pt.or_else(|| effective.sz.map(rdocx_oxml::HalfPoint::to_pt)),
           color: run.color().is_some() || direct.color || effective.color.is_some() || effective.color_theme.is_some(),
         }
       })
@@ -195,11 +194,17 @@ pub fn convert_cleaned_docx_to_document(cleaned: CleanedDocx) -> io::Result<(Doc
     if is_heading {
       current_section_has_underline = false;
       after_heading_seeking_text = true;
-    } else if after_heading_seeking_text {
-      let has_text = run_facts.iter().any(|run| !run.text.trim().is_empty());
-      if has_text && style != ParagraphStyle::Undertag {
-        can_process_citations = true;
-        after_heading_seeking_text = false;
+    } else {
+      #[allow(
+        clippy::collapsible_else_if,
+        reason = "Collapsing this branch triggers else_if_without_else under the workspace lint set."
+      )]
+      if after_heading_seeking_text {
+        let has_text = run_facts.iter().any(|run| !run.text.trim().is_empty());
+        if has_text && style != ParagraphStyle::Undertag {
+          can_process_citations = true;
+          after_heading_seeking_text = false;
+        }
       }
     }
     if !is_heading && run_facts.iter().any(|run| run.underline && !run.bold) {
@@ -298,9 +303,9 @@ struct DirectRunProperties {
   color: bool,
 }
 
-struct EffectiveParagraphProperties<'a> {
+struct EffectiveParagraphProperties<'properties> {
   direct_outline_lvl: Option<u32>,
-  resolved: &'a CT_PPr,
+  resolved: &'properties CT_PPr,
 }
 
 #[hotpath::measure_all]
@@ -340,10 +345,10 @@ fn direct_properties_by_paragraph_xml(doc_xml: &[u8]) -> io::Result<Vec<DirectPa
             DirectRunProperties {
               bold: properties.bold == Some(true) || properties.bold_cs == Some(true),
               bold_off: properties.bold == Some(false) && properties.bold_cs != Some(true),
-              underline: underline_is_on(&properties.underline),
+              underline: underline_is_on(properties.underline.as_ref()),
               strikethrough: properties.strike == Some(true) || properties.dstrike == Some(true),
               highlight: properties.highlight.is_some() || properties.shading.is_some(),
-              size_pt: properties.sz.map(|size| size.to_pt()),
+              size_pt: properties.sz.map(rdocx_oxml::HalfPoint::to_pt),
               color: properties.color.is_some() || properties.color_theme.is_some(),
             }
           })
@@ -384,14 +389,14 @@ impl StyleResolver {
         canonical_paragraph_style_name(canonical_source),
         Some("Heading1" | "Heading2" | "Heading3" | "Heading4" | "Analytic" | "Undertag" | "Normal")
       ) {
-        known_paragraph_style_ids.insert(style_id.to_string());
+        known_paragraph_style_ids.insert(style_id.to_owned());
       }
-      let style_id = style_id.to_string();
+      let style_id = style_id.to_owned();
       paragraph_styles_by_id.insert(style_id.clone(), paragraph_style_from_canonical_name(canonical_source));
       character_heading_styles_by_id.insert(style_id.clone(), paragraph_style_from_character_heading_name(canonical_source));
       run_semantics_by_id.insert(style_id.clone(), run_semantic_from_canonical_name(canonical_source));
       if let Some(name) = style.name() {
-        names_by_id.insert(style_id, name.to_string());
+        names_by_id.insert(style_id, name.to_owned());
       }
     }
 
@@ -408,7 +413,7 @@ impl StyleResolver {
     self.names_by_id.get(style_id).map(String::as_str)
   }
 
-  fn canonical_name<'a>(&'a self, style_id: Option<&'a str>) -> &'a str {
+  fn canonical_name<'style>(&'style self, style_id: Option<&'style str>) -> &'style str {
     style_id
       .and_then(|id| self.name(id))
       .unwrap_or_else(|| style_id.unwrap_or("Normal"))
@@ -532,11 +537,7 @@ fn recognize_run_styles_for_context(
     ),
     direct_underline: structural_run_formatting_allowed && run.underline,
     strikethrough: !suppress_semantic_styles && run.strikethrough,
-    highlight: if direct_highlight_allowed && run.highlight {
-      Some(HighlightStyle::Spoken)
-    } else {
-      None
-    },
+    highlight: (direct_highlight_allowed && run.highlight).then_some(HighlightStyle::Spoken),
   }
 }
 
@@ -620,7 +621,7 @@ fn entirely_bold_paragraph_overrides(runs: &[RunFact]) -> Option<Vec<bool>> {
 
   let paragraph_text_len = text_run_indices
     .iter()
-    .fold((0usize, true, 0usize), |(count, leading, pending_whitespace), ix| {
+    .fold((0_usize, true, 0_usize), |(count, leading, pending_whitespace), ix| {
       count_trimmed_chars(&runs[*ix].text, count, leading, pending_whitespace)
     })
     .0;
@@ -703,7 +704,7 @@ fn most_common_half_point_size(runs: &[RunFact], indices: &[usize]) -> Option<f6
   counts
     .into_iter()
     .max_by(|(size_a, count_a), (size_b, count_b)| count_a.cmp(count_b).then_with(|| size_b.cmp(size_a)))
-    .map(|(half_points, _)| half_points as f64 / 2.0)
+    .map(|(half_points, _)| f64::from(half_points) / 2.0)
 }
 
 #[hotpath::measure]
@@ -729,7 +730,6 @@ fn paragraph_style_from_canonical_name(name: &str) -> Option<ParagraphStyle> {
     Some("Heading4") => Some(ParagraphStyle::Tag),
     Some("Analytic") => Some(ParagraphStyle::Analytic),
     Some("Undertag") => Some(ParagraphStyle::Undertag),
-    Some("Normal") | None => None,
     _ => None,
   }
 }
@@ -766,11 +766,9 @@ fn paragraph_style_from_character_heading_name(name: &str) -> Option<ParagraphSt
 #[hotpath::measure]
 fn canonical_run_style_name(name: &str) -> Option<&'static str> {
   match normalized_style_token(name).as_str() {
-    "style13ptbold" | "cite" | "oldcite" => Some("Style13ptBold"),
+    "style13ptbold" | "cite" | "oldcite" | "heading1char" | "pocketchar" => Some("Style13ptBold"),
     "styleunderline" | "underline" => Some("StyleUnderline"),
-    "emphasis" => Some("Emphasis"),
-    "heading1char" | "pocketchar" => Some("Style13ptBold"),
-    "heading2char" | "hatchar" | "heading3char" | "blockchar" | "heading4char" | "tagchar" => Some("Emphasis"),
+    "emphasis" | "heading2char" | "hatchar" | "heading3char" | "blockchar" | "heading4char" | "tagchar" => Some("Emphasis"),
     _ => None,
   }
 }
@@ -779,20 +777,20 @@ fn canonical_run_style_name(name: &str) -> Option<&'static str> {
 fn normalized_style_token(name: &str) -> String {
   name
     .chars()
-    .filter(|ch| ch.is_ascii_alphanumeric())
+    .filter(char::is_ascii_alphanumeric)
     .flat_map(char::to_lowercase)
     .collect()
 }
 
 #[hotpath::measure]
-fn underline_is_on(underline: &Option<ST_Underline>) -> bool {
+fn underline_is_on(underline: Option<&ST_Underline>) -> bool {
   matches!(underline, Some(value) if *value != ST_Underline::None)
 }
 
 #[hotpath::measure]
 fn push_unique_with_seen(values: &mut Vec<String>, seen: &mut FxHashSet<String>, value: &str) {
   if !seen.contains(value) {
-    let value = value.to_string();
+    let value = value.to_owned();
     seen.insert(value.clone());
     values.push(value);
   }

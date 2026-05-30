@@ -1,6 +1,6 @@
 use std::{ops::Range, sync::Arc};
 
-use super::*;
+use super::{Document, RunStyle, paragraphs_mut, TextRun, update_paragraph_block, Paragraph, DocumentSpan, remove_paragraph_ids, insert_paragraph_id, replace_paragraph_blocks, rebuild_document_sections, DocumentOffset, SOFT_LINE_BREAK, RichClipboardFragment, InputRun, InputParagraph, block_ix_for_paragraph, Block, insert_block_id, RunStyles, ParagraphStyle, RunSemanticStyle};
 
 #[hotpath::measure]
 pub fn apply_style_to_paragraph_range(document: &mut Document, paragraph_ix: usize, range: Range<usize>, style: RunStyle) {
@@ -43,16 +43,17 @@ pub fn apply_style_to_paragraph_range(document: &mut Document, paragraph_ix: usi
     }
   }
   let new_runs = merge_adjacent_runs(output);
-  if new_runs != old_runs {
+  if new_runs == old_runs {
+    paragraph.runs = old_runs;
+  } else {
     paragraph.runs = new_runs;
     bump_paragraph_version(paragraph);
     update_paragraph_block(document, paragraph_ix);
-  } else {
-    paragraph.runs = old_runs;
   }
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn merge_adjacent_runs(runs: Vec<TextRun>) -> Vec<TextRun> {
   let mut merged: Vec<TextRun> = Vec::with_capacity(runs.len());
   for run in runs {

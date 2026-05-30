@@ -45,12 +45,12 @@ pub fn mutate_runs_in_range(document: &mut Document, range: Range<DocumentOffset
       }
     }
     let new_runs = merge_adjacent_runs(new_runs);
-    if new_runs != old_runs {
+    if new_runs == old_runs {
+      paragraph.runs = old_runs;
+    } else {
       paragraph.runs = new_runs;
       bump_paragraph_version(paragraph);
       update_paragraph_block(document, paragraph_ix);
-    } else {
-      paragraph.runs = old_runs;
     }
   }
 }

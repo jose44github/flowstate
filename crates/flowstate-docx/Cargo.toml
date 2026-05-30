@@ -3,6 +3,9 @@ name = "flowstate-docx"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 flowstate-document = { path = "../flowstate-document" }
 hotpath = "0.16.1"

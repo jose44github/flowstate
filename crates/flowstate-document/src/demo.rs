@@ -2,9 +2,14 @@ use std::sync::Arc;
 
 use crop::Rope;
 
-use super::*;
+use super::{
+  AssetStore, Document, DocumentParagraphInput, DocumentTheme, InputParagraph, InputRun, Paragraph, ParagraphOffsetIndex, ParagraphStyle,
+  RunStyle, RunStyles, TextRun, document_ids_for_shape, merge_adjacent_runs, paragraph_blocks_from_paragraphs, rebuild_document_sections,
+  reconcile_document_ids,
+};
 
 #[hotpath::measure]
+#[must_use]
 pub fn document_from_input(theme: DocumentTheme, paragraphs: Vec<InputParagraph>) -> Document {
   let text_capacity = paragraphs
     .iter()
@@ -42,6 +47,7 @@ pub fn document_from_input(theme: DocumentTheme, paragraphs: Vec<InputParagraph>
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn document_from_paragraphs(theme: DocumentTheme, paragraphs: Vec<DocumentParagraphInput>) -> Document {
   let text_capacity = paragraphs
     .iter()
@@ -108,11 +114,13 @@ fn document_from_stored_paragraphs(theme: DocumentTheme, text: String, mut store
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn blank_document() -> Document {
   document_from_input(DocumentTheme::default(), Vec::new())
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn demo_document() -> Document {
   let mut paragraphs = vec![
     InputParagraph {
@@ -315,13 +323,8 @@ pub fn demo_document() -> Document {
   for ix in 1..=48 {
     let style = match ix % 9 {
       0 => ParagraphStyle::Tag,
-      1 => ParagraphStyle::Normal,
-      2 => ParagraphStyle::Normal,
       3 => ParagraphStyle::Undertag,
-      4 => ParagraphStyle::Normal,
-      5 => ParagraphStyle::Normal,
       6 => ParagraphStyle::Analytic,
-      7 => ParagraphStyle::Normal,
       _ => ParagraphStyle::Normal,
     };
     let spoken = RunStyles::default()
@@ -349,14 +352,16 @@ pub fn demo_document() -> Document {
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn plain(text: &str) -> InputRun {
   run(text, RunStyles::default())
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn run(text: &str, styles: RunStyles) -> InputRun {
   InputRun {
-    text: text.to_string(),
+    text: text.to_owned(),
     styles,
   }
 }

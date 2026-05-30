@@ -499,7 +499,7 @@ fn first_break_after(break_ends: &[usize], byte: usize) -> usize {
   low
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "Wrapping needs independent font, width, style, and cache inputs.")]
 #[hotpath::measure]
 fn first_break_over_width(
   document: &Document,

@@ -24,7 +24,7 @@ fn read_db8_vnext(mut cursor: Cursor<&[u8]>, timing: Instant) -> io::Result<Docu
 
   let text_bytes = required_chunk(cursor.get_ref(), &chunks, CHUNK_TEXT, "DB8 text chunk")?;
   let text = std::str::from_utf8(text_bytes)
-    .map(|text| text.to_owned())
+    .map(std::borrow::ToOwned::to_owned)
     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 text chunk is not UTF-8"))?;
   let assets = read_assets_chunk(required_chunk(cursor.get_ref(), &chunks, CHUNK_ASSETS, "DB8 assets chunk")?)?;
   let (blocks, paragraphs) = read_blocks_chunk(required_chunk(cursor.get_ref(), &chunks, CHUNK_BLOCKS, "DB8 blocks chunk")?, &text)?;
@@ -64,7 +64,12 @@ fn read_db8_vnext(mut cursor: Cursor<&[u8]>, timing: Instant) -> io::Result<Docu
 }
 
 #[hotpath::measure]
-fn required_chunk<'a>(bytes: &'a [u8], chunks: &[Db8Chunk], kind: u8, label: &'static str) -> io::Result<&'a [u8]> {
+fn required_chunk<'bytes>(
+  bytes: &'bytes [u8],
+  chunks: &[Db8Chunk],
+  kind: u8,
+  label: &'static str,
+) -> io::Result<&'bytes [u8]> {
   let chunk = chunks
     .iter()
     .find(|chunk| chunk.kind == kind)
@@ -159,7 +164,7 @@ fn read_db8_current(mut cursor: Cursor<&[u8]>, timing: Instant) -> io::Result<Do
   };
   let text_bytes = read_bytes(&mut cursor, text_len, "DB8 text")?;
   let text = std::str::from_utf8(text_bytes)
-    .map(|text| text.to_owned())
+    .map(std::borrow::ToOwned::to_owned)
     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 text is not UTF-8"))?;
 
   let asset_count = {
@@ -238,8 +243,7 @@ fn validate_or_rebuild_sections(document: &mut Document) {
 fn normalize_block_text_runs(block: &mut Block, document_text: &str) -> io::Result<()> {
   match block {
     Block::Paragraph(paragraph) => normalize_paragraph_text_runs(paragraph, document_text),
-    Block::Image(_) => Ok(()),
-    Block::Equation(_) => Ok(()),
+    Block::Image(_) | Block::Equation(_) => Ok(()),
     Block::Table(table) => normalize_table_text_runs(table),
   }
 }
@@ -300,7 +304,7 @@ fn normalize_runs_for_text(runs: &mut Vec<TextRun>, text: &str) -> io::Result<()
 
 #[hotpath::measure]
 fn run_boundaries_are_char_boundaries(runs: &[TextRun], text: &str) -> bool {
-  let mut byte = 0usize;
+  let mut byte = 0_usize;
   for run in runs {
     byte = byte.saturating_add(run.len);
     if byte < text.len() && !text.is_char_boundary(byte) {
@@ -314,7 +318,7 @@ fn run_boundaries_are_char_boundaries(runs: &[TextRun], text: &str) -> bool {
 fn char_count_boundaries_to_byte_offsets(runs: &[TextRun], text: &str) -> io::Result<Vec<usize>> {
   let mut offsets = Vec::with_capacity(runs.len() + 1);
   offsets.push(0);
-  let mut char_count = 0usize;
+  let mut char_count = 0_usize;
   for run in runs {
     char_count = char_count.saturating_add(run.len);
     if char_count == text.chars().count() {
@@ -376,14 +380,14 @@ fn write_block_record(bytes: &mut Vec<u8>, block: &Block) {
 #[hotpath::measure]
 fn write_section_record(bytes: &mut Vec<u8>, section: &DocumentSection) {
   write_u128(bytes, section.id.0);
-  write_u128(bytes, section.parent_id.map(|id| id.0).unwrap_or(0));
+  write_u128(bytes, section.parent_id.map_or(0, |id| id.0));
   bytes.push(encode_section_kind(section.kind));
   bytes.push(u8::from(section.heading_paragraph.is_some()));
   bytes.push(u8::from(section.end_paragraph_exclusive.is_some()));
   bytes.push(0);
-  write_u128(bytes, section.heading_paragraph.map(|id| id.0).unwrap_or(0));
+  write_u128(bytes, section.heading_paragraph.map_or(0, |id| id.0));
   write_u128(bytes, section.start_paragraph.0);
-  write_u128(bytes, section.end_paragraph_exclusive.map(|id| id.0).unwrap_or(0));
+  write_u128(bytes, section.end_paragraph_exclusive.map_or(0, |id| id.0));
 }
 
 #[hotpath::measure]
@@ -679,13 +683,12 @@ fn write_asset_record(bytes: &mut Vec<u8>, asset: &AssetRecord) {
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn recovery_path_for_document(path: &Path) -> PathBuf {
   let mut recovery_path = path.to_path_buf();
   let file_name = path
     .file_name()
-    .and_then(|name| name.to_str())
-    .map(|name| format!("{name}.recovery"))
-    .unwrap_or_else(|| "untitled.db8.recovery".to_string());
+    .and_then(|name| name.to_str()).map_or_else(|| "untitled.db8.recovery".to_owned(), |name| format!("{name}.recovery"));
   recovery_path.set_file_name(file_name);
   recovery_path
 }

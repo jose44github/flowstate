@@ -56,6 +56,7 @@ pub fn paragraph_blocks_from_paragraphs(paragraphs: &[Paragraph]) -> Vec<Block> 
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn block_ix_for_paragraph(document: &Document, target_paragraph_ix: usize) -> Option<usize> {
   if document.blocks.len() == document.paragraphs.len()
     && document
@@ -79,6 +80,7 @@ pub fn block_ix_for_paragraph(document: &Document, target_paragraph_ix: usize) -
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn document_position_for_offset(document: &Document, offset: DocumentOffset) -> Option<DocumentPosition> {
   let paragraph = document.paragraphs.get(offset.paragraph)?;
   if offset.byte > paragraph_text_len(paragraph) {
@@ -91,6 +93,7 @@ pub fn document_position_for_offset(document: &Document, offset: DocumentOffset)
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn document_offset_for_position(document: &Document, position: &DocumentPosition) -> Option<DocumentOffset> {
   match position {
     DocumentPosition::Text { block_ix, byte } => {
@@ -106,7 +109,7 @@ pub fn document_offset_for_position(document: &Document, position: &DocumentPosi
         return None;
       }
 
-      let mut paragraph_ix = 0usize;
+      let mut paragraph_ix = 0_usize;
       for (ix, block) in document.blocks.iter().enumerate() {
         match block {
           Block::Paragraph(paragraph) => {
@@ -206,25 +209,29 @@ pub fn replace_paragraph_blocks(document: &mut Document, start_paragraph: usize,
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn new_paragraph_id() -> ParagraphId {
   ParagraphId(uuid::Uuid::new_v4().as_u128())
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn new_block_id() -> BlockId {
   BlockId(uuid::Uuid::new_v4().as_u128())
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn new_section_id() -> SectionId {
   SectionId(uuid::Uuid::new_v4().as_u128())
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn document_ids_for_shape(paragraph_count: usize, block_count: usize) -> DocumentIds {
   DocumentIds {
-    paragraph_ids: (0..paragraph_count).map(|_| new_paragraph_id()).collect(),
-    block_ids: (0..block_count).map(|_| new_block_id()).collect(),
+    paragraph_ids: std::iter::repeat_with(new_paragraph_id).take(paragraph_count).collect(),
+    block_ids: std::iter::repeat_with(new_block_id).take(block_count).collect(),
   }
 }
 
@@ -242,6 +249,7 @@ pub fn reconcile_document_ids(document: &mut Document) {
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn paragraph_index_for_id(document: &Document, id: ParagraphId) -> Option<usize> {
   document
     .ids
@@ -251,11 +259,13 @@ pub fn paragraph_index_for_id(document: &Document, id: ParagraphId) -> Option<us
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn paragraph_id_at(document: &Document, paragraph_ix: usize) -> Option<ParagraphId> {
   document.ids.paragraph_ids.get(paragraph_ix).copied()
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn block_id_at(document: &Document, block_ix: usize) -> Option<BlockId> {
   document.ids.block_ids.get(block_ix).copied()
 }
@@ -338,7 +348,7 @@ pub fn rebuild_document_sections(document: &mut Document) {
 }
 
 #[hotpath::measure]
-fn section_level_and_kind(style: ParagraphStyle) -> Option<(usize, SectionKind)> {
+const fn section_level_and_kind(style: ParagraphStyle) -> Option<(usize, SectionKind)> {
   match style {
     ParagraphStyle::Pocket => Some((0, SectionKind::Pocket)),
     ParagraphStyle::Hat => Some((1, SectionKind::Hat)),
@@ -350,9 +360,9 @@ fn section_level_and_kind(style: ParagraphStyle) -> Option<(usize, SectionKind)>
 }
 
 #[hotpath::measure]
-fn section_id_for_heading(paragraph_id: ParagraphId, kind: SectionKind) -> SectionId {
+const fn section_id_for_heading(paragraph_id: ParagraphId, kind: SectionKind) -> SectionId {
   let kind_slot = match kind {
-    SectionKind::Pocket => 1u128,
+    SectionKind::Pocket => 1_u128,
     SectionKind::Hat => 2,
     SectionKind::BlockSection => 3,
     SectionKind::TagSection => 4,
@@ -374,6 +384,7 @@ pub struct ParagraphOffsetIndex {
 
 #[hotpath::measure_all]
 impl ParagraphOffsetIndex {
+  #[must_use]
   pub fn new(paragraphs: &[Paragraph]) -> Self {
     let mut index = Self {
       widths: paragraph_widths(paragraphs),
@@ -389,6 +400,7 @@ impl ParagraphOffsetIndex {
     *self = Self::new(paragraphs);
   }
 
+  #[must_use]
   pub fn paragraph_start(&self, paragraph_ix: usize) -> usize {
     self.prefix_sum(paragraph_ix)
   }

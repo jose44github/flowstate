@@ -1,8 +1,8 @@
 use std::{
   collections::hash_map::DefaultHasher,
   fs,
-  hash::{Hash, Hasher},
-  io::{self, Cursor, Read, Write},
+  hash::{Hash as _, Hasher as _},
+  io::{self, Cursor, Read as _, Write as _},
   ops::Range,
   path::{Path, PathBuf},
   sync::Arc,
@@ -12,7 +12,7 @@ use std::{
 use crop::Rope;
 use tempfile::NamedTempFile;
 
-use super::*;
+use super::{Document, demo_document, rebuild_document_offset_index, reconcile_document_ids, rebuild_document_sections, Block, paragraph_byte_range, ParagraphOffsetIndex, DocumentIds, DocumentTheme, log_timing_lazy, AssetStore, Paragraph, ParagraphStyle, ParagraphId, BlockId, DocumentSection, paragraph_index_for_id, TableBlock, TableCellBlock, TextRun, merge_adjacent_runs, SectionId, ImageBlock, AssetId, ImageSizing, EquationBlock, EquationSyntax, EquationDisplay, TableColumnWidth, TableCell, TableRow, TableStyle, TableCellParagraph, AssetRecord, document_text_slice, paragraph_runs_len, paragraph_text_len, BlockAlignment, SectionKind, RunStyles, RunSemanticStyle, HighlightStyle};
 
 // DB8 is our on-disk document format: a magic header, a version, the raw
 // UTF-8 text blob, then per-paragraph run metadata. Keeping the format
@@ -83,7 +83,7 @@ pub fn write_db8(path: impl AsRef<Path>, document: &Document) -> io::Result<()> 
   }
   let document = document_for_serialization(document);
   validate_document(&document)?;
-  let bytes = serialize_db8(&document)?;
+  let bytes = serialize_db8(&document);
   write_bytes_atomic(path, &bytes)
 }
 
@@ -101,7 +101,7 @@ fn document_for_serialization(document: &Document) -> Document {
 }
 
 #[hotpath::measure]
-fn serialize_db8(document: &Document) -> io::Result<Vec<u8>> {
+fn serialize_db8(document: &Document) -> Vec<u8> {
   let mut chunks = Vec::<(u8, Vec<u8>)>::new();
   let mut text = Vec::with_capacity(document.text.byte_len());
   for chunk in document.text.chunks() {
@@ -150,12 +150,15 @@ fn serialize_db8(document: &Document) -> io::Result<Vec<u8>> {
   let mut bytes = Vec::with_capacity(header_len + payload_len);
   bytes.extend_from_slice(DB8_MAGIC);
   bytes.extend_from_slice(&DB8_VERSION.to_le_bytes());
-  write_u32(&mut bytes, chunks.len() as u32);
+  write_u32(
+    &mut bytes,
+    u32::try_from(chunks.len()).expect("DB8 chunk count is fixed and fits in u32"),
+  );
   let mut offset = header_len;
   for (kind, payload) in &chunks {
     bytes.push(*kind);
     bytes.push(0);
-    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&0_u16.to_le_bytes());
     write_u64(&mut bytes, offset as u64);
     write_u64(&mut bytes, payload.len() as u64);
     offset += payload.len();
@@ -163,7 +166,7 @@ fn serialize_db8(document: &Document) -> io::Result<Vec<u8>> {
   for (_, payload) in chunks {
     bytes.extend_from_slice(&payload);
   }
-  Ok(bytes)
+  bytes
 }
 
 #[hotpath::measure]
@@ -226,6 +229,5 @@ fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
   }
   temp_path
     .persist(path)
-    .map(|_| ())
     .map_err(|error| error.error)
 }

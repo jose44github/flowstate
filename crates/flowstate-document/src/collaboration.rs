@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use serde::{Deserialize, Serialize};
 
-use super::*;
+use super::{Block, BlockId, Document, DocumentSpan, ParagraphId, ParagraphStyle, RunStyles, new_block_id, new_paragraph_id};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct TableCellId(pub u128);
@@ -16,6 +16,7 @@ pub struct DocumentIdentityMap {
 
 #[hotpath::measure_all]
 impl DocumentIdentityMap {
+  #[must_use]
   pub fn new(document: &Document) -> Self {
     let mut this = Self::default();
     this.reconcile(document);
@@ -23,8 +24,8 @@ impl DocumentIdentityMap {
   }
 
   pub fn reconcile(&mut self, document: &Document) {
-    self.paragraph_ids = document.ids.paragraph_ids.clone();
-    self.block_ids = document.ids.block_ids.clone();
+    self.paragraph_ids.clone_from(&document.ids.paragraph_ids);
+    self.block_ids.clone_from(&document.ids.block_ids);
     self
       .table_cell_ids
       .resize_with(document.blocks.len(), Vec::new);
@@ -44,23 +45,25 @@ impl DocumentIdentityMap {
   }
 
   pub fn insert_split_paragraph(&mut self, paragraph_ix: usize, block_ix: usize) {
-    self.paragraph_ids.insert(
-      (paragraph_ix + 1).min(self.paragraph_ids.len()),
-      new_paragraph_id(),
-    );
+    self
+      .paragraph_ids
+      .insert((paragraph_ix + 1).min(self.paragraph_ids.len()), new_paragraph_id());
     let block_insert_ix = (block_ix + 1).min(self.block_ids.len());
     self.block_ids.insert(block_insert_ix, new_block_id());
     self.table_cell_ids.insert(block_insert_ix, Vec::new());
   }
 
+  #[must_use]
   pub fn paragraph_id(&self, paragraph_ix: usize) -> Option<ParagraphId> {
     self.paragraph_ids.get(paragraph_ix).copied()
   }
 
+  #[must_use]
   pub fn block_id(&self, block_ix: usize) -> Option<BlockId> {
     self.block_ids.get(block_ix).copied()
   }
 
+  #[must_use]
   pub fn table_cell_id(&self, block_ix: usize, row_ix: usize, cell_ix: usize) -> Option<TableCellId> {
     self
       .table_cell_ids
@@ -70,6 +73,7 @@ impl DocumentIdentityMap {
       .copied()
   }
 
+  #[must_use]
   pub fn paragraph_index(&self, id: ParagraphId) -> Option<usize> {
     self
       .paragraph_ids

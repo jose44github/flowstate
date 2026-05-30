@@ -55,10 +55,12 @@ impl History {
     )
   }
 
-  pub fn can_undo(&self) -> bool {
+  #[must_use]
+  pub const fn can_undo(&self) -> bool {
     self.index.is_some()
   }
 
+  #[must_use]
   pub fn can_redo(&self) -> bool {
     self
       .index
@@ -79,9 +81,10 @@ pub struct HistoryHolder {
 
 #[hotpath::measure_all]
 impl HistoryHolder {
+  #[must_use]
   pub fn new() -> Self {
     let mut histories = FxHashMap::default();
-    histories.insert(ROOT_ID.to_string(), History::default());
+    histories.insert(ROOT_ID.to_owned(), History::default());
     Self {
       histories,
       last_added_owner: None,
@@ -123,7 +126,7 @@ impl HistoryHolder {
     self.histories.clear();
     self
       .histories
-      .insert(ROOT_ID.to_string(), History::default());
+      .insert(ROOT_ID.to_owned(), History::default());
     self.last_added_owner = None;
   }
 }

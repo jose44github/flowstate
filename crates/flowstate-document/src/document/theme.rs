@@ -106,7 +106,7 @@ impl Default for DocumentTheme {
     Self {
       default_font_family: "Carlito".into(),
       default_text_color: black(),
-      document_background_color: rgb(0xffffff).into(),
+      document_background_color: rgb(0x00ff_ffff).into(),
       // Word page margins are 1in = 96px at 96dpi. Pageless mode should
       // not use full page margins, but a proportional inset keeps content
       // from sitting on the viewport edge.
@@ -168,15 +168,15 @@ impl Default for DocumentTheme {
       snap_underline_rules_to_pixels: true,
       double_underline_top_from_baseline: pt(17.79 - 16.5),
       double_underline_gap: pt(1.20),
-      highlight_spoken: rgb(0x00ff00).into(),
-      highlight_insert: rgb(0xd9d9d9).into(),
-      highlight_alternative: rgb(0x00ffff).into(),
+      highlight_spoken: rgb(0x0000_ff00).into(),
+      highlight_insert: rgb(0x00d9_d9d9).into(),
+      highlight_alternative: rgb(0x0000_ffff).into(),
       pocket_color: black(),
       hat_color: black(),
       block_color: black(),
       tag_color: black(),
-      analytic_color: rgb(0x1f3864).into(),
-      undertag_color: rgb(0x385623).into(),
+      analytic_color: rgb(0x001f_3864).into(),
+      undertag_color: rgb(0x0038_5623).into(),
       cite_color: black(),
       underline_color: black(),
       emphasis_color: black(),

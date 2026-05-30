@@ -56,7 +56,7 @@ fn read_len(cursor: &mut Cursor<&[u8]>, label: &'static str) -> io::Result<usize
 }
 
 #[hotpath::measure]
-fn read_bytes<'a>(cursor: &mut Cursor<&'a [u8]>, len: usize, label: &'static str) -> io::Result<&'a [u8]> {
+fn read_bytes<'bytes>(cursor: &mut Cursor<&'bytes [u8]>, len: usize, label: &'static str) -> io::Result<&'bytes [u8]> {
   let start = usize::try_from(cursor.position())
     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, format!("{label} cursor position overflows usize")))?;
   let end = start
@@ -74,7 +74,7 @@ fn read_string(cursor: &mut Cursor<&[u8]>) -> io::Result<String> {
   let len = read_len(cursor, "DB8 string length")?;
   let bytes = read_bytes(cursor, len, "DB8 string")?;
   std::str::from_utf8(bytes)
-    .map(|text| text.to_owned())
+    .map(std::borrow::ToOwned::to_owned)
     .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "DB8 string is not UTF-8"))
 }
 
@@ -85,7 +85,7 @@ fn write_string(bytes: &mut Vec<u8>, value: &str) {
 }
 
 #[hotpath::measure]
-fn encode_block_alignment(alignment: BlockAlignment) -> u8 {
+const fn encode_block_alignment(alignment: BlockAlignment) -> u8 {
   match alignment {
     BlockAlignment::Left => 0,
     BlockAlignment::Center => 1,
@@ -104,7 +104,7 @@ fn decode_block_alignment(value: u8) -> io::Result<BlockAlignment> {
 }
 
 #[hotpath::measure]
-fn encode_paragraph_style(style: ParagraphStyle) -> u8 {
+const fn encode_paragraph_style(style: ParagraphStyle) -> u8 {
   match style {
     ParagraphStyle::Pocket => 0,
     ParagraphStyle::Hat => 1,
@@ -131,7 +131,7 @@ fn decode_paragraph_style(value: u8) -> io::Result<ParagraphStyle> {
 }
 
 #[hotpath::measure]
-fn encode_section_kind(kind: SectionKind) -> u8 {
+const fn encode_section_kind(kind: SectionKind) -> u8 {
   match kind {
     SectionKind::Pocket => 0,
     SectionKind::Hat => 1,
@@ -158,7 +158,7 @@ fn decode_section_kind(value: u8) -> io::Result<SectionKind> {
 #[hotpath::measure]
 fn write_run_styles(bytes: &mut Vec<u8>, styles: RunStyles) {
   bytes.push(encode_run_semantic_style(styles.semantic));
-  let mut flags = 0u8;
+  let mut flags = 0_u8;
   if styles.direct_underline {
     flags |= 1 << 0;
   }
@@ -185,7 +185,7 @@ fn read_run_styles(cursor: &mut Cursor<&[u8]>) -> io::Result<RunStyles> {
 }
 
 #[hotpath::measure]
-fn encode_run_semantic_style(style: RunSemanticStyle) -> u8 {
+const fn encode_run_semantic_style(style: RunSemanticStyle) -> u8 {
   match style {
     RunSemanticStyle::Plain => 0,
     RunSemanticStyle::Cite => 1,
@@ -210,7 +210,7 @@ fn decode_run_semantic_style(value: u8) -> io::Result<RunSemanticStyle> {
 }
 
 #[hotpath::measure]
-fn encode_highlight_style(style: Option<HighlightStyle>) -> u8 {
+const fn encode_highlight_style(style: Option<HighlightStyle>) -> u8 {
   match style {
     None => 0,
     Some(HighlightStyle::Spoken) => 1,

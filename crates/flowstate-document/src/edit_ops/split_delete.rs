@@ -1,9 +1,10 @@
 #[hotpath::measure]
-pub fn bump_paragraph_version(paragraph: &mut Paragraph) {
+pub const fn bump_paragraph_version(paragraph: &mut Paragraph) {
   paragraph.version = paragraph.version.wrapping_add(1);
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn split_runs_at(runs: &[TextRun], byte: usize) -> (Vec<TextRun>, Vec<TextRun>) {
   let mut left = Vec::new();
   let mut right = Vec::new();

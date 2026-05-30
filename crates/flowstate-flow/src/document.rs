@@ -69,10 +69,11 @@ impl Default for FlowDocument {
 
 #[hotpath::measure_all]
 impl FlowDocument {
+  #[must_use]
   pub fn new() -> Self {
     let mut nodes = Nodes::default();
     nodes.insert(
-      ROOT_ID.to_string(),
+      ROOT_ID.to_owned(),
       Node {
         value: NodeValue::Root,
         level: -1,
@@ -83,8 +84,9 @@ impl FlowDocument {
     Self { nodes }
   }
 
+  #[must_use]
   pub fn from_nodes(mut nodes: Nodes) -> Self {
-    nodes.entry(ROOT_ID.to_string()).or_insert_with(|| Node {
+    nodes.entry(ROOT_ID.to_owned()).or_insert_with(|| Node {
       value: NodeValue::Root,
       level: -1,
       parent: None,
@@ -93,6 +95,7 @@ impl FlowDocument {
     Self { nodes }
   }
 
+  #[must_use]
   pub fn root(&self) -> &Node {
     self
       .nodes
@@ -143,6 +146,7 @@ impl FlowDocument {
     }
   }
 
+  #[must_use]
   pub fn flow_ids(&self) -> &[NodeId] {
     &self.root().children
   }
@@ -150,7 +154,7 @@ impl FlowDocument {
   pub fn parent_flow_id(&self, id: impl AsRef<str>) -> Option<NodeId> {
     let id = id.as_ref();
     match &self.node(id)?.value {
-      NodeValue::Flow(_) => Some(id.to_string()),
+      NodeValue::Flow(_) => Some(id.to_owned()),
       NodeValue::Box(box_node) => Some(box_node.flow_id.clone()),
       NodeValue::Root => None,
     }
@@ -158,7 +162,7 @@ impl FlowDocument {
 
   pub fn check_box_id(&self, id: impl AsRef<str>) -> Option<NodeId> {
     let id = id.as_ref();
-    self.box_node(id).map(|_| id.to_string())
+    self.box_node(id).map(|_| id.to_owned())
   }
 
   pub fn child_index(&self, parent_id: impl AsRef<str>, child_id: impl AsRef<str>) -> Option<usize> {
@@ -201,6 +205,7 @@ impl FlowDocument {
     }
   }
 
+  #[must_use]
   pub fn is_worth_saving(&self, ignore_first_empty_flow: bool) -> bool {
     let root_children = &self.root().children;
     if root_children.is_empty() {
@@ -247,21 +252,24 @@ pub fn new_node_id() -> NodeId {
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn new_box_id() -> NodeId {
   new_node_id()
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn new_flow_id() -> NodeId {
   new_node_id()
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn constrain_index(index: usize, len: usize) -> usize {
   index.min(len)
 }
 
 #[hotpath::measure]
-fn is_false(value: &bool) -> bool {
+const fn is_false(value: &bool) -> bool {
   !*value
 }

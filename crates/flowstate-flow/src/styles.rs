@@ -44,6 +44,7 @@ pub struct DebateStyle {
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn all_debate_style_templates() -> Vec<DebateStyleTemplate> {
   vec![
     DebateStyleTemplate {
@@ -94,15 +95,16 @@ pub fn all_debate_style_templates() -> Vec<DebateStyleTemplate> {
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn debate_style_label(key: DebateStyleKey) -> &'static str {
   all_debate_style_templates()
     .into_iter()
     .find(|template| template.key == key)
-    .map(|template| template.label)
-    .unwrap_or("Policy")
+    .map_or("Policy", |template| template.label)
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn debate_style_templates(key: DebateStyleKey, ld_toc_circuit: bool) -> Vec<DebateStyleFlow> {
   let style = debate_style(key);
   if key == DebateStyleKey::LincolnDouglas && ld_toc_circuit {
@@ -113,6 +115,7 @@ pub fn debate_style_templates(key: DebateStyleKey, ld_toc_circuit: bool) -> Vec<
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn debate_style(key: DebateStyleKey) -> DebateStyle {
   match key {
     DebateStyleKey::Policy => DebateStyle {
@@ -344,7 +347,7 @@ pub fn debate_style(key: DebateStyleKey) -> DebateStyle {
 #[hotpath::measure]
 fn flow(name: &str, columns: &[&str], invert: bool) -> DebateStyleFlow {
   DebateStyleFlow {
-    name: name.to_string(),
+    name: name.to_owned(),
     columns: strings(columns),
     columns_switch: None,
     invert,
@@ -355,7 +358,7 @@ fn flow(name: &str, columns: &[&str], invert: bool) -> DebateStyleFlow {
 #[hotpath::measure]
 fn flow_switch(name: &str, columns: &[&str], columns_switch: &[&str], invert: bool) -> DebateStyleFlow {
   DebateStyleFlow {
-    name: name.to_string(),
+    name: name.to_owned(),
     columns: strings(columns),
     columns_switch: Some(strings(columns_switch)),
     invert,
@@ -366,7 +369,7 @@ fn flow_switch(name: &str, columns: &[&str], columns_switch: &[&str], invert: bo
 #[hotpath::measure]
 fn flow_starter(name: &str, columns: &[&str], invert: bool, starter_boxes: &[&str]) -> DebateStyleFlow {
   DebateStyleFlow {
-    name: name.to_string(),
+    name: name.to_owned(),
     columns: strings(columns),
     columns_switch: None,
     invert,
@@ -376,7 +379,7 @@ fn flow_starter(name: &str, columns: &[&str], invert: bool, starter_boxes: &[&st
 
 #[hotpath::measure]
 fn strings(values: &[&str]) -> Vec<String> {
-  values.iter().map(|value| (*value).to_string()).collect()
+  values.iter().map(|value| (*value).to_owned()).collect()
 }
 
 #[hotpath::measure]
@@ -384,7 +387,7 @@ fn speeches(values: &[(&str, u32, bool)]) -> Vec<TimerSpeech> {
   values
     .iter()
     .map(|(name, time_ms, secondary)| TimerSpeech {
-      name: (*name).to_string(),
+      name: (*name).to_owned(),
       time_ms: *time_ms,
       secondary: *secondary,
     })

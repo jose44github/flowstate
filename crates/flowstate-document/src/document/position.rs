@@ -26,7 +26,7 @@ pub enum DocumentPosition {
     table_block_ix: usize,
     row_ix: usize,
     cell_ix: usize,
-    inner: Box<DocumentPosition>,
+    inner: Box<Self>,
   },
 }
 

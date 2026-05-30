@@ -3,6 +3,9 @@ name = "flowstate-tub"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.102"
 flowstate-document = { version = "0.1.0", path = "../flowstate-document" }

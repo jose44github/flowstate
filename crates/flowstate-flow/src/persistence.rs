@@ -27,7 +27,11 @@ pub fn get_json(document: &FlowDocument) -> Result<String> {
 
 #[hotpath::measure]
 pub fn load_nodes(data: Value) -> Result<Nodes> {
-  let version = data.get("version").and_then(Value::as_u64).unwrap_or(0) as u32;
+  let version = data
+    .get("version")
+    .and_then(Value::as_u64)
+    .and_then(|version| u32::try_from(version).ok())
+    .unwrap_or(0);
   if version == CURRENT_SAVE_VERSION {
     let saveable: SaveableFlowDocument = serde_json::from_value(data).context("invalid .fl0 document")?;
     return Ok(saveable.nodes);
@@ -82,7 +86,7 @@ struct OldBox {
   #[serde(default)]
   content: String,
   #[serde(default)]
-  children: Vec<OldBox>,
+  children: Vec<Self>,
   #[serde(default)]
   empty: bool,
   #[serde(default)]
@@ -98,7 +102,7 @@ fn upgrade_0_1(saved: Value) -> Result<SaveableFlowDocument> {
   for (index, old_flow) in old_flows.into_iter().enumerate() {
     let flow_id = new_flow_id();
     let add_flow = Action::Add {
-      parent: ROOT_ID.to_string(),
+      parent: ROOT_ID.to_owned(),
       id: flow_id.clone(),
       index,
       value: NodeValue::Flow(Flow {
@@ -141,7 +145,7 @@ fn upgrade_0_1_add_boxes_rec(document: &mut FlowDocument, flow_id: NodeId, paren
   }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Legacy save migration helper is retained for older persisted flow documents.")]
 #[hotpath::measure]
 fn _new_empty_box(parent_id: NodeId, flow_id: NodeId, index: usize) -> Action {
   new_box_action(parent_id, flow_id, index, None)

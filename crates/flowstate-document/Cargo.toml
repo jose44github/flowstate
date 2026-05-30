@@ -3,6 +3,9 @@ name = "flowstate-document"
 version = "0.1.0"
 edition = "2024"
 
+[lints]
+workspace = true
+
 [dependencies]
 crop = "0.4.3"
 gpui = "0.2.2"

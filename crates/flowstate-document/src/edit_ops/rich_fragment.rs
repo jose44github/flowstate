@@ -30,7 +30,7 @@ fn insert_single_paragraph_fragment_at(document: &mut Document, offset: Document
     let target = &mut paragraphs_mut(document)[offset.paragraph];
     target.runs = merge_adjacent_runs(runs);
     bump_paragraph_version(target);
-  }
+  };
   update_paragraph_offsets_after_len_change(document, offset.paragraph);
   DocumentOffset {
     paragraph: offset.paragraph,
@@ -77,8 +77,8 @@ fn insert_multi_paragraph_fragment_at(document: &mut Document, offset: DocumentO
   let replacement_count = replacements.len();
   {
     let paragraphs = paragraphs_mut(document);
-    paragraphs.splice(offset.paragraph..offset.paragraph + 1, replacements);
-  }
+    paragraphs.splice(offset.paragraph..=offset.paragraph, replacements)
+  };
   for insert_ix in 1..replacement_count {
     insert_paragraph_id(document, offset.paragraph + insert_ix);
   }

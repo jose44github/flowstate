@@ -1,5 +1,5 @@
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Persistence validation is kept available for debug and importer validation paths.")]
 #[hotpath::measure]
 fn document_fingerprint(document: &Document) -> u64 {
   let mut hasher = DefaultHasher::new();
@@ -192,7 +192,7 @@ fn validate_table_payload(table: &TableBlock, depth: usize) -> io::Result<()> {
     if row.cells.is_empty() {
       return Err(io::Error::new(io::ErrorKind::InvalidData, "table row has no cells"));
     }
-    let mut span_total = 0usize;
+    let mut span_total = 0_usize;
     for cell in &row.cells {
       if cell.row_span == 0 || cell.col_span == 0 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "table cell span cannot be zero"));

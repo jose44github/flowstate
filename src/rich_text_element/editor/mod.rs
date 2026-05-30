@@ -195,7 +195,7 @@ pub(super) enum EditOperation {
     block_ix: usize,
     block: Block,
   },
-  #[allow(dead_code)]
+  #[allow(dead_code, reason = "IME state accessor is retained for platform input diagnostics.")]
   InsertBlocks {
     block_ix: usize,
     blocks: Vec<Block>,

@@ -1,14 +1,17 @@
 #[hotpath::measure]
+#[must_use]
 pub fn paragraph_text(document: &Document, paragraph_ix: usize) -> String {
   document_text_slice(document, paragraph_byte_range(document, paragraph_ix))
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn paragraph_text_len(paragraph: &Paragraph) -> usize {
   paragraph_runs_len(paragraph)
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn document_text_slice(document: &Document, range: Range<usize>) -> String {
   let mut text = String::with_capacity(range.end - range.start);
   push_document_text_slice(document, range, &mut text);
@@ -23,11 +26,13 @@ pub fn push_document_text_slice(document: &Document, range: Range<usize>, text: 
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn paragraph_char_count(document: &Document, paragraph_ix: usize, needle: char) -> usize {
   document_text_slice_char_count(document, paragraph_byte_range(document, paragraph_ix), needle)
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn document_text_slice_char_count(document: &Document, range: Range<usize>, needle: char) -> usize {
   document
     .text
@@ -38,6 +43,7 @@ pub fn document_text_slice_char_count(document: &Document, range: Range<usize>, 
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn capture_document_span(document: &Document, range: Range<usize>) -> DocumentSpan {
   let start = range.start.min(document.paragraphs.len());
   let end = range.end.min(document.paragraphs.len()).max(start);
@@ -79,21 +85,21 @@ pub fn apply_document_span_replacement(document: &mut Document, current: &Docume
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn paragraph_span_byte_range(document: &Document, start_paragraph: usize, paragraph_count: usize) -> Range<usize> {
   if paragraph_count == 0 || start_paragraph >= document.paragraphs.len() {
     let byte = document
       .paragraphs
-      .get(start_paragraph)
-      .map(|_| paragraph_byte_range(document, start_paragraph).start)
-      .unwrap_or_else(|| document.text.byte_len());
+      .get(start_paragraph).map_or_else(|| document.text.byte_len(), |_| paragraph_byte_range(document, start_paragraph).start);
     return byte..byte;
   }
   let end_paragraph = (start_paragraph + paragraph_count - 1).min(document.paragraphs.len() - 1);
   paragraph_byte_range(document, start_paragraph).start..paragraph_byte_range(document, end_paragraph).end
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Public text extraction helper is retained for planned clipboard/search integrations.")]
 #[hotpath::measure]
+#[must_use]
 pub fn full_document_text(document: &Document) -> String {
   document_text_slice(document, 0..document.text.byte_len())
 }
@@ -106,19 +112,20 @@ pub fn document_end(document: &Document) -> DocumentOffset {
     byte: document
       .paragraphs
       .get(paragraph)
-      .map(paragraph_text_len)
-      .unwrap_or(0),
+      .map_or(0, paragraph_text_len),
   }
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Global byte conversion is part of the editor offset API even when unused by current callers.")]
 #[hotpath::measure]
+#[must_use]
 pub fn global_byte(document: &Document, offset: DocumentOffset) -> usize {
   paragraph_byte_range(document, offset.paragraph).start + offset.byte
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Global-to-document offset conversion is retained for file/search integrations.")]
 #[hotpath::measure]
+#[must_use]
 pub fn global_to_document_offset(document: &Document, byte: usize) -> DocumentOffset {
   let byte = byte.min(document.text.byte_len());
   let mut low = 0;
@@ -143,6 +150,7 @@ pub fn global_to_document_offset(document: &Document, byte: usize) -> DocumentOf
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn find_text_ranges(document: &Document, query: &str) -> Vec<Range<DocumentOffset>> {
   if query.is_empty() {
     return Vec::new();
@@ -155,6 +163,7 @@ pub fn find_text_ranges(document: &Document, query: &str) -> Vec<Range<DocumentO
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn selected_plain_text(document: &Document, range: Range<DocumentOffset>) -> String {
   if range.start.paragraph == range.end.paragraph {
     let paragraph_range = paragraph_byte_range(document, range.start.paragraph);

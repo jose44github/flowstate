@@ -164,7 +164,7 @@ pub fn new_box_action(parent: NodeId, parent_flow_id: NodeId, index: usize, plac
 }
 
 #[hotpath::measure]
-pub fn new_extension_action(parent: NodeId, parent_flow_id: NodeId, id: NodeId) -> Action {
+pub const fn new_extension_action(parent: NodeId, parent_flow_id: NodeId, id: NodeId) -> Action {
   Action::Add {
     parent,
     id,
@@ -182,11 +182,13 @@ pub fn new_extension_action(parent: NodeId, parent_flow_id: NodeId, id: NodeId) 
 }
 
 #[hotpath::measure]
-pub fn new_update_action(id: NodeId, new_value: NodeValue) -> Action {
+#[must_use]
+pub const fn new_update_action(id: NodeId, new_value: NodeValue) -> Action {
   Action::Update { id, new_value }
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn add_new_box_actions(document: &FlowDocument, parent: NodeId, index: usize, placeholder: Option<String>) -> Option<CommandResult> {
   let flow_id = document.parent_flow_id(&parent)?;
   let action = new_box_action(parent, flow_id.clone(), index, placeholder);
@@ -202,6 +204,7 @@ pub fn add_new_box_actions(document: &FlowDocument, parent: NodeId, index: usize
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn add_new_extension_actions(document: &FlowDocument, parent: NodeId) -> Option<CommandResult> {
   let flow_id = document.parent_flow_id(&parent)?;
   let extension_id = new_box_id();
@@ -218,6 +221,7 @@ pub fn add_new_extension_actions(document: &FlowDocument, parent: NodeId) -> Opt
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn add_new_flow_actions(index: usize, style: &DebateStyleFlow, switch_speakers: bool) -> CommandResult {
   let starter_boxes = style.starter_boxes.as_deref();
   let columns = if switch_speakers {
@@ -230,7 +234,7 @@ pub fn add_new_flow_actions(index: usize, style: &DebateStyleFlow, switch_speake
   };
   let flow_id = new_flow_id();
   let mut actions = vec![Action::Add {
-    parent: ROOT_ID.to_string(),
+    parent: ROOT_ID.to_owned(),
     id: flow_id.clone(),
     index,
     value: NodeValue::Flow(Flow {
@@ -242,7 +246,7 @@ pub fn add_new_flow_actions(index: usize, style: &DebateStyleFlow, switch_speake
 
   if let Some(starter_boxes) = starter_boxes {
     for (index, placeholder) in starter_boxes.iter().enumerate() {
-      actions.push(new_box_action(flow_id.clone(), flow_id.clone(), index, Some((*placeholder).to_string())));
+      actions.push(new_box_action(flow_id.clone(), flow_id.clone(), index, Some((*placeholder).clone())));
     }
   } else {
     actions.push(new_box_action(flow_id.clone(), flow_id.clone(), 0, None));
@@ -250,12 +254,13 @@ pub fn add_new_flow_actions(index: usize, style: &DebateStyleFlow, switch_speake
 
   CommandResult {
     actions,
-    owner: ROOT_ID.to_string(),
+    owner: ROOT_ID.to_owned(),
     focus: Some(flow_id),
   }
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn toggle_box_format_actions(document: &FlowDocument, id: NodeId, format: FormatKind) -> Option<CommandResult> {
   let mut box_node = document.box_node(&id)?.clone();
   match format {
@@ -271,9 +276,10 @@ pub fn toggle_box_format_actions(document: &FlowDocument, id: NodeId, format: Fo
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn move_node_actions(document: &FlowDocument, id: NodeId, new_index: usize) -> Option<CommandResult> {
   let owner = match document.node(&id)?.value {
-    NodeValue::Flow(_) => ROOT_ID.to_string(),
+    NodeValue::Flow(_) => ROOT_ID.to_owned(),
     NodeValue::Box(_) => document.parent_flow_id(&id)?,
     NodeValue::Root => return None,
   };
@@ -285,9 +291,10 @@ pub fn move_node_actions(document: &FlowDocument, id: NodeId, new_index: usize) 
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn delete_node_actions(document: &FlowDocument, id: NodeId) -> Option<CommandResult> {
   let owner = match document.node(&id)?.value {
-    NodeValue::Flow(_) => ROOT_ID.to_string(),
+    NodeValue::Flow(_) => ROOT_ID.to_owned(),
     NodeValue::Box(_) => document.parent_flow_id(&id)?,
     NodeValue::Root => return None,
   };
@@ -302,11 +309,12 @@ fn collect_delete_actions(document: &FlowDocument, id: &str, actions: &mut Actio
   for child in node.children.iter().rev() {
     collect_delete_actions(document, child, actions)?;
   }
-  actions.push(Action::Delete { id: id.to_string() });
+  actions.push(Action::Delete { id: id.to_owned() });
   Some(())
 }
 
 #[hotpath::measure]
+#[must_use]
 pub fn add_new_empty_actions(document: &FlowDocument, flow_id: NodeId, level: usize) -> Option<CommandResult> {
   document.flow(&flow_id)?;
   let mut actions = Vec::with_capacity(level + 1);

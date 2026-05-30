@@ -121,7 +121,7 @@ pub(super) fn build_single_paragraph_layout_with_visibility(
   layout
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Block layout helper is retained for incremental object-layout work.")]
 #[hotpath::measure]
 pub(super) fn build_structural_block_layout(
   document: &Document,

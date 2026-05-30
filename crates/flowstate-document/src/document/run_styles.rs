@@ -33,7 +33,7 @@ pub enum RunStyle {
 #[hotpath::measure_all]
 impl From<RunStyle> for RunStyles {
   fn from(style: RunStyle) -> Self {
-    let mut styles = RunStyles::default();
+    let mut styles = Self::default();
     styles.apply(style);
     styles
   }
@@ -41,7 +41,7 @@ impl From<RunStyle> for RunStyles {
 
 #[hotpath::measure_all]
 impl RunStyles {
-  pub fn apply(&mut self, style: RunStyle) {
+  pub const fn apply(&mut self, style: RunStyle) {
     match style {
       RunStyle::Plain => self.semantic = RunSemanticStyle::Plain,
       RunStyle::Cite => self.semantic = RunSemanticStyle::Cite,
@@ -55,17 +55,20 @@ impl RunStyles {
     }
   }
 
-  pub fn with(mut self, style: RunStyle) -> Self {
+  #[must_use]
+  pub const fn with(mut self, style: RunStyle) -> Self {
     self.apply(style);
     self
   }
 
-  pub fn with_direct_underline(mut self) -> Self {
+  #[must_use]
+  pub const fn with_direct_underline(mut self) -> Self {
     self.direct_underline = true;
     self
   }
 
-  pub fn with_strikethrough(mut self) -> Self {
+  #[must_use]
+  pub const fn with_strikethrough(mut self) -> Self {
     self.strikethrough = true;
     self
   }

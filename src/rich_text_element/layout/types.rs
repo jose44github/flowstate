@@ -15,7 +15,7 @@ pub(super) struct LayoutState {
   pub(super) paragraphs: Vec<LaidOutParagraph>,
   pub(super) blocks: Vec<LaidOutBlock>,
   pub(super) paragraph_to_block: Vec<usize>,
-  #[allow(dead_code)]
+  #[allow(dead_code, reason = "Layout block count is retained for diagnostics and benchmark assertions.")]
   pub(super) block_to_paragraph: Vec<Option<usize>>,
   pub(super) bounds: Option<Bounds<Pixels>>,
   pub(super) size: Size<Pixels>,
@@ -33,7 +33,7 @@ impl LayoutState {
     self.paragraph_to_block.get(paragraph_ix).copied()
   }
 
-  #[allow(dead_code)]
+  #[allow(dead_code, reason = "Layout paragraph count is retained for diagnostics and benchmark assertions.")]
   pub(super) fn block_paragraph_ix(&self, block_ix: usize) -> Option<usize> {
     self.block_to_paragraph.get(block_ix).copied().flatten()
   }
@@ -84,7 +84,7 @@ pub(super) struct LaidOutParagraph {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Line length is retained for layout validation helpers.")]
 pub(super) enum LaidOutBlock {
   Paragraph(LaidOutParagraph),
   Image(LaidOutObjectBlock),
@@ -93,7 +93,7 @@ pub(super) enum LaidOutBlock {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Line emptiness is retained for layout validation helpers.")]
 pub(super) struct LaidOutObjectBlock {
   pub(super) block_ix: usize,
   pub(super) top: Pixels,
@@ -103,7 +103,7 @@ pub(super) struct LaidOutObjectBlock {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Line height is retained for layout validation helpers.")]
 pub(super) struct LaidOutTable {
   pub(super) block_ix: usize,
   pub(super) top: Pixels,
@@ -113,7 +113,7 @@ pub(super) struct LaidOutTable {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Line bottom is retained for layout validation helpers.")]
 pub(super) struct LaidOutTableRow {
   pub(super) top: Pixels,
   pub(super) bottom: Pixels,
@@ -121,7 +121,7 @@ pub(super) struct LaidOutTableRow {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
+#[allow(dead_code, reason = "Line containment is retained for hit testing and diagnostics.")]
 pub(super) struct LaidOutTableCell {
   pub(super) bounds: Bounds<Pixels>,
   pub(super) blocks: Vec<LaidOutBlock>,

@@ -87,7 +87,7 @@ pub(super) struct ParagraphChunkBuildResult {
   pub(super) complete: bool,
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "Paragraph layout needs several independent shaping and theme inputs.")]
 #[hotpath::measure]
 pub(super) fn build_paragraph_chunk_layout_with_visibility(
   document: &Document,
@@ -167,7 +167,7 @@ pub(super) fn build_paragraph_chunk_layout_with_visibility(
   Some(result)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "Paragraph layout needs several independent shaping and theme inputs.")]
 #[hotpath::measure]
 fn layout_paragraph_chunk_at(
   document: &Document,
@@ -201,7 +201,7 @@ fn layout_paragraph_chunk_at(
   )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, reason = "Paragraph layout needs several independent shaping and theme inputs.")]
 #[hotpath::measure]
 fn layout_prepared_paragraph_chunk_at(
   document: &Document,

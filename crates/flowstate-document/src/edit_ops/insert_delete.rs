@@ -121,7 +121,7 @@ pub fn delete_range_in_paragraph(document: &mut Document, paragraph_ix: usize, r
       }
     }
     paragraph.runs = merge_adjacent_runs(new_runs);
-  }
+  };
   update_paragraph_offsets_after_len_change(document, paragraph_ix);
 }
 
