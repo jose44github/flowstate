@@ -1,6 +1,39 @@
 #[hotpath::measure_all]
 impl Workspace {
   pub fn new(initial_path: Option<PathBuf>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    let zoom_slider = cx.new(|_| {
+      SliderState::new()
+        .min(25.0)
+        .max(400.0)
+        .step(5.0)
+        .default_value(100.0)
+    });
+    let zoom_slider_subscription = cx.subscribe(&zoom_slider, |workspace, _, event: &SliderEvent, cx| {
+      let SliderEvent::Change(SliderValue::Single(percent)) = event else {
+        return;
+      };
+      if let Some(editor) = workspace.active_editor.clone() {
+        editor.update(cx, |editor, cx| {
+          editor.set_zoom_percent(*percent, cx);
+        });
+      }
+    });
+    let workspace = cx.entity().downgrade();
+    let window_handle = window.window_handle();
+    let keybinding_interceptor = cx.intercept_keystrokes(move |event, window, cx| {
+      if window.window_handle() != window_handle {
+        return;
+      }
+      let Some(command) = workspace_command_for_keystroke(&event.keystroke) else {
+        return;
+      };
+      if workspace
+        .update(cx, |workspace, cx| workspace.handle_window_keybinding(command, window, cx))
+        .unwrap_or(false)
+      {
+        cx.stop_propagation();
+      }
+    });
     let this = Self {
       document_panels: Vec::new(),
       flow_panels: Vec::new(),
@@ -29,6 +62,9 @@ impl Workspace {
       autosave_document_generations: HashMap::new(),
       autosave_flow_in_flight: HashSet::new(),
       file_search_overlay: None,
+      zoom_slider,
+      _zoom_slider_subscription: zoom_slider_subscription,
+      _keybinding_interceptor: keybinding_interceptor,
     };
 
     if let Some(path) = initial_path {

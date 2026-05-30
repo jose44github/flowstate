@@ -85,6 +85,8 @@ actions!(
     InsertImage,
     InsertTable,
     InsertEquation,
+    ZoomIn,
+    ZoomOut,
     Backspace,
     Delete,
     InsertNewline,
@@ -784,6 +786,7 @@ pub struct RichTextEditor {
   saved_generation: u64,
   next_edit_generation: u64,
   last_send_db8_generation: Option<u64>,
+  zoom_percent: f32,
   save_status: SaveStatus,
   undo_stack: Vec<EditRecord>,
   redo_stack: Vec<EditRecord>,
@@ -862,6 +865,7 @@ include!("lifecycle.rs");
 include!("object_selection.rs");
 include!("style_state.rs");
 include!("send_export.rs");
+include!("zoom.rs");
 include!("commands.rs");
 include!("paste.rs");
 include!("tables.rs");
