@@ -767,16 +767,16 @@ impl Workspace {
       .justify_between()
       .gap_2()
       .child(
+        div()
+          .text_sm()
+          .font_weight(gpui::FontWeight::SEMIBOLD)
+          .text_color(cx.theme().sidebar_primary)
+          .child(title),
+      )
+      .child(
         h_flex()
           .items_center()
           .gap_1()
-          .child(
-            div()
-              .text_sm()
-              .font_weight(gpui::FontWeight::SEMIBOLD)
-              .text_color(cx.theme().sidebar_primary)
-              .child(title),
-          )
           .child(
             Button::new("left-nav-swap-mode")
               .icon(
@@ -792,17 +792,17 @@ impl Workspace {
                 workspace.left_nav_mode = swap_mode;
                 cx.notify();
               })),
+          )
+          .child(
+            Button::new("collapse-left-panel")
+              .icon(Icon::new(IconName::PanelLeftClose).text_color(cx.theme().sidebar_foreground))
+              .xsmall()
+              .ghost()
+              .tooltip("Collapse left panel")
+              .on_click(cx.listener(|workspace, _, _, cx| {
+                workspace.toggle_outline(cx);
+              })),
           ),
-      )
-      .child(
-        Button::new("collapse-left-panel")
-          .icon(Icon::new(IconName::PanelLeftClose).text_color(cx.theme().sidebar_foreground))
-          .xsmall()
-          .ghost()
-          .tooltip("Collapse left panel")
-          .on_click(cx.listener(|workspace, _, _, cx| {
-            workspace.toggle_outline(cx);
-          })),
       )
   }
 }

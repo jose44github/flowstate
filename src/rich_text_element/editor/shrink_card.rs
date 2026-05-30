@@ -20,15 +20,16 @@ impl RichTextEditor {
       match self.document.blocks.get(block_ix) {
         Some(Block::Paragraph(_)) => {
           if in_span {
+            let current_paragraph_ix = paragraph_ix;
             let changed = {
-              let Some(paragraph) = paragraphs_mut(&mut self.document).get_mut(paragraph_ix) else {
+              let Some(paragraph) = paragraphs_mut(&mut self.document).get_mut(current_paragraph_ix) else {
                 paragraph_ix += 1;
                 continue;
               };
               apply_condensed_semantic_to_paragraph(paragraph, semantic, clear_semantic)
             };
             if changed {
-              update_paragraph_block(&mut self.document, paragraph_ix);
+              update_paragraph_block(&mut self.document, current_paragraph_ix);
             }
           }
           paragraph_ix += 1;

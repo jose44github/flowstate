@@ -315,6 +315,10 @@ impl AssetSource for AppAssets {
       "icons/shrink.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/shrink.svg")))),
       "icons/strikethrough.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/strikethrough.svg")))),
       "icons/underline.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/underline.svg")))),
+      "icons/archive.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/archive.svg")))),
+      "icons/table-of-contents.svg" => Ok(Some(Cow::Borrowed(include_bytes!(
+        "../assets/icons/table-of-contents.svg"
+      )))),
       "icons/panel-top-open.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/panel-top-open.svg")))),
       "icons/panel-top-close.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/panel-top-close.svg")))),
       "icons/caret-down.svg" => Ok(Some(Cow::Borrowed(include_bytes!("../assets/icons/caret-down.svg")))),
@@ -346,6 +350,12 @@ impl AssetSource for AppAssets {
     }
     if "icons/underline.svg".starts_with(path) {
       assets.push("icons/underline.svg".into());
+    }
+    if "icons/archive.svg".starts_with(path) {
+      assets.push("icons/archive.svg".into());
+    }
+    if "icons/table-of-contents.svg".starts_with(path) {
+      assets.push("icons/table-of-contents.svg".into());
     }
     if "icons/panel-top-open.svg".starts_with(path) {
       assets.push("icons/panel-top-open.svg".into());
